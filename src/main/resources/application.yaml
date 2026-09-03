@@ -1,0 +1,34 @@
+server:
+  port: 9090
+
+spring:
+  application:
+    name: ai-agent
+
+  datasource:
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
+    username: root
+    password: 123456
+
+  ai:
+    openai:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode  # 以通义千问为例
+      api-key: ${DASHSCOPE_API_KEY}
+      chat:
+        model: qwen-plus
+      embedding:
+        model: text-embedding-v2
+
+    vectorstore:
+      qdrant:
+        host: localhost
+        port: 6334
+        collection-name: rag_knowledge_base
+        initialize-schema: true
+
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: always  # 开发环境自动建表
