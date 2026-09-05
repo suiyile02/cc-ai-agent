@@ -1,34 +1,62 @@
 server:
   port: 9090
+  servlet:
+    multipart:
+      max-file-size: 50MB      # 需求: 单文件最大 50MB
+      max-request-size: 500MB
 
 spring:
   application:
     name: ai-agent
-
+  threads:
+    virtual:
+      enabled: true            # Java 21 虚拟线程
   datasource:
-#    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
-    username: root
-    password: 123456
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:ai_agent;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password: ""
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update         # 快速开发: 实体自动建表; 生产可改为 validate + 手动执行 SQL
+    properties:
+      hibernate:
+        format_sql: false
+  h2:
+    console:
+      enabled: true            # http://localhost:9090/h2-console  (JDBC URL 见 datasource.url)
+      path: /h2-console
+  # 默认本地内存向量库模式, 关闭 Qdrant 自动装配(避免启动即连 Qdrant);
+  # 启用 qdrant profile 时会在 application-qdrant.yaml 中覆盖为空并放开自动装配。
+  autoconfigure:
+    exclude: org.springframework.ai.vectorstore.qdrant.autoconfigure.QdrantVectorStoreAutoConfiguration
 
   ai:
     openai:
-      base-url: https://dashscope.aliyuncs.com/compatible-mode  # 以通义千问为例
-      api-key: ${DASHSCOPE_API_KEY}
+      # 默认对接阿里云百炼(DashScope) OpenAI 兼容模式; 也兼容本地 Ollama / 任意 OpenAI 兼容网关
+      api-key: ${DASHSCOPE_API_KEY:}
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       chat:
-        model: qwen-plus
+        model: ${AI_CHAT_MODEL:qwen-plus}
+        temperature: 0.3
       embedding:
-        model: text-embedding-v2
+        model: ${AI_EMBEDDING_MODEL:text-embedding-v3}
 
-    vectorstore:
-      qdrant:
-        host: localhost
-        port: 6334
-        collection-name: rag_knowledge_base
-        initialize-schema: true
+# ================= 业务自定义配置 =================
+app:
+  rag:
+    collection-name: rag_knowledge_base   # Qdrant 集合名 / 知识库标识
+    top-k: 5                              # 检索 Top-K(需求默认 5)
+    similarity-threshold: 0.6             # 相似度阈值, 低于该值的文档块不注入上下文
+    context-max-chars: 8000               # 注入上下文的最大字符数
+    vector-store: memory                  # memory=进程内向量库(默认, 零依赖) | qdrant=外部 Qdrant
+  storage:
+    path: ./data/files                    # 上传文件本地存储根目录
+  chat:
+    model-label: ${AI_CHAT_MODEL:qwen-plus}   # 记录到 chat_log.model_name
 
-    chat:
-      memory:
-        repository:
-          jdbc:
-            initialize-schema: always  # 开发环境自动建表
+logging:
+  level:
+    com.ai: info
+    org.springframework.ai: warn

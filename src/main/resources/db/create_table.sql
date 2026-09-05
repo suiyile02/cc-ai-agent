@@ -1,12 +1,12 @@
 CREATE TABLE IF NOT EXISTS SPRING_AI_CHAT_MEMORY (
                                                      id              BIGINT       NOT NULL AUTO_INCREMENT,
                                                      conversation_id VARCHAR(36)  NOT NULL COMMENT '会话唯一标识',
-    content         TEXT         NOT NULL COMMENT '消息内容（JSON序列化）',
-    type            VARCHAR(10)  NOT NULL COMMENT '消息类型：USER/ASSISTANT/SYSTEM/TOOL',
-    timestamp       TIMESTAMP    NOT NULL COMMENT '消息时间戳',
-    PRIMARY KEY (id),
-    INDEX idx_conv_ts (conversation_id, timestamp)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                                                     content         TEXT         NOT NULL COMMENT '消息内容（JSON序列化）',
+                                                     type            VARCHAR(10)  NOT NULL COMMENT '消息类型：USER/ASSISTANT/SYSTEM/TOOL',
+                                                     timestamp       TIMESTAMP    NOT NULL COMMENT '消息时间戳',
+                                                     PRIMARY KEY (id),
+                                                     INDEX idx_conv_ts (conversation_id, timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE knowledge_document (
                                     id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,

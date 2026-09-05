@@ -1,0 +1,41 @@
+# ============================================================
+# 本地开发基础设施：Qdrant(向量库) + MySQL(业务库) + Redis(预留缓存)
+# 用法: docker compose up -d
+# Qdrant gRPC 端口 6334 / HTTP 6333(控制台 http://localhost:6333/dashboard)
+# MySQL root 密码默认 123456(与 application-mysql.yaml 默认一致, 请按需修改)
+# ============================================================
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.7
+    container_name: ai-agent-qdrant
+    ports:
+      - "6333:6333"   # REST / Dashboard
+      - "6334:6334"   # gRPC(Spring AI 使用)
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: ai-agent-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: ai_agent_db
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: ai-agent-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+  mysql_data:
