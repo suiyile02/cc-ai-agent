@@ -1,7 +1,9 @@
 package com.ai.memory;
 
-import com.ai.entity.ChatMemoryRecord;
-import com.ai.repository.ChatMemoryRecordRepository;
+import com.ai.memory.entity.ChatMemoryRecord;
+import com.ai.memory.mapper.ChatMemoryRecordMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -10,41 +12,73 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * 基于数据库(SPRING_AI_CHAT_MEMORY)的 {@link ChatMemoryRepository} 实现(由 ChatConfig 注册为 Bean)。
+ * 基于数据库(SPRING_AI_CHAT_MEMORY)的 {@link ChatMemoryRepository} 实现。
  *
- * <p>对齐需求建表脚本第 1 张框架约定表：
- * {@code conversation_id / content(JSON序列化) / type(USER|ASSISTANT|SYSTEM|TOOL) / timestamp}。
- * 仅持久化纯文本的 USER/ASSISTANT/SYSTEM 消息，保证多轮记忆跨调用稳定回放
- * (工具内部消息不持久化, 避免回放失败)。
+ * <p>对齐建表脚本第 1 张框架约定表：
+ * conversation_id / content(JSON序列化) / type(USER|ASSISTANT|SYSTEM) / timestamp。
+ * 仅持久化纯文本消息, 保证多轮记忆跨调用稳定回放(工具内部消息不持久化)。
  */
+@Component
 public class DbChatMemoryRepository implements ChatMemoryRepository {
 
-    private final ChatMemoryRecordRepository recordRepository;
+    private final ChatMemoryRecordMapper recordMapper;
     private final ObjectMapper objectMapper;
 
-    public DbChatMemoryRepository(ChatMemoryRecordRepository recordRepository, ObjectMapper objectMapper) {
-        this.recordRepository = recordRepository;
+    /**
+     * 构造记忆仓储。
+     *
+     * @param recordMapper 记忆表 Mapper
+     * @param objectMapper JSON 序列化器
+     */
+    public DbChatMemoryRepository(ChatMemoryRecordMapper recordMapper, ObjectMapper objectMapper) {
+        this.recordMapper = recordMapper;
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 返回所有出现过消息的会话 ID(去重)。
+     *
+     * @return 会话 ID 列表
+     */
     @Override
     @Transactional(readOnly = true)
     public List<String> findConversationIds() {
-        return recordRepository.findDistinctConversationIds();
+        QueryWrapper<ChatMemoryRecord> qw = new QueryWrapper<>();
+        qw.select("DISTINCT conversation_id").isNotNull("conversation_id");
+        List<Object> values = recordMapper.selectObjs(qw);
+        Set<String> ids = new LinkedHashSet<>();
+        for (Object v : values) {
+            if (v != null) {
+                ids.add(String.valueOf(v));
+            }
+        }
+        return new ArrayList<>(ids);
     }
 
+    /**
+     * 按会话读取历史消息(按 timestamp 与 id 升序回放)。
+     *
+     * @param conversationId 会话 ID
+     * @return 可回放消息列表(仅纯文本 USER/ASSISTANT/SYSTEM)
+     */
     @Override
     @Transactional(readOnly = true)
     public List<Message> findByConversationId(String conversationId) {
-        List<ChatMemoryRecord> records =
-                recordRepository.findByConversationIdOrderByTimestampAscIdAsc(conversationId);
+        List<ChatMemoryRecord> records = recordMapper.selectList(
+                new LambdaQueryWrapper<ChatMemoryRecord>()
+                        .eq(ChatMemoryRecord::getConversationId, conversationId)
+                        .orderByAsc(ChatMemoryRecord::getTimestamp)
+                        .orderByAsc(ChatMemoryRecord::getId));
         List<Message> messages = new ArrayList<>();
         for (ChatMemoryRecord record : records) {
             Message msg = toMessage(record);
@@ -55,16 +89,24 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
         return messages;
     }
 
+    /**
+     * 全量替换某会话历史(先删后插)。
+     *
+     * @param conversationId 会话 ID
+     * @param messages       全部消息(工具内部消息被过滤)
+     */
     @Override
     @Transactional
     public void saveAll(String conversationId, List<Message> messages) {
-        recordRepository.deleteByConversationId(conversationId);
+        recordMapper.delete(new LambdaQueryWrapper<ChatMemoryRecord>()
+                .eq(ChatMemoryRecord::getConversationId, conversationId));
         LocalDateTime now = LocalDateTime.now();
         int seq = 0;
         for (Message message : messages) {
             MessageType type = message.getMessageType();
-            if (type != MessageType.USER && type != MessageType.ASSISTANT && type != MessageType.SYSTEM) {
-                continue; // 工具内部消息不持久化, 见类注释
+            if (type != MessageType.USER && type != MessageType.ASSISTANT
+                    && type != MessageType.SYSTEM) {
+                continue;
             }
             String text = message.getText();
             if (text == null || text.isBlank()) {
@@ -75,17 +117,28 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
             record.setType(type.name());
             record.setContent(toJson(text));
             record.setTimestamp(now.plusSeconds(seq++));
-            recordRepository.save(record);
+            recordMapper.insert(record);
         }
     }
 
+    /**
+     * 删除某会话全部记忆(删除会话时调用)。
+     *
+     * @param conversationId 会话 ID
+     */
     @Override
     @Transactional
     public void deleteByConversationId(String conversationId) {
-        recordRepository.deleteByConversationId(conversationId);
+        recordMapper.delete(new LambdaQueryWrapper<ChatMemoryRecord>()
+                .eq(ChatMemoryRecord::getConversationId, conversationId));
     }
 
-    /** content 列存储 JSON 序列化文本, 与建表注释"消息内容（JSON序列化）"一致 */
+    /**
+     * content 列 JSON 序列化文本, 与建表注释“消息内容（JSON序列化）”一致。
+     *
+     * @param text 消息文本
+     * @return JSON 字符串 {"text":"..."}
+     */
     private String toJson(String text) {
         try {
             return objectMapper.writeValueAsString(new JsonText(text));
@@ -94,6 +147,12 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
         }
     }
 
+    /**
+     * 记录 → 消息对象(按 type), 类型不支持返回 null。
+     *
+     * @param record 记忆记录
+     * @return Message 或 null
+     */
     private Message toMessage(ChatMemoryRecord record) {
         String content = readText(record.getContent());
         if (content == null) {
@@ -107,6 +166,12 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
         };
     }
 
+    /**
+     * 解析 content JSON(兼容直接文本旧数据)。
+     *
+     * @param json JSON 或纯文本
+     * @return 文本, 解析失败返回 null
+     */
     private String readText(String json) {
         if (json == null) {
             return null;
@@ -117,13 +182,13 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
             if (text != null && text.isTextual()) {
                 return text.asText();
             }
-            // 兼容旧格式(直接文本)
             return node.isTextual() ? node.asText() : null;
         } catch (Exception e) {
             return null;
         }
     }
 
+    /** content 列 JSON 载体 */
     private record JsonText(String text) {
     }
 }

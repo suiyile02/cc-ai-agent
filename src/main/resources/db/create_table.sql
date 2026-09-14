@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS SPRING_AI_CHAT_MEMORY (
                                                      INDEX idx_conv_ts (conversation_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE knowledge_document (
+CREATE TABLE IF NOT EXISTS knowledge_document (
                                     id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
                                     file_name       VARCHAR(255) NOT NULL COMMENT '文件名',
                                     file_type       VARCHAR(20)  NOT NULL COMMENT '文件类型：PDF/DOCX/TXT/MD',
@@ -26,7 +26,7 @@ CREATE TABLE knowledge_document (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
-CREATE TABLE chat_session (
+CREATE TABLE IF NOT EXISTS chat_session (
                               id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
                               session_id      VARCHAR(36)  NOT NULL COMMENT '会话ID（即conversation_id）',
                               user_id         BIGINT       NOT NULL COMMENT '用户ID',
@@ -39,9 +39,10 @@ CREATE TABLE chat_session (
                               INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE tool_call_log (
+CREATE TABLE IF NOT EXISTS tool_call_log (
                                id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
                                session_id      VARCHAR(36)  NOT NULL COMMENT '所属会话ID',
+                               user_id         BIGINT       NULL COMMENT '所属用户ID(授权过滤)',
                                tool_name       VARCHAR(100) NOT NULL COMMENT '工具名称',
                                input_params    JSON         NOT NULL COMMENT '输入参数',
                                output_result   TEXT         NULL COMMENT '执行结果',
@@ -50,11 +51,12 @@ CREATE TABLE tool_call_log (
                                error_message   TEXT         NULL COMMENT '错误信息',
                                created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
                                INDEX idx_session_id (session_id),
+                               INDEX idx_user_id (user_id),
                                INDEX idx_tool_name (tool_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
-CREATE TABLE chat_log (
+CREATE TABLE IF NOT EXISTS chat_log (
                           id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
                           session_id      VARCHAR(36)  NOT NULL COMMENT '所属会话ID',
                           user_id         BIGINT       NOT NULL COMMENT '用户ID',

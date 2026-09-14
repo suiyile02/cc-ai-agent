@@ -1,0 +1,10 @@
+# ============================================================
+# 开发环境便利开关(显式激活: mvn spring-boot:run -Dspring-boot.run.profiles=dev
+#   或 java -jar ai-agent-*.jar --spring.profiles.active=dev)
+# 默认(无 profile)即为安全基线: 模拟登录头关闭, 播种开启
+# ============================================================
+app:
+  auth:
+    dev-user-header-enabled: true   # 允许 X-User-Id 请求头模拟登录(仅限本地开发, 严禁生产开启)
+  demo:
+    seed-enabled: true              # 播种演示数据(仅空表生效)

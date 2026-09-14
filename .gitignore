@@ -33,3 +33,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 运行日志与本地环境(防误提交) ###
+logs/
+*.log
+.env
+application-local.yaml
