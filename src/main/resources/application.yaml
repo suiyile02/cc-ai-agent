@@ -1,9 +1,5 @@
 server:
   port: 9090
-  servlet:
-    multipart:
-      max-file-size: 50MB      # 需求: 单文件最大 50MB
-      max-request-size: 500MB
 
 spring:
   application:
@@ -11,52 +7,138 @@ spring:
   threads:
     virtual:
       enabled: true            # Java 21 虚拟线程
+  servlet:
+    multipart:
+      max-file-size: 50MB      # 需求: 单文件最大 50MB(注意: Boot 4 前缀是 spring.servlet.multipart, 非 server.*)
+      max-request-size: 500MB
+  # ============ 关系库: MySQL(唯一业务库; 表由 spring.sql.init 幂等建表) ============
+  # 环境变量: DB_URL / DB_USERNAME / DB_PASSWORD (缺省见下)
   datasource:
-    driver-class-name: org.h2.Driver
-    url: jdbc:h2:mem:ai_agent;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
-    username: sa
-    password: ""
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: update         # 快速开发: 实体自动建表; 生产可改为 validate + 手动执行 SQL
-    properties:
-      hibernate:
-        format_sql: false
-  h2:
-    console:
-      enabled: true            # http://localhost:9090/h2-console  (JDBC URL 见 datasource.url)
-      path: /h2-console
-  # 默认本地内存向量库模式, 关闭 Qdrant 自动装配(避免启动即连 Qdrant);
-  # 启用 qdrant profile 时会在 application-qdrant.yaml 中覆盖为空并放开自动装配。
-  autoconfigure:
-    exclude: org.springframework.ai.vectorstore.qdrant.autoconfigure.QdrantVectorStoreAutoConfiguration
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&createDatabaseIfNotExist=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:123456}
+    # 虚拟线程放大并发请求数, 默认 10 连接会成为瓶颈(对话+审计+摘要并发抢连接)
+    hikari:
+      maximum-pool-size: 25
+      minimum-idle: 10
+      connection-timeout: 5000
+      max-lifetime: 1800000
+  sql:
+    init:
+      mode: always
+      # 建表脚本已全部 IF NOT EXISTS 幂等; 关闭容错, 避免 SQL 错误被静默吞掉
+      continue-on-error: false
+      # 核心 5 表(create_table.sql) + 扩展表(员工/订单/用户/决策日志/上下文管线)
+      schema-locations: classpath:db/create_table.sql,classpath:db/schema-mysql-extra.sql
 
   ai:
     openai:
       # 默认对接阿里云百炼(DashScope) OpenAI 兼容模式; 也兼容本地 Ollama / 任意 OpenAI 兼容网关
       api-key: ${DASHSCOPE_API_KEY:}
-      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      # 端点必须通过环境变量注入(默认为阿里云百炼官方兼容端点); 个人专属 MaaS 端点请勿写入仓库
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       chat:
-        model: ${AI_CHAT_MODEL:qwen-plus}
+        model: ${AI_CHAT_MODEL:qwen3.7-flash}
         temperature: 0.3
       embedding:
-        model: ${AI_EMBEDDING_MODEL:text-embedding-v3}
+        model: ${AI_EMBEDDING_MODEL:qwen3.7-text-embedding}
+        dimensions: 1024    # 向量维度
+    # 内置重试(对所有模型调用生效: chat/改写/摘要): 只补单次瞬态失败(429/5xx/网络抖动),
+    # 与业务层超时(Timeouts)和改写熔断互补; 慢端点重试会放大延迟, 故只重试一次
+    retry:
+      max-attempts: 2
+      backoff:
+        initial-interval: 2000
+        multiplier: 2
+        max-interval: 8000
+    # ============ 向量库: Qdrant(唯一向量库; 首次启动自动建集合, 维度随 embedding 模型) ============
+    # 前置: 已启动 Qdrant(docker compose up -d); 环境变量: QDRANT_HOST / QDRANT_PORT(gRPC 6334) / QDRANT_API_KEY
+    vectorstore:
+      qdrant:
+        host: ${QDRANT_HOST:localhost}
+        port: ${QDRANT_PORT:6334}
+        # 空串时本地无鉴权 Qdrant 会忽略该请求头; 接 Qdrant Cloud/带鉴权实例时设置 QDRANT_API_KEY 即可
+        api-key: ${QDRANT_API_KEY:}
+        use-tls: false
+        collection-name: rag_knowledge_base
+        content-field-name: content
+        initialize-schema: true
 
 # ================= 业务自定义配置 =================
 app:
   rag:
     collection-name: rag_knowledge_base   # Qdrant 集合名 / 知识库标识
     top-k: 5                              # 检索 Top-K(需求默认 5)
-    similarity-threshold: 0.6             # 相似度阈值, 低于该值的文档块不注入上下文
+    similarity-threshold: 0.45            # 相似度阈值(实测该 embedding 模型分数偏低, 0.6 会误杀正确 chunk, 如"加班调休"0.565)
     context-max-chars: 8000               # 注入上下文的最大字符数
-    vector-store: memory                  # memory=进程内向量库(默认, 零依赖) | qdrant=外部 Qdrant
+    auto-route: true                      # 意图路由: 常识/闲聊自动跳过 RAG 检索直接作答; false=每次都检索
+    # internal-keywords: [...]            # 意图路由关键词表(缺省内置企业词表, 见 AppProperties, 可在此覆盖)
+    hybrid-enabled: true                  # 混合检索: 语义向量 + 关键词(BM25) 多路召回; false=仅语义检索
+    rerank-mode: score                    # 重排: score=分数融合 | llm=大模型重排(失败回退score) | none=仅RRF排序
   storage:
     path: ./data/files                    # 上传文件本地存储根目录
   chat:
-    model-label: ${AI_CHAT_MODEL:qwen-plus}   # 记录到 chat_log.model_name
+    model-label: qwen3.7-flash   # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名(见 ChatService.resolveModelLabel)
+    disable-thinking: false      # 主对话注入 enable_thinking=false(提速但可能影响质量, 默认关闭)
+  auth:
+    # JWT 密钥(生产必须通过 JWT_SECRET 注入, 长度≥32字节), 过期小时数
+    jwt-secret: ${JWT_SECRET:ai-agent-dev-secret-change-me-in-prod-2026}
+    token-expire-hours: 168                   # 7 天
+    # 开发便捷开关(默认关闭!): 允许用 X-User-Id 请求头模拟登录, 存在身份伪造风险,
+    # 仅在本地开发时激活 dev profile(--spring.profiles.active=dev)开启
+    dev-user-header-enabled: false
+  # ============ 演示数据播种(仅空表生效) ============
+  demo:
+    seed-enabled: true                        # 生产 profile 已关闭
+  # ============ 跨域(对接前端 Vue3) ============
+  cors:
+    allowed-origins:                          # 为空列表则不启用 CORS
+      - http://localhost:5173
+  # ============ 上下文处理管线(统一 Token 预算 / 多轮改写 / 历史摘要) ============
+  context:
+    model-max-tokens: 8192       # 模型上下文窗口上限(token)
+    reserved-for-answer: 1500    # 为回答预留的 token(可用预算 = max - reserved)
+    budget:                      # 各段预算占比(总预算按占比切分)
+      system: 0.15               # system 提示词(不含 RAG)
+      history: 0.35              # 历史(摘要 + 最近窗口)
+      rag: 0.40                  # RAG 检索上下文
+      user: 0.10                 # 当前用户输入
+    query-rewrite:
+      enabled: true              # 多轮查询改写/指代消解(追问改写为独立检索问题)
+      min-history-turns: 1       # 触发改写所需最小历史轮数(首轮跳过)
+      timeout-ms: 30000          # 改写调用超时(实测端点 10.7~28.9s, 连续失败≥2次熔断60s)
+      reference-hint-required: true  # 指代词启发式: 问题不含指代/省略线索词时跳过改写(零等待)
+      # reference-hints: [...]   # 线索词表(缺省: 那/它/他/她/这个/上面/刚才等, 见 AppProperties)
+      disable-thinking: true     # 改写调用注入 enable_thinking=false(qwen3 关思维链, 实测大幅降延迟)
+    summary:
+      enabled: true              # 历史滚动摘要压缩
+      trigger-messages: 20       # 历史消息数超过该阈值触发摘要
+      keep-recent-messages: 8    # 压缩后保留的最近消息条数(不并入摘要)
+      max-tokens: 400            # 摘要文本 token 上限
+      timeout-ms: 30000          # 摘要模型调用超时(后台异步执行, 不阻塞对话)
+      trigger-tokens: 0          # 历史 Token 阈值(第二触发条件); 0=关闭, 仅按条数触发
+      disable-thinking: true     # 摘要调用注入 enable_thinking=false(后台任务提速)
+    history:
+      max-messages: 30           # 历史窗口硬上限(条), 与 token 预算取更严者
 
 logging:
   level:
     com.ai: info
     org.springframework.ai: warn
+    # 调试对话/改写/摘要时打开: SimpleLoggerAdvisor 会打印发给模型的完整 prompt 与响应
+    # org.springframework.ai.chat.client.advisor: debug
+
+# 说明: MyBatis-Plus 为 Boot4 手工装配(见 MybatisPlusConfig), 不读取 mybatis-plus.* yaml 配置;
+# 关键项(驼峰映射/banner/审计填充/分页插件)均在该配置类中显式声明。
+
+# ================= 运维端点 =================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info     # 仅暴露健康检查与基本信息
+  endpoint:
+    health:
+      probes:
+        enabled: true            # 容器/K8s 存活与就绪探针

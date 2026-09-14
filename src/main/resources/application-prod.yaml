@@ -1,0 +1,13 @@
+# ============================================================
+# 生产环境基线(显式激活: --spring.profiles.active=prod)
+# 上线前必须通过环境变量注入: JWT_SECRET / DASHSCOPE_API_KEY / DB_* / QDRANT_*
+# ============================================================
+app:
+  auth:
+    dev-user-header-enabled: false  # 双保险: 禁用 X-User-Id 模拟登录(缺省已关闭)
+  demo:
+    seed-enabled: false             # 禁用演示数据播种(默认管理员等)
+
+logging:
+  level:
+    com.ai: info

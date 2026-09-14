@@ -8,57 +8,74 @@
 |---|---|
 | JDK / 框架 | Java 21 · Spring Boot 4.1.1（webmvc starter 命名） |
 | AI 框架 | Spring AI 2.0.1（`spring-ai-starter-model-openai`，OpenAI 兼容协议） |
-| 大模型 | 阿里云百炼 DashScope（qwen-plus / text-embedding-v3），兼容本地 Ollama 等 OpenAI 兼容网关 |
-| 向量库 | 默认进程内 `SimpleVectorStore`（零依赖）；`qdrant` profile 切换外部 Qdrant |
-| 业务库 | 默认 H2 内存（零依赖）；`mysql` profile 切换 MySQL 8 |
-| 持久化 | Spring Data JPA（Hibernate ddl-auto=update 自动建表） |
-| 对话记忆 | 自研 `DbChatMemoryRepository`（框架约定表 `SPRING_AI_CHAT_MEMORY`，content 列 JSON 序列化）+ `MessageWindowChatMemory` + `MessageChatMemoryAdvisor`（Spring AI 2.x 已移除官方 JDBC starter，故自实现） |
+| 大模型 | 阿里云百炼 DashScope（qwen3.7-flash / qwen3.7-text-embedding），兼容本地 Ollama 等 OpenAI 兼容网关 |
+| 向量库 | Qdrant（唯一向量库，首次启动自动建集合，维度随 embedding 模型） |
+| 业务库 | MySQL 8（唯一关系库，表由启动期 `spring.sql.init` 幂等建表） |
+| 持久化 | MyBatis-Plus 3.5.17（BaseMapper + LambdaQueryWrapper；表结构由启动期 `spring.sql.init` 脚本维护） |
+| 对话记忆 | 自研 `DbChatMemoryRepository`（框架约定表 `SPRING_AI_CHAT_MEMORY`，content 列 JSON 序列化）+ 自管历史装配；官方 `spring-ai-starter-model-chat-memory-repository-jdbc` 在 2.0.1 BOM 中已存在，经对比暂保留自研（官方表多 `sequence_id` 列，迁移评估见 agents.md） |
 | 文档解析 | Tika（PDF/DOCX/TXT/MD） + `TokenTextSplitter`(512/100) |
 | 其它 | AOP(工具日志) · Lombok · 虚拟线程 |
 
-> 架构分层遵循 `AGENTS.md`：Controller(薄) → Service(业务/事务) → Repository(JPA)；统一 `Result<T>` / `PageResult<T>`；实体不直接返回前端。
+> 架构采用**模块优先**组织：每个业务模块自持 `controller/service/entity/mapper/dto` 子包，模块根包只放对外契约；全局切面统一在 `aspect` 包，业务无关工具在 `common`。完整规范与强制规则见 `AGENTS.md`「项目架构规范」，并由 `LayeredArchitectureTest`(ArchUnit) 自动守护。
 
-## 2. 快速开始（默认零外部依赖）
+## 2. 快速开始（依赖 MySQL + Qdrant）
 
-前置：JDK 21、Maven 3.9+。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
+前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
 
 ```bash
 # Windows PowerShell
 $env:DASHSCOPE_API_KEY="sk-xxxx"
 
-# 方式一：直接启动（默认 H2 + 内存向量库）
+# 先启动基础设施（MySQL + Qdrant）
+docker compose up -d
+# 启动应用（默认即连 MySQL + Qdrant，无需 profile）
 mvn spring-boot:run
 # 或打包运行
 mvn -DskipTests package
-java -jar target/ai-0.0.1-SNAPSHOT.jar
+java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```
 
 启动后：
-- 应用端口 **9090**；H2 控制台 http://localhost:9090/h2-console（`jdbc:h2:mem:ai_agent`，sa/空）
+- 应用端口 **9090**；Qdrant 控制台 http://localhost:6333/dashboard
 - 示例业务数据自动初始化（员工：张三/李四/王五；订单：SO20260101xxx）
 
 > 切换大模型只需环境变量：`AI_BASE_URL`、`AI_CHAT_MODEL`、`AI_EMBEDDING_MODEL`、`DASHSCOPE_API_KEY`。
 > 本地 Ollama：`AI_BASE_URL=http://localhost:11434/v1`、`AI_CHAT_MODEL=qwen2.5:7b`、`AI_EMBEDDING_MODEL=nomic-embed-text`（需 Ollama 已拉取相应模型）。
 
-### Profile 一览
+### 数据源与环境变量
 
-| 场景 | 启动命令 |
-|---|---|
-| 本地快速体验（默认） | `mvn spring-boot:run` |
-| 使用 MySQL | `mvn spring-boot:run -Dspring-boot.run.profiles=mysql`（环境变量 DB_URL/DB_USERNAME/DB_PASSWORD） |
-| 使用外部 Qdrant | `mvn spring-boot:run -Dspring-boot.run.profiles=qdrant` |
-| MySQL + Qdrant 生产形态 | `docker compose up -d` 后 `mvn spring-boot:run -Dspring-boot.run.profiles=mysql,qdrant` |
+应用默认且仅使用 **MySQL（关系库）+ Qdrant（向量库）**，配置集中在 `application.yaml`，无需指定 profile。可用环境变量覆盖：
 
-> Qdrant profile 会放开 Qdrant 自动装配（`application-qdrant.yaml`），首次启动自动建集合（需 Embedding 模型可用）。
+| 用途 | 环境变量 | 缺省 |
+|---|---|---|
+| MySQL 连接 | `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | `jdbc:mysql://localhost:3306/ai_agent_db...` / `root` / `123456` |
+| Qdrant 连接 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_API_KEY` | `localhost` / `6334` / 空 |
+| 大模型 | `DASHSCOPE_API_KEY` / `AI_BASE_URL` / `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` | 见 `application.yaml` |
+
+> 首次启动 Qdrant 自动建集合（需 Embedding 模型可用）；MySQL 表由启动期 `spring.sql.init` 幂等建表（脚本全部 `IF NOT EXISTS`，`continue-on-error` 已关闭）。
+>
+> **运行 profile**：默认（无 profile）= 安全基线（模拟登录头关闭、演示数据播种开启）；`dev` profile 额外开启 `X-User-Id` 模拟登录；`prod` profile 关闭演示数据播种。`/actuator/health` 可用于探针。
 
 ## 3. 功能模块与接口
 
-统一前缀 `/api`，统一响应 `{code,message,data,timestamp}`，分页 `{records,total,page,size,totalPages}`。除流式接口外均返回 `Result<T>`。会话鉴权 MVP 用请求头 `X-User-Id`（默认 1）。
+统一前缀 `/api`，统一响应 `{code,message,data,timestamp}`，分页 `{records,total,page,size,totalPages}`。除流式接口外均返回 `Result<T>`。
+
+### 3.0 用户与鉴权（新增）
+| 方法/路径 | 说明 |
+|---|---|
+| `POST /api/auth/register` | 注册（username/password/nickname），成功即返回登录态 |
+| `POST /api/auth/login` | 登录，返回 `{token, user}`（JWT） |
+| `GET /api/auth/me` | 当前登录用户信息 |
+
+- 登录后业务接口统一携带请求头：`Authorization: Bearer <token>`；未登录/凭证失效返回 code=6005(HTTP 401)。
+- 所有 `/api/**`（除 register/login）由 `AuthInterceptor` 鉴权，会话/知识库上传的“用户”取自登录态（不再手工传 userId）。
+- 开发便捷开关默认**关闭**：需要用 `X-User-Id` 请求头模拟登录时，以 dev profile 启动（`--spring.profiles.active=dev`）；默认管理员 admin/admin123 首次启动自动播种（可用 `app.demo.seed-enabled=false` 关闭，prod profile 默认关闭）。
+- **角色与授权**：`sys_user.role`（ADMIN/USER，登录时写入 JWT `role` claim，重新登录后刷新）。授权规则"管理员或本人"由 `@RequireSelfOrAdmin` 注解 + `SelfOrAdminAspect` 切面统一实施——管理员可查全量；普通用户在系统日志接口传入的 `userId` 会被**强制改写为本人**（越权传他人 ID 只能看到自己的数据），非本人数据返回 HTTP 403（code=5002）。
 
 ### 3.1 知识库管理（需求第 2 章）
 | 方法/路径 | 说明 |
 |---|---|
-| `POST /api/knowledge/upload`（multipart: file,userId） | 上传文档（PDF/DOCX/TXT/MD ≤50MB），异步入库 |
+| `POST /api/knowledge/upload`（multipart: file） | 上传文档（PDF/DOCX/TXT/MD ≤50MB），异步入库，上传人=登录用户 |
 | `GET /api/knowledge/documents` | 分页列表（fileName/status/startTime/endTime 过滤） |
 | `DELETE /api/knowledge/documents/{id}` | 删除：按 doc_id 清理向量 → 删除记录 → 删除本地文件 |
 | `POST /api/knowledge/documents/{id}/reprocess` | 重新入库（失败重试） |
@@ -69,32 +86,36 @@ java -jar target/ai-0.0.1-SNAPSHOT.jar
 | 方法/路径 | 说明 |
 |---|---|
 | `POST /api/ai/chat` | 同步问答，返回 `{content, sources}` |
-| `POST /api/ai/chat/stream` | SSE 流式（`data:{...}` … `data:[DONE]`） |
+| `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:stage`(阶段提示) → `event:content`(正文增量) → `event:sources`(引用来源) → `data:[DONE]` |
 | `POST /api/ai/rag/search` | RAG 检索调试（topK/阈值即时调参看命中） |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → (检索 `similaritySearch` topK=5、相似度阈值 0.6 可配) → 组装 system（`prompts/base-system.st` / `rag-context.st` 外部模板）→ `MessageChatMemoryAdvisor` 注入历史（conversationId=sessionId）→ 模型生成（可携带 `BusinessTools`）→ 写 `chat_log`（含来源 JSON）。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
 
 ### 3.3 Agent 工具（需求第 4 章）
 - `BusinessTools`：`queryEmployee(姓名)`、`queryOrder(订单号)`、`getCurrentTime()`（`@Tool`/`@ToolParam` 描述触发条件与参数）
-- `ToolCallLogAspect`（AOP）自动记录每次工具调用的入参/出参/耗时/状态到 `tool_call_log`
+- `ToolCallLogAspect`（AOP）自动记录每次工具调用的入参/出参/耗时/状态到 `tool_call_log`；会话与用户经 Spring AI `toolContext` 透传进切面（session_id/user_id 已完整落库）
 
 ### 3.4 会话管理（需求第 5 章）
 | 方法/路径 | 说明 |
 |---|---|
 | `POST /api/sessions` | 创建会话（sessionType: RAG/AGENT/HYBRID，默认 HYBRID） |
-| `GET /api/sessions` | 我的会话（分页，X-User-Id） |
+| `GET /api/sessions` | 我的会话（分页，自动按登录用户隔离） |
 | `PUT /api/sessions/{id}/archive` | 归档（status=0） |
 | `DELETE /api/sessions/{id}` | 删除 = 软删 + 清理对话记忆 |
 
 ### 3.5 系统管理（需求第 6 章）
+> **授权**：四个日志查询接口均带 `@RequireSelfOrAdmin`——管理员可按任意 `userId`/`sessionId` 过滤全量；普通用户强制只查本人（不传 `userId` 即本人全量，传他人 `userId` 被改写为本人）。
+
 | 方法/路径 | 说明 |
 |---|---|
 | `GET /api/system/chat-logs` | 对话日志分页（sessionId/userId/时间范围过滤） |
+| `GET /api/system/tool-call-logs` | 工具调用日志分页（sessionId/userId/toolName/status/时间过滤） |
 | `GET /api/system/tool-call-logs` | 工具调用日志分页（toolName/status/时间过滤） |
+| `GET /api/system/rag-decisions` | RAG 意图路由决策日志分页（sessionId/userId/ragMode/时间过滤：KB/GENERAL、是否检索、多路命中数、Top-K/阈值/重排模式、耗时） |
 
 ### 3.6 异常与降级（需求第 8 章）
-- `GlobalExceptionHandler` + `ErrorCode`（1001~5003）统一错误；
+- `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
 - 降级策略：模型不可用 → `AI_NOT_CONFIGURED` 友好提示；向量库不可用 → RAG 自动降级为不注入上下文继续对话；入库失败 → 仅标记 `status=3`，不影响在线对话；删除失败 → 记录日志继续。
 
 ## 4. 快速验证示例（curl）
@@ -102,34 +123,39 @@ java -jar target/ai-0.0.1-SNAPSHOT.jar
 ```bash
 BASE=http://localhost:9090
 
+# 0) 登录获取 Token(默认管理员 admin/admin123, 也可先 /api/auth/register 注册)
+TOKEN=$(curl -s -X POST $BASE/api/auth/login -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | jq -r .data.token)
+AUTH="Authorization: Bearer $TOKEN"
+
 # 1) 创建会话(默认 HYBRID)
-curl -s -X POST $BASE/api/sessions -H "Content-Type: application/json" -H "X-User-Id: 1" \
+curl -s -X POST $BASE/api/sessions -H "Content-Type: application/json" -H "$AUTH" \
   -d '{"title":"员工制度咨询"}'
 # => data.sessionId 记作 $SID
 
-# 2) 上传示例知识文档(异步入库, 稍候查状态=2)
-curl -s -X POST $BASE/api/knowledge/upload -F "file=@docs/sample/员工手册示例.md" -F "userId=1"
-curl -s "$BASE/api/knowledge/documents?status=2"
+# 2) 上传示例知识文档(异步入库, 稍候查状态=2; 上传人=登录用户)
+curl -s -X POST $BASE/api/knowledge/upload -H "$AUTH" -F "file=@docs/sample/员工手册示例.md"
+curl -s "$BASE/api/knowledge/documents?status=2" -H "$AUTH"
 
 # 3) RAG 检索调试(看命中分块与分数)
-curl -s -X POST $BASE/api/ai/rag/search -H "Content-Type: application/json" \
+curl -s -X POST $BASE/api/ai/rag/search -H "Content-Type: application/json" -H "$AUTH" \
   -d '{"question":"入职满两年的员工有多少天年假？","topK":3,"similarityThreshold":0.3}'
 
 # 4) 同步问答(知识库问题 / 工具问题 / 多轮记忆)
-curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" \
+curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" -H "$AUTH" \
   -d "{\"sessionId\":\"$SID\",\"message\":\"入职满两年能休几天年假？\"}"
-curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" \
+curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" -H "$AUTH" \
   -d "{\"sessionId\":\"$SID\",\"message\":\"张三在哪个部门？\"}"
-curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" \
+curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" -H "$AUTH" \
   -d "{\"sessionId\":\"$SID\",\"message\":\"那他的联系方式呢？\"}"   # 验证多轮记忆
 
 # 5) 流式问答
-curl -s -N -X POST $BASE/api/ai/chat/stream -H "Content-Type: application/json" \
+curl -s -N -X POST $BASE/api/ai/chat/stream -H "Content-Type: application/json" -H "$AUTH" \
   -d "{\"sessionId\":\"$SID\",\"message\":\"报销住宿标准是多少？\"}"
 
 # 6) 系统日志回看(应有本轮来源 JSON / 工具调用日志)
-curl -s "$BASE/api/system/chat-logs?sessionId=$SID"
-curl -s "$BASE/api/system/tool-call-logs"
+curl -s "$BASE/api/system/chat-logs?sessionId=$SID" -H "$AUTH"
+curl -s "$BASE/api/system/tool-call-logs" -H "$AUTH"
 ```
 
 更完整的可执行示例见 [docs/demo.sh](docs/demo.sh)。
@@ -138,30 +164,40 @@ curl -s "$BASE/api/system/tool-call-logs"
 
 ```
 com.ai
-├── common      Result / PageResult / ErrorCode / BusinessException / GlobalExceptionHandler / BaseTimeEntity
-├── config      AppProperties / AsyncConfig / VectorStoreConfig / ChatConfig(记忆+ChatClient) / DemoDataInitializer
-├── entity      KnowledgeDocument · ChatSession · ChatLog · ToolCallLog · Employee · SalesOrder · ChatMemoryRecord(SPRING_AI_CHAT_MEMORY)
-├── repository  Spring Data JPA(含 JpaSpecificationExecutor 动态过滤)
-├── memory      DbChatMemoryRepository(Spring AI ChatMemoryRepository 持久化实现)
-├── dto         Java record 请求/响应 VO
-├── service     FileStorage · RagRetrieval · DocumentIngestion · KnowledgeDocument · Chat · ChatSession · ChatLog · ToolCallLog · Prompt
-├── agent       BusinessTools(@Tool) · ToolCallLogAspect(AOP)
-└── controller  Knowledge / Chat / Session / System
+├── common      【全局公共层】统一响应/错误码/异常/工具类/Token 计量(jtokkit 精确计数 JtokTokenCounter, HeuristicTokenCounter 为备用)
+├── aspect      【全局切面层】SelfOrAdminAspect(授权) · ToolCallLogAspect(工具日志)
+├── config      【全局配置层】AppProperties · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
+├── prompt      【提示词装配】PromptService(classpath:/prompts/*.st)
+├── rag         【RAG 能力模块】根=契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome) · service/=混合检索与关键词索引实现
+├── context     【上下文管线模块】根=契约(ConversationMemory/HistoryContext/AssembledPrompt/ContextComposition)
+│   ├── entity|mapper  ConversationSummary
+│   └── service        ContextAssembler · ConversationMemoryService · ConversationSummarizer · QueryRewriter
+├── chat        【对话模块】controller/ChatController · service/ChatService · event/审计事件 · dto
+├── knowledge   【知识库模块】controller/service(上传入库/文档管理/文件存储)/entity/mapper/dto
+├── user        【用户鉴权模块】controller/service/entity(SysUser)/mapper/dto
+│   └── security       JwtTokenProvider · UserContext · AuthInterceptor · PasswordHasher · RequireSelfOrAdmin
+├── session     【会话模块】controller/service/entity(ChatSession)/mapper/dto
+├── system      【系统审计模块】controller/SystemController · service/四类日志服务+ChatAuditListener · entity/mapper/dto(四张日志表)
+├── agent       【Agent 工具模块】BusinessTools(@Tool) + entity/mapper/dto(员工/订单演示数据)
+└── memory      【记忆存储模块】DbChatMemoryRepository + entity/mapper(SPRING_AI_CHAT_MEMORY)
 resources/prompts        *.st 提示词模板
-resources/application*.yaml  (默认/mysql/qdrant profile)
+resources/application.yaml   MySQL + Qdrant 默认配置(无 profile)
 db/create_table.sql          建表脚本(SPRING_AI_CHAT_MEMORY / knowledge_document / chat_session / tool_call_log / chat_log)
 docs/sample/员工手册示例.md   演示知识文档
-docker-compose.yml          Qdrant+MySQL+Redis
+docker-compose.yml          Qdrant+MySQL
 ```
+
+> 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory`），调用方依赖接口而非实现。
 
 ## 6. 已知简化与后续路线（非阻塞项）
 
 - **前端**：本期仅后端 REST/SSE；对接 Vue3+Element Plus 页面为下一迭代。
-- **Redis 缓存/记忆**：需求第 1、9 章提及 Redis；MVP 使用 DB 记忆，Redis 接入已留 docker-compose 与配置位。
-- **工具日志的 sessionId**：Spring AI 工具上下文暂未把 conversationId 透传进切面，`tool_call_log.session_id` 可为空（toolName/入参出参/状态/耗时已完整）。
+- **存量数据库升级**：本版本新增 `sys_user.role` 与 `tool_call_log`/`rag_decision_log`/`context_log` 的 `user_id` 列。已有库需手动执行一次 `db/upgrade/2026-09-authorization.sql`（MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，无法随启动脚本幂等执行）；新库由建表脚本直接生效。
 - **chat_log.total_tokens**：本期未采集（字段保留）。
 - **删除文档**：物理删除记录 + 按 `doc_id` 过滤检索出向量点后精确清理（向量库不可用时记录日志并继续），文件删除尽力而为。
-- **表范围**：`db/create_table.sql` 覆盖框架记忆表与 4 张业务表；示例数据表 `employee` / `orders`（Agent 工具演示用）不在脚本内，由 JPA ddl-auto 自动创建。
+- **表范围**：核心 5 张表见 `db/create_table.sql`；扩展表 `employee` / `orders` / `sys_user` / `rag_decision_log` / `conversation_summary` / `context_log` 见 `db/schema-mysql-extra.sql`，由启动期 `spring.sql.init` 幂等执行建表（仅 MySQL）。
+- **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；重启进程需重新入库重建，如需长期稳定建议后续接入 MySQL FULLTEXT / Elasticsearch。
+- **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
 - **测试用例**：需求第 10 章的功能用例可在本 README 第 4 节手工回归；自动化用例（Mockito/Testcontainers）作为后续迭代。
 
