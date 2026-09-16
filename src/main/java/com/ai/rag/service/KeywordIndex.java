@@ -8,6 +8,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -18,8 +20,8 @@ import java.util.regex.Pattern;
  * 删除/重处理时调用 {@link #removeDocument} 同步清理。
  * 分词策略：英文/数字按词元，中文按“连续二元组 + 单字”近似(无需外部分词器)。
  *
- * <p>注意：索引保存在进程内存(与外部向量库 Qdrant 相互独立)；重启进程后需重新
- * 入库以重建(可后续升级为 MySQL FULLTEXT / Elasticsearch)。
+ * <p>注意：索引保存在进程内存(与外部向量库 Qdrant 相互独立)；应用重启后由
+ * {@link KeywordIndexRebuilder} 从 Qdrant payload 自动重建(不重新向量化, 秒级完成)。
  */
 @Component
 public class KeywordIndex {
@@ -44,6 +46,10 @@ public class KeywordIndex {
     private final Map<String, Map<String, Integer>> postings = new HashMap<>();
     /** docId -> chunkKeys(用于按文档整批删除) */
     private final Map<Long, List<String>> keysByDoc = new HashMap<>();
+    /** 读写锁: 检索并发读, 入库/删除独占写(替代全方法 synchronized 的全局串行) */
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    /** 全部分块长度之和(avgLen 增量维护, 替代每次检索 O(n) 全量重算) */
+    private long totalChunkLength = 0;
 
     /**
      * 注册一个文档的全部分块到关键词索引(幂等：先清理旧内容再写入)。
@@ -52,11 +58,21 @@ public class KeywordIndex {
      * @param fileName  来源文件名
      * @param chunkDocs 入库分块(按顺序, chunk_index 取列表下标)
      */
-    public synchronized void addDocument(Long docId, String fileName, List<Document> chunkDocs) {
+    public void addDocument(Long docId, String fileName, List<Document> chunkDocs) {
         if (chunkDocs == null) {
             return;
         }
-        removeDocument(docId);
+        lock.writeLock().lock();
+        try {
+            addDocumentLocked(docId, fileName, chunkDocs);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /** 内部实现(调用方必须已持写锁) */
+    private void addDocumentLocked(Long docId, String fileName, List<Document> chunkDocs) {
+        removeDocumentLocked(docId);
         int index = 0;
         for (Document doc : chunkDocs) {
             String text = doc.getText();
@@ -66,6 +82,7 @@ public class KeywordIndex {
             }
             String key = keyOf(docId, index);
             chunksById.put(key, new Chunk(key, docId, fileName, index, text, text.length()));
+            totalChunkLength += text.length();
             keysByDoc.computeIfAbsent(docId, k -> new ArrayList<>()).add(key);
             for (String term : termsOf(text)) {
                 postings.computeIfAbsent(term, t -> new HashMap<>())
@@ -80,7 +97,17 @@ public class KeywordIndex {
      *
      * @param docId 知识库文档 ID
      */
-    public synchronized void removeDocument(Long docId) {
+    public void removeDocument(Long docId) {
+        lock.writeLock().lock();
+        try {
+            removeDocumentLocked(docId);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /** 内部实现(调用方必须已持写锁) */
+    private void removeDocumentLocked(Long docId) {
         List<String> keys = keysByDoc.remove(docId);
         if (keys == null) {
             return;
@@ -90,6 +117,7 @@ public class KeywordIndex {
             if (chunk == null) {
                 continue;
             }
+            totalChunkLength -= chunk.length();
             for (String term : termsOf(chunk.text())) {
                 Map<String, Integer> tf = postings.get(term);
                 if (tf == null) {
@@ -109,8 +137,13 @@ public class KeywordIndex {
      * @return 分块数
      */
     /** 【仅测试引用】生产可用性判断统一用 {@link #isEmpty()}; size() 仅供单元测试断言。 */
-    public synchronized int size() {
-        return chunksById.size();
+    public int size() {
+        lock.readLock().lock();
+        try {
+            return chunksById.size();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /**
@@ -118,8 +151,13 @@ public class KeywordIndex {
      *
      * @return true=无任何已索引分块
      */
-    public synchronized boolean isEmpty() {
-        return chunksById.isEmpty();
+    public boolean isEmpty() {
+        lock.readLock().lock();
+        try {
+            return chunksById.isEmpty();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /**
@@ -129,7 +167,17 @@ public class KeywordIndex {
      * @param topK  返回条数上限
      * @return 命中列表(得分>0), 无命中返回空列表
      */
-    public synchronized List<Hit> search(String query, int topK) {
+    public List<Hit> search(String query, int topK) {
+        lock.readLock().lock();
+        try {
+            return searchLocked(query, topK);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** 内部实现(调用方必须已持读锁) */
+    private List<Hit> searchLocked(String query, int topK) {
         if (query == null || query.isBlank() || chunksById.isEmpty()) {
             return List.of();
         }
@@ -138,8 +186,7 @@ public class KeywordIndex {
             return List.of();
         }
         int totalDocs = chunksById.size();
-        double avgLen = chunksById.values().stream()
-                .mapToInt(Chunk::length).average().orElse(1.0);
+        double avgLen = totalDocs == 0 ? 1.0 : (double) totalChunkLength / totalDocs;
 
         Map<String, Double> scores = new HashMap<>();
         for (String term : queryTerms) {

@@ -7,11 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link LoginAttemptLimiter} 单元测试：失败累计/锁定/窗口重置/成功清零/双维度。
+ * {@link InMemoryLoginAttemptLimiter} 单元测试：失败累计/锁定/窗口重置/成功清零/双维度。
+ * (Redis 实现行为等价, 键/TTL 语义由 RedisLoginAttemptLimiter 承担, 集成环境验证。)
  */
 class LoginAttemptLimiterTest {
 
-    private final LoginAttemptLimiter limiter = new LoginAttemptLimiter();
+    private final InMemoryLoginAttemptLimiter limiter = new InMemoryLoginAttemptLimiter();
 
     @Test
     void noLockBeforeThreshold() {

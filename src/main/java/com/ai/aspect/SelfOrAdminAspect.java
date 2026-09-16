@@ -1,4 +1,5 @@
 package com.ai.aspect;
+import com.ai.user.security.RequireAdmin;
 import com.ai.user.security.RequireSelfOrAdmin;
 import com.ai.user.security.UserContext;
 
@@ -67,5 +68,28 @@ public class SelfOrAdminAspect {
             throw new BusinessException(ErrorCode.AUTH_FAILED, "需要管理员权限");
         }
         return pjp.proceed(args);
+    }
+
+    /**
+     * 环绕增强：处理 {@link RequireAdmin} 注解——仅 ADMIN 角色放行,
+     * 普通用户(含未带角色的开发模拟身份)一律拒绝。
+     *
+     * @param pjp          连接点(被注解的方法)
+     * @param requireAdmin 注解
+     * @return 目标方法返回值(透传)
+     * @throws Throwable 目标方法异常(透传)
+     */
+    @Around("@annotation(requireAdmin)")
+    public Object enforceAdmin(ProceedingJoinPoint pjp, RequireAdmin requireAdmin)
+            throws Throwable {
+        UserContext.CurrentUser current = UserContext.get();
+        if (current == null) {
+            throw new BusinessException(ErrorCode.TOKEN_INVALID);
+        }
+        if (!current.isAdmin()) {
+            log.warn("非管理员访问管理员操作: user={}", current.username());
+            throw new BusinessException(ErrorCode.AUTH_FAILED, "该操作需要管理员权限");
+        }
+        return pjp.proceed();
     }
 }

@@ -17,6 +17,11 @@ public final class Timeouts {
     /** 虚拟线程池: 每任务一线程, 轻量且随中断终止 */
     private static final ExecutorService VIRTUAL = Executors.newVirtualThreadPerTaskExecutor();
 
+    /** 并发上限(B4): 防止端点故障时改写/摘要调用无限堆积; 超限立即失败由调用方降级 */
+    private static final java.util.concurrent.Semaphore CONCURRENCY = new java.util.concurrent.Semaphore(50);
+    private static final java.util.concurrent.atomic.AtomicLong IN_FLIGHT = new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong PEAK = new java.util.concurrent.atomic.AtomicLong();
+
     private Timeouts() {
     }
 
@@ -31,21 +36,41 @@ public final class Timeouts {
      * @throws IllegalStateException 超时/失败/被中断
      */
     public static <T> T call(Supplier<T> task, long timeoutMs) {
-        Future<T> future = VIRTUAL.submit(task::get);
+        boolean acquired;
         try {
-            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            throw new IllegalStateException("调用超时(" + timeoutMs + "ms)", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            throw cause instanceof RuntimeException re ? re : new IllegalStateException(cause);
+            acquired = CONCURRENCY.tryAcquire(200, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("调用被中断", e);
-        } finally {
-            if (!future.isDone()) {
-                future.cancel(true);
+        }
+        if (!acquired) {
+            throw new IllegalStateException("系统繁忙(LLM 调用并发已达上限), 请稍后重试");
+        }
+        long inFlight = IN_FLIGHT.incrementAndGet();
+        long peak = PEAK.updateAndGet(p -> Math.max(p, inFlight));
+        if (inFlight % 20 == 0) {
+            java.lang.System.err.println("[Timeouts] LLM 并发调用 inFlight=" + inFlight + ", peak=" + peak);
+        }
+        try {
+            Future<T> future = VIRTUAL.submit(task::get);
+            try {
+                return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                throw new IllegalStateException("调用超时(" + timeoutMs + "ms)", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                throw cause instanceof RuntimeException re ? re : new IllegalStateException(cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("调用被中断", e);
+            } finally {
+                if (!future.isDone()) {
+                    future.cancel(true);
+                }
             }
+        } finally {
+            IN_FLIGHT.decrementAndGet();
+            CONCURRENCY.release();
         }
     }
 }

@@ -1,37 +1,23 @@
 package com.ai.chat.service;
-import com.ai.chat.event.ChatDecisionEvent;
-import com.ai.chat.event.ChatCompletedEvent;
 
 import com.ai.agent.BusinessTools;
-import com.ai.common.BusinessException;
-import com.ai.common.ErrorCode;
-import com.ai.common.Strings;
-import com.ai.config.AppProperties;
-import com.ai.config.ChatClientProvider;
-import com.ai.context.AssembledPrompt;
-import com.ai.context.service.ContextAssembler;
-import com.ai.context.ContextComposition;
-import com.ai.context.ConversationMemory;
-import com.ai.context.service.QueryRewriter;
 import com.ai.chat.dto.ChatResponse;
 import com.ai.chat.dto.ChatStreamEvent;
 import com.ai.chat.dto.SourceVO;
-import com.ai.session.entity.ChatSession;
-import com.ai.session.entity.ChatSession.SessionType;
-import com.ai.system.entity.RagDecisionLog;
-import com.ai.rag.IntentRouter;
-import com.ai.rag.RagMode;
 import com.ai.rag.RagRetriever;
-import com.ai.rag.RetrievalOutcome;
+import com.ai.chat.service.ChatPreparationService.PreparedChat;
+import com.ai.common.BusinessException;
+import com.ai.common.ErrorCode;
+import com.ai.config.AppProperties;
+import com.ai.config.ChatClientProvider;
+import com.ai.session.entity.ChatSession;
 import com.ai.session.service.ChatSessionService;
+import com.ai.session.entity.ChatSession.SessionType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -42,15 +28,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 智能对话业务(需求第 3 章)。按会话类型与意图路由组织问答流程：
- * <ul>
- *   <li>RAG：意图路由 →(KB)混合检索注入 / (GENERAL)自由问答(不注册工具)</li>
- *   <li>AGENT：仅注册业务工具(不检索知识库)</li>
- *   <li>HYBRID：意图路由 + 工具两者兼备(默认)</li>
- * </ul>
- * 意图路由关键词表见 {@link IntentRouter}(app.rag.internal-keywords 可配置)。
- * 审计日志(决策/对话/上下文)经 {@link ChatDecisionEvent}/{@link ChatCompletedEvent}
- * 由 ChatAuditListener 异步落库, 不占用对话关键路径。
+ * 智能对话业务(需求第 3 章)——对话编排门面。
+ *
+ * <p>管线职责已拆分：前置(改写/缓存/路由检索/装配)在 {@link ChatPreparationService},
+ * 收尾(记忆/摘要/审计/缓存写入/来源口径)在 {@link ChatCompletionService},
+ * 本类只保留"输出方式"差异——同步调用与 SSE 流式编排, 以及请求链构建。
+ * 意图路由关键词表见 {@link com.ai.rag.IntentRouter}。
  * 降级：模型未配置抛 {@link ErrorCode#AI_NOT_CONFIGURED}, 调用失败抛 {@link ErrorCode#AI_CALL_FAILED};
  * 向量库不可用时以空上下文继续。
  */
@@ -60,34 +43,14 @@ import java.util.Map;
 public class ChatService {
 
     private final ChatSessionService sessionService;
-    private final RagRetriever ragRetriever;
+    private final ChatPreparationService preparation;
+    private final ChatCompletionService completion;
+    private final ChatConcurrencyGuard concurrencyGuard;
     private final ChatClientProvider chatClientProvider;
-    private final ObjectProvider<ChatModel> chatModelProvider;
+    private final RagRetriever ragRetriever;
     private final BusinessTools businessTools;
     private final AppProperties appProperties;
-    private final QueryRewriter queryRewriter;
-    private final ContextAssembler contextAssembler;
-    private final ConversationMemory memoryService;
-    private final IntentRouter intentRouter;
-    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
-
-    /**
-     * 一次问答的 RAG 上下文快照(供提示词组装与决策落库)。
-     *
-     * @param hits    最终命中文档(已重排取 Top-K)
-     * @param mode    意图路由结果 KB/GENERAL
-     * @param outcome 检索结果明细(执行与否/各路命中数)
-     */
-    private record RagContext(List<Document> hits, RagMode mode,
-                              RetrievalOutcome outcome) {
-
-        /** 未检索的空上下文(AGENT 会话 / 常识问题跳过检索时使用) */
-        static RagContext empty() {
-            return new RagContext(List.of(), RagMode.GENERAL,
-                    RetrievalOutcome.none());
-        }
-    }
 
     /**
      * 同步问答。
@@ -95,57 +58,43 @@ public class ChatService {
      * @param sessionId   会话 ID(需存在、进行中且归属当前用户)
      * @param userMessage 用户消息
      * @param userId      当前登录用户 ID(会话归属校验)
-     * @return 回答内容与引用来源
-     * @throws BusinessException 会话不存在(3001)/无权操作他人会话(5002)或模型未配置/调用失败(5003)
+     * @return 回答内容与引用来源(展示口径: 声明"未找到"时来源为空)
+     * @throws BusinessException 会话不存在(3001)/无权操作他人会话(5002)/并发超限(6010)或模型失败
      */
     public ChatResponse chat(String sessionId, String userMessage, Long userId) {
-        // 获取会话(校验归属当前用户, 防止越权)
         ChatSession session = sessionService.requireActive(sessionId, userId);
-        long start = System.currentTimeMillis();
-
-        // 多轮查询改写: 改写结果用于意图路由与检索, 原始问题用于对话与日志
-        QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
-                sessionId, session.getSessionType(), userMessage);
-        String retrievalQuery = rw.query() == null || rw.query().isBlank() ? userMessage : rw.query();
-
-        // 意图路由/检索决策(事件异步落库审计, 即使模型不可用也会记录)
-        RagContext rag = resolveRagContext(session, retrievalQuery);
-        publishDecision(session, userMessage, rag, System.currentTimeMillis() - start);
-
-        ChatClient client = requireChatClient();
-
-        // 统一 Token 预算装配(system + 历史 + RAG + user)
-        AssembledPrompt assembled = contextAssembler.assemble(
-                session, userMessage, rag.hits(), rag.mode(), rw.rewritten());
-        ChatClient.ChatClientRequestSpec spec = buildSpec(client, session, assembled);
-
-        String answer;
+        var guardHandle = concurrencyGuard.acquire(userId);
         try {
-            answer = spec.call().content();
-        } catch (Exception e) {
-            // 原始异常只进日志(含堆栈), 客户端仅得友好提示, 不泄漏内部端点/网络细节
-            log.error("模型调用失败: session={}", sessionId, e);
-            throw new BusinessException(ErrorCode.AI_CALL_FAILED);
+            long start = System.currentTimeMillis();
+            PreparedChat prep = preparation.prepare(session, userMessage);
+            if (prep.cachedAnswer() != null) {
+                completion.completeCached(session, userMessage, prep, start);
+                return new ChatResponse(prep.cachedAnswer().content(), prep.cachedAnswer().sources());
+            }
+            ChatClient.ChatClientRequestSpec spec =
+                    buildSpec(requireChatClient(), session, prep.assembled(), false);
+            org.springframework.ai.chat.model.ChatResponse chatResponse;
+            try {
+                chatResponse = spec.call().chatResponse();
+            } catch (Exception e) {
+                // 原始异常只进日志(含堆栈), 客户端仅得友好提示, 不泄漏内部端点/网络细节
+                log.error("模型调用失败: session={}", sessionId, e);
+                throw new BusinessException(ErrorCode.AI_CALL_FAILED);
+            }
+            String answer = extractText(chatResponse);
+            Integer usage = usageTotal(chatResponse);
+            List<String> displayed = completion.complete(session, userMessage, prep,
+                    answer, usage, start);
+            return new ChatResponse(answer, displayed);
+        } finally {
+            guardHandle.close();
         }
-        answer = answer == null ? "" : answer;
-
-        // 写回本轮记忆(同步完成, 保证下一轮立即可见)
-        memoryService.append(sessionId, userMessage, answer);
-        // 判定是否需要后台滚动摘要(异步, 不阻塞响应)
-        memoryService.summarizeIfNeededAsync(sessionId);
-
-        // 审计日志(对话/上下文)事件异步落库
-        long cost = System.currentTimeMillis() - start;
-        List<String> sourceNames = sourceNames(ragRetriever.toSources(rag.hits()));
-        publishCompleted(session, userMessage, answer, sourceNames, cost,
-                rw, rag.mode(), assembled.composition());
-        return new ChatResponse(answer, sourceNames);
     }
 
     /**
-     * 流式问答(SSE 完整事件流)。按阶段推送：
-     * STAGE(理解问题→检索完成→生成回答) → CONTENT(正文增量) → SOURCES(引用来源)；
-     * 结束标记 data:[DONE] 由 Controller 追加。前置阶段(改写+检索+装配)在 boundedElastic 上执行。
+     * 流式问答(SSE 类型化事件流)：CONTENT(正文增量) → SOURCES(引用来源文档名, 非空才发送)；
+     * 结束标记 data:[DONE] 由 Controller 追加。
+     * 前置阶段在 boundedElastic 上执行; 并发名额在流终止(完成/出错/取消)时释放。
      *
      * @param sessionId   会话 ID(需存在、进行中且归属当前用户)
      * @param userMessage 用户消息
@@ -154,68 +103,80 @@ public class ChatService {
      */
     public Flux<ChatStreamEvent> chatStream(String sessionId, String userMessage, Long userId) {
         ChatSession session = sessionService.requireActive(sessionId, userId);
+        var guardHandle = concurrencyGuard.acquire(userId);
         long start = System.currentTimeMillis();
 
-        Mono<PreparedChat> prepare = Mono.fromCallable(() -> prepareStage(session, userMessage, start))
+        // 前置阶段：准备会话、用户消息、工具、检索结果与提示
+        Mono<PreparedChat> prepare = Mono.fromCallable(() -> preparation.prepare(session, userMessage))
                 .subscribeOn(Schedulers.boundedElastic());
 
-        return prepare.flatMapMany(prep -> streamAnswer(session, userMessage, prep, start))
-                .onErrorResume(e -> {
-                    log.error("流式对话失败: session={}", sessionId, e);
-                    String msg = "【系统提示】回答生成中断，请稍后重试。";
-                    memoryService.append(sessionId, userMessage, msg);
-                    memoryService.summarizeIfNeededAsync(sessionId);
-                    publishCompleted(session, userMessage, msg, List.of(),
-                            System.currentTimeMillis() - start,
-                            new QueryRewriter.RewriteResult(userMessage, false), RagMode.GENERAL, null);
-                    return Flux.just(
-                            new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT, msg),
-                            sourcesEvent(List.of()));
-                });
+        Flux<ChatStreamEvent> flux;
+        try {
+            flux = prepare.flatMapMany(prep -> {
+                // 语义缓存命中: 以完整回答一次性下发(前端表现为秒回)
+                if (prep.cachedAnswer() != null) {
+                    completion.completeCached(session, userMessage, prep, start);
+                    List<ChatStreamEvent> events = new ArrayList<>();
+                    events.add(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT,
+                            prep.cachedAnswer().content()));
+                    if (!prep.cachedAnswer().sources().isEmpty()) {
+                        events.add(sourcesEvent(prep.cachedAnswer().sources()));
+                    }
+                    return Flux.fromIterable(events);
+                }
+                return streamAnswer(session, userMessage, prep, start);
+            }).onErrorResume(e -> {
+                log.error("流式对话失败: session={}", sessionId, e);
+                String msg = "【系统提示】回答生成中断，请稍后重试。";
+                completion.completeInterrupted(session, userMessage, msg, start);
+                return Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT, msg));
+            }).doFinally(signal -> guardHandle.close());
+        } catch (RuntimeException e) {
+            guardHandle.close(); // 同步构建阶段异常也要释放名额
+            throw e;
+        }
+        return flux;
     }
 
     /**
-     * 前置阶段(改写 + 意图路由/检索 + 装配), 在 boundedElastic 上执行。
-     *
-     * @param session     会话
-     * @param userMessage 用户消息
-     * @param start       请求开始时间(耗时统计)
-     * @return 前置阶段结果
-     */
-    private PreparedChat prepareStage(ChatSession session, String userMessage, long start) {
-        QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
-                session.getSessionId(), session.getSessionType(), userMessage);
-        String retrievalQuery = rw.query() == null || rw.query().isBlank() ? userMessage : rw.query();
-        long rewriteMs = System.currentTimeMillis() - start;
-
-        RagContext rag = resolveRagContext(session, retrievalQuery);
-        publishDecision(session, userMessage, rag, System.currentTimeMillis() - start - rewriteMs);
-        List<SourceVO> sources = ragRetriever.toSources(rag.hits());
-        AssembledPrompt assembled = contextAssembler.assemble(
-                session, userMessage, rag.hits(), rag.mode(), rw.rewritten());
-        log.info("对话前置阶段完成: session={}, 改写 {}ms, 路由+检索+装配 {}ms, 命中 {} 段",
-                session.getSessionId(), rewriteMs,
-                System.currentTimeMillis() - start - rewriteMs, rag.hits().size());
-        return new PreparedChat(rw, rag, sources, assembled);
-    }
-
-    /**
-     * 主回答流：正文增量作为 CONTENT 事件; 结束时写回记忆/触发摘要/发审计事件并追加 SOURCES。
+     * 主回答流：正文增量作为 CONTENT 事件, 流终止时经 completion 完成收尾。
      *
      * @param session     会话
      * @param userMessage 用户消息
      * @param prep        前置阶段结果
-     * @param start       请求开始时间
+     * @param start       请求开始时间戳
      * @return 正文事件流(含收尾)
      */
     private Flux<ChatStreamEvent> streamAnswer(ChatSession session, String userMessage,
             PreparedChat prep, long start) {
         ChatClient.ChatClientRequestSpec spec =
-                buildSpec(requireChatClient(), session, prep.assembled());
+                buildSpec(requireChatClient(), session, prep.assembled(), true);
         StringBuilder collected = new StringBuilder();
+        int[] usageHolder = {0};
+        long idleMs = appProperties.getChat().getStreamIdleTimeoutMs();
 
-        return spec.stream().content()
-                .flatMap(text -> {
+        Flux<org.springframework.ai.chat.model.ChatResponse> upstream = spec.stream().chatResponse();
+        if (idleMs > 0) {
+            // 静默超时保护: 相邻增量间隔超过 idleMs(或首增量迟迟不来)抛 TimeoutException。
+            // 早于上游 okhttp 60s read timeout 触发——qwen3 思考模式长推理会整段静默,
+            // 实测曾卡满 60s 被重置(CANCEL), 整轮回答只剩一条中断提示。
+            upstream = upstream.timeout(java.time.Duration.ofMillis(idleMs));
+        }
+        return upstream
+                .flatMap(resp -> {
+                    if (resp == null) {
+                        return Flux.empty();
+                    }
+                    // 必须在输出判空之前取 usage: 末尾的 usage-only 分块 choices 为空(result/output 为 null),
+                    // 先判空会把它丢掉——表现为流式轮次 chat_log.total_tokens 恒为 NULL。
+                    Integer usage = usageTotal(resp);
+                    if (usage != null) {
+                        usageHolder[0] = usage;
+                    }
+                    if (resp.getResult() == null || resp.getResult().getOutput() == null) {
+                        return Flux.empty();
+                    }
+                    String text = resp.getResult().getOutput().getText();
                     if (text == null || text.isEmpty()) {
                         return Flux.empty();
                     }
@@ -223,92 +184,45 @@ public class ChatService {
                     return Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT, text));
                 })
                 .concatWith(Flux.defer(() ->
-                        finishStream(session, userMessage, prep, collected, start)))
+                        finishStream(session, userMessage, prep, collected, start, usageHolder)))
                 .onErrorResume(e -> {
-                    log.error("流式对话中断: session={}", session.getSessionId(), e);
-                    collected.append("【系统提示】回答生成中断，请稍后重试。");
-                    return Flux.concat(
-                            Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT,
-                                    "【系统提示】回答生成中断，请稍后重试。")),
-                            finishStream(session, userMessage, prep, collected, start));
+                    boolean idle = e instanceof java.util.concurrent.TimeoutException;
+                    String tip = idle
+                            ? "【系统提示】模型长时间未生成内容(可能正在深度思考)，已终止本轮，请重试或简化问题。"
+                            : "【系统提示】回答生成中断，请稍后重试。";
+                    log.error("流式对话中断: session={}, 静默超时={}, 已生成 {} 字, 原因: {}",
+                            session.getSessionId(), idle, collected.length(), e.toString());
+                    // 中断走"失败收尾": 只写记忆与审计, 不写语义缓存——
+                    // 若走 complete() 会把"中断提示"当答案缓存, 下次同问直接命中这条提示
+                    completion.completeInterrupted(session, userMessage, tip, start);
+                    return Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT, tip));
                 });
     }
 
     /**
-     * 流式收尾：写回记忆/触发异步摘要/发布完成审计事件, 并追加 SOURCES 事件。
+     * 流式收尾：经 completion 统一收尾(记忆/摘要/审计/缓存), 并按需追加 SOURCES 事件。
      *
      * @param session     会话
      * @param userMessage 用户消息
      * @param prep        前置阶段结果
      * @param collected   已收集的回答全文
-     * @param start       请求开始时间
-     * @return SOURCES 事件
+     * @param start       请求开始时间戳
+     * @param usageHolder 模型 Token 用量
+     * @return SOURCES 事件(无展示来源时为空流)
      */
     private Flux<ChatStreamEvent> finishStream(ChatSession session, String userMessage,
-            PreparedChat prep, StringBuilder collected, long start) {
+            PreparedChat prep, StringBuilder collected, long start, int[] usageHolder) {
         long cost = System.currentTimeMillis() - start;
         String answer = collected.toString();
-        memoryService.append(session.getSessionId(), userMessage, answer);
-        memoryService.summarizeIfNeededAsync(session.getSessionId());
-        List<String> sourceNames = sourceNames(prep.sources());
-        publishCompleted(session, userMessage, answer, sourceNames, cost,
-                prep.rw(), prep.rag().mode(), prep.assembled().composition());
+        List<String> displayed = completion.complete(session, userMessage, prep, answer,
+                usageHolder[0] > 0 ? usageHolder[0] : null, start);
         log.info("流式对话完成: session={}, 总耗时 {}ms, 回答 {} 字, 来源 {}",
-                session.getSessionId(), cost, answer.length(), sourceNames);
-        return Flux.just(sourcesEvent(sourceNames));
-    }
-
-    /** 流式前置阶段(改写+检索+装配)的结果载体 */
-    private record PreparedChat(QueryRewriter.RewriteResult rw, RagContext rag,
-                                List<SourceVO> sources, AssembledPrompt assembled) {
-
-        /** RETRIEVED 阶段提示文案(含命中数/跳过原因) */
-        String hitMessage() {
-            if (rag.mode() != RagMode.KB) {
-                return "无需检索知识库，直接回答";
-            }
-            return rag.hits().isEmpty()
-                    ? "知识库中未检索到相关资料"
-                    : "已检索到 " + rag.hits().size() + " 段相关资料";
+                session.getSessionId(), cost, answer.length(), displayed);
+        // 无来源(未命中/工具问答/模型声明未找到)时不发送 SOURCES 事件, 避免前端出现空 []
+        if (displayed.isEmpty()) {
+            return Flux.empty();
         }
-    }
-
-    /** 构造 STAGE 事件(data 为 {stage,message} JSON) */
-    private ChatStreamEvent stageEvent(String stage, String message) {
-        try {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.STAGE,
-                    objectMapper.writeValueAsString(Map.of("stage", stage, "message", message)));
-        } catch (Exception e) {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.STAGE,
-                    "{\"stage\":\"" + stage + "\"}");
-        }
-    }
-
-    /**
-     * 从命中文档提取来源文档名(去重并保持相关度顺序)——前端展示只需文档名。
-     *
-     * @param sources 命中来源列表
-     * @return 文档名列表
-     */
-    private List<String> sourceNames(List<SourceVO> sources) {
-        if (sources == null || sources.isEmpty()) {
-            return List.of();
-        }
-        return sources.stream()
-                .map(SourceVO::fileName)
-                .filter(n -> n != null && !n.isBlank())
-                .distinct()
-                .toList();
-    }
-
-    /** 构造 SOURCES 事件(data 为来源文档名 JSON 数组) */
-    private ChatStreamEvent sourcesEvent(List<String> sources) {
-        try {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES,
-                    objectMapper.writeValueAsString(sources));
-        } catch (Exception e) {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES, "[]");
-        }
+        return Flux.just(sourcesEvent(displayed));
     }
 
     /**
@@ -328,50 +242,35 @@ public class ChatService {
     }
 
     /**
-     * 意图路由 + RAG 检索：
-     * AGENT 会话不检索；RAG/HYBRID 会话在 autoRoute=true 时先按问题内容路由——
-     * 常识/闲聊(mode=GENERAL)跳过检索, 知识库类问题(mode=KB)才执行混合检索。
-     *
-     * @param session     会话
-     * @param userMessage 用户消息
-     * @return RAG 上下文快照
-     */
-    private RagContext resolveRagContext(ChatSession session, String userMessage) {
-        boolean ragSession = session.getSessionType() == SessionType.RAG
-                || session.getSessionType() == SessionType.HYBRID;
-        if (!ragSession) {
-            return RagContext.empty();
-        }
-        if (appProperties.getRag().isAutoRoute()
-                && intentRouter.route(userMessage) == RagMode.GENERAL) {
-            log.debug("RAG 意图路由：通用/常识问题, 跳过检索 sessionId={}", session.getSessionId());
-            return RagContext.empty();
-        }
-        log.debug("RAG 意图路由：知识库类问题, 执行检索 sessionId={}", session.getSessionId());
-        RetrievalOutcome outcome = ragRetriever.retrieveOutcome(
-                userMessage, appProperties.getRag().getTopK(),
-                appProperties.getRag().getSimilarityThreshold());
-        return new RagContext(outcome.hits(), RagMode.KB, outcome);
-    }
-
-    /**
      * 构建请求链(system + 历史消息 + user + 工具), 可执行 .call() 或 .stream()。
      *
      * @param client    ChatClient
      * @param session   会话
      * @param assembled 上下文装配结果
+     * @param streaming 是否流式调用(仅流式请求携带 stream_options, 避免同步请求被端点拒绝)
      * @return 可执行的请求规格
      */
     private ChatClient.ChatClientRequestSpec buildSpec(ChatClient client,
-            ChatSession session, AssembledPrompt assembled) {
+            ChatSession session, com.ai.context.AssembledPrompt assembled, boolean streaming) {
         ChatClient.ChatClientRequestSpec spec = client.prompt()
                 .system(assembled.system())
                 .messages(assembled.messages())
                 .user(assembled.queryForModel());
-        if (appProperties.getChat().isDisableThinking()) {
-            // 主对话关闭 qwen3 思维链(配置默认关闭保质量; 提速时可打开)
-            spec.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
-                    .extraBody(Map.of("enable_thinking", false)));
+        boolean noThinking = appProperties.getChat().isDisableThinking();
+        boolean includeUsage = streaming && appProperties.getChat().isStreamIncludeUsage();
+        if (noThinking || includeUsage) {
+            org.springframework.ai.openai.OpenAiChatOptions.Builder options =
+                    org.springframework.ai.openai.OpenAiChatOptions.builder();
+            if (noThinking) {
+                // 主对话关闭 qwen3 思维链(配置默认关闭保质量; 提速时可打开)
+                options.extraBody(Map.of("enable_thinking", false));
+            }
+            if (includeUsage) {
+                // OpenAI 兼容端点的流式响应默认不返回 usage, 需显式索取,
+                // 否则 chat_log.total_tokens 恒为空(成本审计对前端流量失效)
+                options.streamUsage(true);
+            }
+            spec.options(options);
         }
         if (needTools(session)) {
             // 透传会话与用户到工具上下文: ToolCallLogAspect 据此回填 tool_call_log 的 session_id/user_id
@@ -408,66 +307,47 @@ public class ChatService {
     }
 
     /**
-     * 发布“意图路由/检索决策”事件(异步写 rag_decision_log, 模型失败也留痕)。
+     * 提取模型回答文本(空安全)。
      *
-     * @param session     会话
-     * @param userMessage 用户消息(截断 500 保存)
-     * @param rag         RAG 上下文快照(含路由模式与各路命中数)
-     * @param costMs      决策与检索耗时
+     * @param chatResponse 模型响应(可空)
+     * @return 回答文本(可为空串)
      */
-    private void publishDecision(ChatSession session, String userMessage, RagContext rag, long costMs) {
-        var outcome = rag.outcome() == null
-                ? RetrievalOutcome.none() : rag.outcome();
-        RagDecisionLog entry = new RagDecisionLog();
-        entry.setSessionId(session.getSessionId());
-        entry.setUserId(session.getUserId());
-        entry.setUserMessage(Strings.truncate(userMessage, 500));
-        entry.setRagMode(rag.mode().name());
-        entry.setSessionType(session.getSessionType().name());
-        entry.setRetrievalExecuted(rag.mode() == RagMode.KB && outcome.executed());
-        entry.setSemanticHits(outcome.semanticCount());
-        entry.setKeywordHits(outcome.keywordCount());
-        entry.setFinalHits(rag.hits().size());
-        entry.setTopK(appProperties.getRag().getTopK());
-        entry.setSimilarityThreshold(appProperties.getRag().getSimilarityThreshold());
-        entry.setRerankMode(appProperties.getRag().getRerankMode());
-        entry.setDurationMs((int) costMs);
-        eventPublisher.publishEvent(new ChatDecisionEvent(entry));
-    }
-
-    /**
-     * 发布“问答完成”事件(异步写 chat_log 与 context_log)。
-     *
-     * @param session     会话
-     * @param userMessage 原始用户消息
-     * @param answer      回答文本
-     * @param sources     引用来源
-     * @param durationMs  总耗时
-     * @param rw          查询改写结果
-     * @param mode        意图路由结果
-     * @param composition 上下文组成快照(null=不写 context_log)
-     */
-    private void publishCompleted(ChatSession session, String userMessage, String answer,
-            List<String> sources, long durationMs, QueryRewriter.RewriteResult rw,
-            RagMode mode, ContextComposition composition) {
-        eventPublisher.publishEvent(new ChatCompletedEvent(session, userMessage, answer,
-                sources, resolveModelLabel(), durationMs, rw, mode, composition));
-    }
-
-    /**
-     * 解析对话日志用的模型名：优先取 ChatModel 默认选项中的实际模型,
-     * 不可得时回退 app.chat.model-label 配置, 避免 chat_log.model_name 与实际模型漂移。
-     *
-     * @return 模型名标签
-     */
-    private String resolveModelLabel() {
-        ChatModel chatModel = chatModelProvider.getIfAvailable();
-        if (chatModel != null && chatModel.getDefaultOptions() != null
-                && chatModel.getDefaultOptions().getModel() != null
-                && !chatModel.getDefaultOptions().getModel().isBlank()) {
-            return chatModel.getDefaultOptions().getModel();
+    private String extractText(org.springframework.ai.chat.model.ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null
+                || chatResponse.getResult().getOutput() == null) {
+            return "";
         }
-        return appProperties.getChat().getModelLabel();
+        String text = chatResponse.getResult().getOutput().getText();
+        return text == null ? "" : text;
     }
 
+    /**
+     * 从模型响应提取 Token 用量(usage.totalTokens)。
+     *
+     * @param chatResponse 模型响应(可空)
+     * @return 总 Token 数; 不可得时 null
+     */
+    private Integer usageTotal(org.springframework.ai.chat.model.ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getMetadata() == null
+                || chatResponse.getMetadata().getUsage() == null) {
+            return null;
+        }
+        Integer total = chatResponse.getMetadata().getUsage().getTotalTokens();
+        return total != null && total > 0 ? total : null;
+    }
+
+    /**
+     * 构造 SOURCES 事件(data 为来源文档名 JSON 数组)。
+     *
+     * @param sources 来源文档名列表
+     * @return SOURCES 事件
+     */
+    private ChatStreamEvent sourcesEvent(List<String> sources) {
+        try {
+            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES,
+                    objectMapper.writeValueAsString(sources));
+        } catch (Exception e) {
+            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES, "[]");
+        }
+    }
 }

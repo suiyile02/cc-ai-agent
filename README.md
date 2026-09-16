@@ -86,11 +86,11 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | 方法/路径 | 说明 |
 |---|---|
 | `POST /api/ai/chat` | 同步问答，返回 `{content, sources}` |
-| `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:stage`(阶段提示) → `event:content`(正文增量) → `event:sources`(引用来源) → `data:[DONE]` |
+| `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:content`(正文增量) → `event:sources`(引用来源**文档名**, 去重保序且不含扩展名, 无来源时不发) → `data:[DONE]`；不推送阶段提示/思考流 |
 | `POST /api/ai/rag/search` | RAG 检索调试（topK/阈值即时调参看命中） |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + KB 路由"参与，键=知识库版本号+问题 SHA-256；正缓存命中则跳过检索与装配直接返回；负缓存命中则直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
 
 ### 3.3 Agent 工具（需求第 4 章）
 - `BusinessTools`：`queryEmployee(姓名)`、`queryOrder(订单号)`、`getCurrentTime()`（`@Tool`/`@ToolParam` 描述触发条件与参数）
@@ -105,7 +105,7 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `DELETE /api/sessions/{id}` | 删除 = 软删 + 清理对话记忆 |
 
 ### 3.5 系统管理（需求第 6 章）
-> **授权**：四个日志查询接口均带 `@RequireSelfOrAdmin`——管理员可按任意 `userId`/`sessionId` 过滤全量；普通用户强制只查本人（不传 `userId` 即本人全量，传他人 `userId` 被改写为本人）。
+> **授权**：四个日志查询接口均带 `@RequireSelfOrAdmin`——管理员可按任意 `userId`/`sessionId` 过滤全量；普通用户强制只查本人（不传 `userId` 即本人全量，传他人 `userId` 被改写为本人）。语义缓存清空为管理动作，带 `@RequireAdmin`。
 
 | 方法/路径 | 说明 |
 |---|---|
@@ -113,6 +113,8 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `GET /api/system/tool-call-logs` | 工具调用日志分页（sessionId/userId/toolName/status/时间过滤） |
 | `GET /api/system/tool-call-logs` | 工具调用日志分页（toolName/status/时间过滤） |
 | `GET /api/system/rag-decisions` | RAG 意图路由决策日志分页（sessionId/userId/ragMode/时间过滤：KB/GENERAL、是否检索、多路命中数、Top-K/阈值/重排模式、耗时） |
+| `GET /api/system/context-logs` | 上下文装配日志分页（各段 token 占用/是否截断/改写结果/耗时） |
+| `DELETE /api/system/semantic-cache` | 清空语义缓存（管理员），返回失效后的知识库版本号；文档变更已自动失效，此接口用于“回答质量异常 / 切换对话模型”的人工强制失效 |
 
 ### 3.6 异常与降级（需求第 8 章）
 - `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
@@ -168,11 +170,11 @@ com.ai
 ├── aspect      【全局切面层】SelfOrAdminAspect(授权) · ToolCallLogAspect(工具日志)
 ├── config      【全局配置层】AppProperties · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
 ├── prompt      【提示词装配】PromptService(classpath:/prompts/*.st)
-├── rag         【RAG 能力模块】根=契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome) · service/=混合检索与关键词索引实现
+├── rag         【RAG 能力模块】根=契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome/SemanticCacheAdmin) · service/=混合检索与关键词索引实现
 ├── context     【上下文管线模块】根=契约(ConversationMemory/HistoryContext/AssembledPrompt/ContextComposition)
 │   ├── entity|mapper  ConversationSummary
 │   └── service        ContextAssembler · ConversationMemoryService · ConversationSummarizer · QueryRewriter
-├── chat        【对话模块】controller/ChatController · service/ChatService · event/审计事件 · dto
+├── chat        【对话模块】controller/ChatController · service/ChatService(门面)+ChatPreparationService(前置)+ChatCompletionService(收尾)+ChatSourceDisplay(来源口径)+ChatConcurrencyGuard(并发) · event/审计事件 · dto
 ├── knowledge   【知识库模块】controller/service(上传入库/文档管理/文件存储)/entity/mapper/dto
 ├── user        【用户鉴权模块】controller/service/entity(SysUser)/mapper/dto
 │   └── security       JwtTokenProvider · UserContext · AuthInterceptor · PasswordHasher · RequireSelfOrAdmin
@@ -187,19 +189,22 @@ docs/sample/员工手册示例.md   演示知识文档
 docker-compose.yml          Qdrant+MySQL
 ```
 
-> 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory`），调用方依赖接口而非实现。
+> 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory` / `SemanticCacheAdmin`），调用方依赖接口而非实现。
+
+> 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（改写→语义缓存查询→路由检索→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源口径）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
 
 ## 6. 已知简化与后续路线（非阻塞项）
 
 - **前端**：本期仅后端 REST/SSE；对接 Vue3+Element Plus 页面为下一迭代。
 - **存量数据库升级**：本版本新增 `sys_user.role` 与 `tool_call_log`/`rag_decision_log`/`context_log` 的 `user_id` 列。已有库需手动执行一次 `db/upgrade/2026-09-authorization.sql`（MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，无法随启动脚本幂等执行）；新库由建表脚本直接生效。
-- **chat_log.total_tokens**：本期未采集（字段保留）。
+- **表/列注释补齐**：脚本已为 11 张表补齐表注释、66 个缺注释列补齐列注释。已有库执行一次 `db/upgrade/2026-09-column-comments.sql`（该脚本由 existing 库的真实结构生成，仅追加 `COMMENT`，不改类型/可空/默认值；重复执行无害）。**已知历史差异（脚本刻意未动）**：`employee`/`orders`/`sys_user`/`rag_decision_log` 的 `created_at`/`updated_at` 仍是早期 Hibernate 建表遗留的 `datetime(6) NULL`（无默认值），而建表脚本声明为 `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`；如需对齐需另行评估（涉及 NOT NULL 变更，须先确认存量无 NULL 值）。
+- **chat_log.total_tokens**：已采集（从模型响应 `getMetadata().getUsage()` 取总量，配合 `TokenCounter` 的上下文预算审计 `context_log`）；模型不返回 usage 时该列为空。
 - **删除文档**：物理删除记录 + 按 `doc_id` 过滤检索出向量点后精确清理（向量库不可用时记录日志并继续），文件删除尽力而为。
 - **表范围**：核心 5 张表见 `db/create_table.sql`；扩展表 `employee` / `orders` / `sys_user` / `rag_decision_log` / `conversation_summary` / `context_log` 见 `db/schema-mysql-extra.sql`，由启动期 `spring.sql.init` 幂等执行建表（仅 MySQL）。
-- **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；重启进程需重新入库重建，如需长期稳定建议后续接入 MySQL FULLTEXT / Elasticsearch。
+- **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：需求第 10 章的功能用例可在本 README 第 4 节手工回归；自动化用例（Mockito/Testcontainers）作为后续迭代。
+- **测试用例**：单元测试 122 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 

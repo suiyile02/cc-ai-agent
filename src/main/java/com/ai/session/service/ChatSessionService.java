@@ -32,6 +32,7 @@ import java.util.UUID;
 public class ChatSessionService {
 
     private final ChatSessionMapper sessionMapper;
+    private final SessionCacheService sessionCache;
     private final ChatMemory chatMemory;
     private final ConversationMemory conversationMemoryService;
 
@@ -117,6 +118,7 @@ public class ChatSessionService {
         ChatSession session = requireOwned(id, userId);
         session.setStatus(0);
         sessionMapper.updateById(session);
+        sessionCache.evict(session.getSessionId());
     }
 
     /**
@@ -130,6 +132,7 @@ public class ChatSessionService {
         ChatSession session = requireOwned(id, userId);
         session.setStatus(0);
         sessionMapper.updateById(session);
+        sessionCache.evict(session.getSessionId());
         try {
             chatMemory.clear(session.getSessionId());
             conversationMemoryService.clearSummary(session.getSessionId());
@@ -149,8 +152,22 @@ public class ChatSessionService {
      */
     @Transactional(readOnly = true)
     public ChatSession requireActive(String sessionId, Long userId) {
-        ChatSession session = sessionMapper.selectOne(
-                new LambdaQueryWrapper<ChatSession>().eq(ChatSession::getSessionId, sessionId));
+        // 先查 Redis 缓存(Redis 异常自动回退 DB), 命中则省一次 MySQL 查询
+        ChatSession session = sessionCache.get(sessionId);
+        if (session == null && sessionCache.isNotFound(sessionId)) {
+            // 负缓存命中(穿透防护): 已确认不存在的会话直接拒绝, 不再打 MySQL
+            throw new BusinessException(ErrorCode.SESSION_NOT_FOUND);
+        }
+        if (session == null) {
+            session = sessionMapper.selectOne(
+                    new LambdaQueryWrapper<ChatSession>().eq(ChatSession::getSessionId, sessionId));
+            if (session == null) {
+                // 真不存在: 写短 TTL 负缓存, 防同一 sessionId 反复穿透
+                sessionCache.putNotFound(sessionId);
+                throw new BusinessException(ErrorCode.SESSION_NOT_FOUND);
+            }
+            sessionCache.put(session);
+        }
         if (session == null) {
             throw new BusinessException(ErrorCode.SESSION_NOT_FOUND);
         }

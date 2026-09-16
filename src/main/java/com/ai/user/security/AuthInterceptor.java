@@ -37,6 +37,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             "/api/auth/register", "/api/auth/login");
 
     private final JwtTokenProvider tokenProvider;
+    private final TokenBlacklistService tokenBlacklistService;
     private final AppProperties appProperties;
     private final ObjectMapper objectMapper;
 
@@ -64,6 +65,12 @@ public class AuthInterceptor implements HandlerInterceptor {
             try {
                 JwtTokenProvider.TokenPayload payload =
                         tokenProvider.parse(authorization.substring(7).trim());
+                // A1 Token 吊销: 已注销/禁用令牌的黑名单命中即拒绝
+                if (tokenBlacklistService.isBanned(payload.jti())) {
+                    writeUnauthorized(response);
+                    return false;
+                }
+                request.setAttribute("tokenPayload", payload); // 供 /logout 拉黑使用
                 UserContext.set(new UserContext.CurrentUser(payload.userId(),
                         payload.username(), payload.role()));
                 return true;

@@ -2,6 +2,8 @@ package com.ai.knowledge.service;
 
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.common.Strings;
+import com.ai.common.Timeouts;
+import com.ai.config.AppProperties;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +38,7 @@ public class DocumentIngestionService {
     private final KnowledgeDocumentMapper documentMapper;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final KeywordIndex keywordIndex;
+    private final AppProperties appProperties;
 
     /**
      * 异步执行文档入库(ingestionExecutor 线程池, 不阻塞上传请求)。
@@ -54,7 +57,9 @@ public class DocumentIngestionService {
             doc.setErrorMessage(null);
             documentMapper.updateById(doc);
 
-            List<Document> chunks = parseAndSplit(doc);
+            // 解析限时(A2): 恶意/超复杂文档不再无限占用入库线程
+            List<Document> chunks = com.ai.common.Timeouts.call(
+                    () -> parseAndSplit(doc), appProperties.getIngestion().getParseTimeoutMs());
             addMetadata(doc, chunks);
 
             VectorStore vectorStore = vectorStoreProvider.getIfAvailable();

@@ -47,6 +47,8 @@ public class JwtTokenProvider {
         Date now = new Date();
         return Jwts.builder()
                 .subject(username)
+                // jti: 令牌唯一 ID, 注销/禁用时据此拉黑(A1 Token 吊销)
+                .id(java.util.UUID.randomUUID().toString())
                 .claim("uid", userId)
                 .claim("role", role)
                 .issuedAt(now)
@@ -75,8 +77,11 @@ public class JwtTokenProvider {
             }
             // 兼容无 role claim 的旧令牌, 一律按普通用户处理
             Object role = claims.get("role");
+            Date expiration = claims.getExpiration();
             return new TokenPayload(n.longValue(), claims.getSubject(),
-                    role instanceof String r ? r : UserContext.ROLE_USER);
+                    role instanceof String r ? r : UserContext.ROLE_USER,
+                    claims.getId(),
+                    expiration == null ? 0 : expiration.getTime());
         } catch (JwtException | IllegalArgumentException e) {
             throw new BusinessException(ErrorCode.TOKEN_INVALID, "凭证无效或已过期，请重新登录");
         }
@@ -88,7 +93,10 @@ public class JwtTokenProvider {
      * @param userId   用户 ID
      * @param username 用户名
      * @param role     角色(ADMIN/USER)
+     * @param jti      令牌唯一 ID(吊销黑名单键; 旧令牌可能为 null)
+     * @param expiresAt 过期时间戳(epoch 毫秒; 0=未知)
      */
-    public record TokenPayload(Long userId, String username, String role) {
+    public record TokenPayload(Long userId, String username, String role,
+                               String jti, long expiresAt) {
     }
 }

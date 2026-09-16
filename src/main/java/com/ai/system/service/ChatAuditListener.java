@@ -37,7 +37,7 @@ public class ChatAuditListener {
      *
      * @param event 决策事件
      */
-    @Async
+    @Async("auditExecutor")
     @EventListener
     public void onDecision(ChatDecisionEvent event) {
         try {
@@ -52,7 +52,7 @@ public class ChatAuditListener {
      *
      * @param event 问答完成事件
      */
-    @Async
+    @Async("auditExecutor")
     @EventListener
     public void onChatCompleted(ChatCompletedEvent event) {
         recordChatLog(event);
@@ -68,7 +68,8 @@ public class ChatAuditListener {
         try {
             String sourcesJson = objectMapper.writeValueAsString(event.sources());
             chatLogService.record(event.session(), event.userMessage(), event.answer(),
-                    sourcesJson, null, event.modelLabel(), (int) event.durationMs());
+                    sourcesJson, null, event.modelLabel(), (int) event.durationMs(),
+                    event.totalTokens());
         } catch (Exception e) {
             log.warn("写入对话日志失败(忽略): {}", e.getMessage());
         }

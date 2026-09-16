@@ -25,6 +25,7 @@ public class AuthService {
     private final SysUserMapper userMapper;
     private final JwtTokenProvider tokenProvider;
     private final com.ai.user.security.LoginAttemptLimiter loginAttemptLimiter;
+    private final com.ai.user.security.TokenBlacklistService tokenBlacklistService;
 
     /**
      * 注册新用户并返回自动登录态。
@@ -74,6 +75,17 @@ public class AuthService {
             throw new BusinessException(ErrorCode.USER_DISABLED);
         }
         return buildAuthVO(user);
+    }
+
+    /**
+     * 退出登录：吊销当前令牌(A1 Token 吊销)。
+     *
+     * @param payload   令牌负载(jti/过期时间)
+     * @param remaining 令牌剩余有效期毫秒
+     */
+    @Transactional(readOnly = true)
+    public void logout(com.ai.user.security.JwtTokenProvider.TokenPayload payload, long remaining) {
+        tokenBlacklistService.ban(payload.jti(), remaining);
     }
 
     /**

@@ -64,6 +64,22 @@ public class AuthController {
     }
 
     /**
+     * 退出登录：拉黑当前令牌(jti 写入 Redis 黑名单, TTL=令牌剩余有效期)。
+     *
+     * @param request HTTP 请求(拦截器已解析并挂载 tokenPayload)
+     * @return 统一响应
+     */
+    @PostMapping("/logout")
+    public Result<Void> logout(jakarta.servlet.http.HttpServletRequest request) {
+        if (request.getAttribute("tokenPayload")
+                instanceof com.ai.user.security.JwtTokenProvider.TokenPayload payload) {
+            long remaining = payload.expiresAt() - System.currentTimeMillis();
+            authService.logout(payload, remaining);
+        }
+        return Result.ok("已退出登录");
+    }
+
+    /**
      * 当前用户信息(需携带 Authorization: Bearer token)。
      *
      * @return 统一响应, data 为当前用户

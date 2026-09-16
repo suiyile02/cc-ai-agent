@@ -17,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -26,13 +28,15 @@ import static org.mockito.Mockito.when;
 class ChatSessionServiceTest {
 
     private ChatSessionMapper sessionMapper;
+    private SessionCacheService sessionCache;
     private ChatSessionService service;
 
     @BeforeEach
     void setUp() {
         sessionMapper = mock(ChatSessionMapper.class);
-        service = new ChatSessionService(sessionMapper, mock(ChatMemory.class),
-                mock(ConversationMemoryService.class));
+        sessionCache = mock(SessionCacheService.class);
+        service = new ChatSessionService(sessionMapper, sessionCache,
+                mock(ChatMemory.class), mock(ConversationMemoryService.class));
     }
 
     /** 构造一条归属 owner、状态为 status 的会话记录 */
@@ -71,6 +75,29 @@ class ChatSessionServiceTest {
         BusinessException e = assertThrows(BusinessException.class,
                 () -> service.requireActive("sid-1", 9L));
         assertEquals(ErrorCode.SESSION_NOT_FOUND, e.getErrorCode());
+    }
+
+    @Test
+    void negativeCachedSessionRejectedWithoutDbHit() {
+        when(sessionCache.get("sid-1")).thenReturn(null);
+        when(sessionCache.isNotFound("sid-1")).thenReturn(true);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.requireActive("sid-1", 9L));
+        assertEquals(ErrorCode.SESSION_NOT_FOUND, e.getErrorCode());
+        verify(sessionMapper, never()).selectOne(any());
+    }
+
+    @Test
+    void missingSessionWritesNegativeCache() {
+        when(sessionCache.get("sid-1")).thenReturn(null);
+        when(sessionCache.isNotFound("sid-1")).thenReturn(false);
+        when(sessionMapper.selectOne(any())).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.requireActive("sid-1", 9L));
+        assertEquals(ErrorCode.SESSION_NOT_FOUND, e.getErrorCode());
+        verify(sessionCache).putNotFound("sid-1");
     }
 
     @Test

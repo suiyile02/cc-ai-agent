@@ -24,6 +24,13 @@ spring:
       minimum-idle: 10
       connection-timeout: 5000
       max-lifetime: 1800000
+  # ============ Redis(登录限流计数/会话元数据缓存; 本地默认无密码) ============
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000
   sql:
     init:
       mode: always
@@ -38,6 +45,9 @@ spring:
       api-key: ${DASHSCOPE_API_KEY:}
       # 端点必须通过环境变量注入(默认为阿里云百炼官方兼容端点); 个人专属 MaaS 端点请勿写入仓库
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      # 客户端总超时(okhttp): 默认 60s, 流式下长思考(思维链)会整段静默撞上它被 CANCEL。
+      # 应用层 stream-idle-timeout-ms(20s)会先触发止损, 此值仅作二次保险(同步调用/保护被关闭时)
+      timeout: 120s
       chat:
         model: ${AI_CHAT_MODEL:qwen3.7-flash}
         temperature: 0.3
@@ -61,26 +71,31 @@ spring:
         # 空串时本地无鉴权 Qdrant 会忽略该请求头; 接 Qdrant Cloud/带鉴权实例时设置 QDRANT_API_KEY 即可
         api-key: ${QDRANT_API_KEY:}
         use-tls: false
-        collection-name: rag_knowledge_base
+        # 引用 app.rag.collection-name(单一事实来源)——写集合与删/重建集合永远一致, 杜绝配置漂移
+        collection-name: ${app.rag.collection-name}
         content-field-name: content
         initialize-schema: true
 
 # ================= 业务自定义配置 =================
 app:
   rag:
-    collection-name: rag_knowledge_base   # Qdrant 集合名 / 知识库标识
+    collection-name: rag_knowledge_base   # 【单一事实来源】Qdrant 集合名(spring.ai 配置引用此值), 改这里即可
     top-k: 5                              # 检索 Top-K(需求默认 5)
     similarity-threshold: 0.45            # 相似度阈值(实测该 embedding 模型分数偏低, 0.6 会误杀正确 chunk, 如"加班调休"0.565)
     context-max-chars: 8000               # 注入上下文的最大字符数
     auto-route: true                      # 意图路由: 常识/闲聊自动跳过 RAG 检索直接作答; false=每次都检索
+    auto-rebuild-index: true              # 启动时自动重建关键词索引(从 Qdrant 读回分块, 不重新向量化)
     # internal-keywords: [...]            # 意图路由关键词表(缺省内置企业词表, 见 AppProperties, 可在此覆盖)
     hybrid-enabled: true                  # 混合检索: 语义向量 + 关键词(BM25) 多路召回; false=仅语义检索
     rerank-mode: score                    # 重排: score=分数融合 | llm=大模型重排(失败回退score) | none=仅RRF排序
+    retrieve-timeout-ms: 10000            # 检索整段预算(嵌入+向量库+关键词+重排); 超时按"已执行零命中"降级, 避免慢端点把对话拖到上百秒
   storage:
     path: ./data/files                    # 上传文件本地存储根目录
   chat:
     model-label: qwen3.7-flash   # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名(见 ChatService.resolveModelLabel)
-    disable-thinking: false      # 主对话注入 enable_thinking=false(提速但可能影响质量, 默认关闭)
+    disable-thinking: true       # 关闭主对话思维链: 修复 qwen3 长思考整段静默 >60s 撞 okhttp 超时被重置; 同时大幅提速
+    stream-include-usage: true   # 流式请求索取 usage(否则 chat_log.total_tokens 恒为空); 网关不认该字段时置 false
+    stream-idle-timeout-ms: 20000  # 流式静默超时: 模型 20s 无增量即主动终止降级(早于 okhttp 60s read timeout)
   auth:
     # JWT 密钥(生产必须通过 JWT_SECRET 注入, 长度≥32字节), 过期小时数
     jwt-secret: ${JWT_SECRET:ai-agent-dev-secret-change-me-in-prod-2026}
@@ -91,6 +106,25 @@ app:
   # ============ 演示数据播种(仅空表生效) ============
   demo:
     seed-enabled: true                        # 生产 profile 已关闭
+  # ============ 语义缓存(P3-3): 相同 KB 问题的回答缓存, 命中跳过检索+模型调用 ============
+  semantic-cache:
+    enabled: true
+    ttl-hours: 24            # 正缓存有效期 24h; 知识库文档变更会立即全部失效
+    miss-ttl-minutes: 30     # 负缓存(穿透防护): 检索零命中的问题 30 分钟内直接返回"未找到", 不再打检索+模型
+  # ============ 并发防护(B3): 单用户并发对话上限 ============
+  concurrency:
+    max-concurrent-per-user: 3    # 超并发返回 429/6010
+    acquire-timeout-ms: 1000
+  # ============ 文档解析防护(A2): 解析超时 + 解压炸弹预检 ============
+  ingestion:
+    parse-timeout-ms: 120000       # 单文档解析超时(超时置 status=3)
+    max-uncompressed-bytes: 536870912   # docx 解压后总大小上限(512MB)
+    max-zip-entries: 5000          # docx 内部条目数上限
+  # ============ 日志保留期定时清理(P2-4) ============
+  log-retention:
+    enabled: true
+    retention-days: 180
+    cron: "0 0 3 * * ?"                       # 每天凌晨 3 点
   # ============ 跨域(对接前端 Vue3) ============
   cors:
     allowed-origins:                          # 为空列表则不启用 CORS

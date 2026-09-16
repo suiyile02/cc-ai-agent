@@ -1,9 +1,10 @@
 package com.ai.aspect;
-import com.ai.user.security.RequireSelfOrAdmin;
-import com.ai.user.security.UserContext;
 
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
+import com.ai.user.security.RequireAdmin;
+import com.ai.user.security.RequireSelfOrAdmin;
+import com.ai.user.security.UserContext;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.AfterEach;
@@ -20,8 +21,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link SelfOrAdminAspect} 单元测试：
- * 管理员放行原参数; 非管理员 userId 参数被强制改写为本人; 参数名无法定位时 fail-closed。
+ * 授权切面单元测试：{@code RequireSelfOrAdmin}(管理员放行/非管理员强制改写/fail-closed)
+ * 与 {@code RequireAdmin}(仅管理员放行)。
  */
 class SelfOrAdminAspectTest {
 
@@ -105,12 +106,26 @@ class SelfOrAdminAspectTest {
     }
 
     @Test
-    void argsArrayIsNotMutatedForAdmin() throws Throwable {
+    void adminPassesRequireAdmin() throws Throwable {
         UserContext.set(new UserContext.CurrentUser(1L, "admin", UserContext.ROLE_ADMIN));
-        Object[] args = givenArgs(9L);
-        when(pjp.proceed(args)).thenReturn("ok");
+        when(pjp.proceed()).thenReturn("ok");
 
-        aspect.enforce(pjp, annotation);
-        assertArrayEquals(new Object[]{9L}, args);
+        assertEquals("ok", aspect.enforceAdmin(pjp, mock(RequireAdmin.class)));
+    }
+
+    @Test
+    void nonAdminRejectedByRequireAdmin() throws Throwable {
+        UserContext.set(new UserContext.CurrentUser(2L, "user", UserContext.ROLE_USER));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> aspect.enforceAdmin(pjp, mock(RequireAdmin.class)));
+        assertEquals(ErrorCode.AUTH_FAILED, e.getErrorCode());
+    }
+
+    @Test
+    void missingContextRejectedByRequireAdmin() {
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> aspect.enforceAdmin(pjp, mock(RequireAdmin.class)));
+        assertEquals(ErrorCode.TOKEN_INVALID, e.getErrorCode());
     }
 }
