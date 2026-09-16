@@ -1,0 +1,306 @@
+{
+ "schema_version": 1,
+ "diagram_type": "architecture",
+ "meta": {
+  "title": "ai-agent RAG 智能问答系统架构",
+  "locale": "zh-CN",
+  "quality_profile": "showcase",
+  "viewBox": [
+   1060,
+   560
+  ]
+ },
+ "components": [
+  {
+   "id": "web",
+   "type": "frontend",
+   "label": "ai-agent-web",
+   "sublabel": "Vue3 + Element Plus · SSE 流式",
+   "pos": [
+    40,
+    90
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "api",
+   "type": "backend",
+   "label": "后端入口",
+   "sublabel": "AuthInterceptor · JWT · 并发守卫",
+   "tag": "安全边界",
+   "pos": [
+    250,
+    90
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "chat",
+   "type": "backend",
+   "label": "对话模块",
+   "sublabel": "ChatService 门面 + 前置/收尾管线",
+   "pos": [
+    460,
+    90
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "llm",
+   "type": "external",
+   "label": "DashScope",
+   "sublabel": "qwen3.7-flash · text-embedding",
+   "pos": [
+    770,
+    90
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "kb",
+   "type": "backend",
+   "label": "知识库",
+   "sublabel": "上传 · 解析 · 分块 · 向量化入库",
+   "pos": [
+    40,
+    260
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "audit",
+   "type": "backend",
+   "label": "系统审计",
+   "sublabel": "4 类日志 + ChatAuditListener",
+   "pos": [
+    250,
+    260
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "rag",
+   "type": "backend",
+   "label": "RAG 能力",
+   "sublabel": "混合召回 · RRF · 重排 · 语义缓存",
+   "pos": [
+    460,
+    260
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "context",
+   "type": "backend",
+   "label": "上下文管线",
+   "sublabel": "查询改写 · 滚动摘要 · Token 预算",
+   "pos": [
+    670,
+    260
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "agent",
+   "type": "backend",
+   "label": "Agent 工具",
+   "sublabel": "BusinessTools @Tool",
+   "pos": [
+    860,
+    260
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "mysql",
+   "type": "database",
+   "label": "MySQL",
+   "sublabel": "业务 + 日志 + 会话记忆",
+   "pos": [
+    250,
+    420
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "qdrant",
+   "type": "database",
+   "label": "Qdrant",
+   "sublabel": "向量库 rag_knowledge_base",
+   "pos": [
+    460,
+    420
+   ],
+   "size": [
+    150,
+    62
+   ]
+  },
+  {
+   "id": "redis",
+   "type": "database",
+   "label": "Redis",
+   "sublabel": "限流 · 会话 · 黑名单 · 语义缓存",
+   "pos": [
+    670,
+    420
+   ],
+   "size": [
+    150,
+    62
+   ]
+  }
+ ],
+ "boundaries": [
+  {
+   "kind": "region",
+   "label": "ai-agent 后端（Spring Boot 4）",
+   "wraps": [
+    "api",
+    "chat",
+    "kb",
+    "audit",
+    "rag",
+    "context",
+    "agent"
+   ],
+   "pad": 16
+  }
+ ],
+ "connections": [
+  {
+   "from": "web",
+   "to": "api",
+   "label": "HTTPS · JSON / SSE 流式",
+   "variant": "emphasis",
+   "labelDy": 62
+  },
+  {
+   "from": "api",
+   "to": "chat",
+   "label": "对话编排"
+  },
+  {
+   "from": "chat",
+   "to": "llm",
+   "label": "主对话 · enable_thinking=false"
+  },
+  {
+   "from": "chat",
+   "to": "rag",
+   "label": "RagRetriever 契约",
+   "labelAt": [
+    362,
+    200
+   ]
+  },
+  {
+   "from": "chat",
+   "to": "context",
+   "label": "ConversationMemory / QueryRewriter",
+   "labelDy": -4
+  },
+  {
+   "from": "chat",
+   "to": "agent",
+   "label": "工具调用 · HYBRID/AGENT",
+   "variant": "dashed",
+   "fromSide": "bottom",
+   "toSide": "top",
+   "labelSegment": 2,
+   "labelDx": 8
+  },
+  {
+   "from": "chat",
+   "to": "audit",
+   "label": "事件订阅 · 异步落库",
+   "variant": "dashed"
+  },
+  {
+   "from": "rag",
+   "to": "qdrant",
+   "label": "相似度检索",
+   "labelSegment": 0,
+   "labelDx": -8,
+   "labelDy": 40
+  },
+  {
+   "from": "rag",
+   "to": "redis",
+   "label": "语义缓存 正/负 · 版本失效",
+   "variant": "dashed"
+  },
+  {
+   "from": "kb",
+   "to": "mysql",
+   "label": "文档记录 / 状态"
+  },
+  {
+   "from": "audit",
+   "to": "mysql",
+   "label": "chat/context/rag/tool 日志",
+   "labelSegment": 0,
+   "labelDx": -10,
+   "labelDy": 40
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "对话管线",
+   "items": [
+    "同步与流式共用一份前置(改写→缓存→路由检索→装配)与收尾(记忆→审计→缓存写入)",
+    "跨模块以契约暴露: RagRetriever / IntentRouter / ConversationMemory / SemanticCacheAdmin"
+   ]
+  },
+  {
+   "dot": "emerald",
+   "title": "缓存与降级",
+   "items": [
+    "语义正/负缓存带知识库版本号, 文档变更即整体失效",
+    "检索 10s 超时、流式 20s 静默超时均降级, 不阻塞对话",
+    "Redis 另承载登录限流、会话元数据缓存、JWT 令牌黑名单",
+    "文档入库异步: Tika 解析→分块→向量化写 Qdrant→关键词索引重建"
+   ]
+  },
+  {
+   "dot": "rose",
+   "title": "安全",
+   "items": [
+    "JWT + 令牌黑名单 + 登录双维度限流",
+    "@RequireSelfOrAdmin / @RequireAdmin 切面强制数据隔离",
+    "工具日志入参出参 PII 脱敏"
+   ]
+  }
+ ]
+}

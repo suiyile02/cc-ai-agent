@@ -186,8 +186,13 @@ resources/prompts        *.st 提示词模板
 resources/application.yaml   MySQL + Qdrant 默认配置(无 profile)
 db/create_table.sql          建表脚本(SPRING_AI_CHAT_MEMORY / knowledge_document / chat_session / tool_call_log / chat_log)
 docs/sample/员工手册示例.md   演示知识文档
+docs/arch/                   架构图与流程图(archify 生成: *.json 源 + *.html 交互式成品 + visual-check 验收截图)
 docker-compose.yml          Qdrant+MySQL
 ```
+
+> 系统架构与工作流程图见 [docs/arch/](docs/arch/)：`architecture.html`(系统架构) · `workflow.html`(问答主流程) ·
+> `workflow-wrapup.html`(生成分支与收尾)。HTML 自带明暗主题切换、平移缩放、搜索定位与关系追踪；
+> 三张图均已通过 archify showcase 校验(9/9 checks) 与桌面视口浏览器验收(1440×900 起无溢出、字号 ≥7.1px)。
 
 > 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory` / `SemanticCacheAdmin`），调用方依赖接口而非实现。
 
