@@ -7,19 +7,23 @@ import com.ai.system.service.ToolCallLogService;
 import com.ai.common.DateParamUtils;
 import com.ai.common.PageResult;
 import com.ai.common.Result;
+import com.ai.rag.SemanticCacheAdmin;
 import com.ai.system.dto.ChatLogVO;
 import com.ai.system.dto.ContextLogVO;
 import com.ai.system.dto.RagDecisionLogVO;
 import com.ai.system.dto.ToolCallLogVO;
+import com.ai.user.security.RequireAdmin;
 import com.ai.user.security.RequireSelfOrAdmin;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 系统管理接口(需求第 6 章)：对话日志 / 工具调用日志 / RAG 决策日志查询。
+ * 系统管理接口(需求第 6 章)：对话日志 / 工具调用日志 / RAG 决策日志查询,
+ * 以及语义缓存的运维清空(仅供管理员)。
  */
 @RestController
 @RequestMapping("/api/system")
@@ -30,6 +34,7 @@ public class SystemController {
     private final ToolCallLogService toolCallLogService;
     private final RagDecisionLogService ragDecisionLogService;
     private final ContextLogService contextLogService;
+    private final SemanticCacheAdmin semanticCacheAdmin;
 
     /**
      * 对话日志分页查询(6.1)。
@@ -134,5 +139,17 @@ public class SystemController {
         PageResult<ContextLogVO> page = contextLogService.list(pageNum, pageSize, sessionId,
                 userId, DateParamUtils.parseDate(startTime), DateParamUtils.parseDate(endTime));
         return Result.ok(page);
+    }
+
+    /**
+     * 清空语义缓存(管理员)。知识库文档变更已自动联动失效, 此接口用于"回答质量异常 /
+     * 切换对话模型"等需要人工强制失效的场景(缓存键含知识库版本号, 自增后旧键即不可命中)。
+     *
+     * @return 统一响应, data 为失效后的知识库版本号(-1 表示缓存未启用或 Redis 不可用)
+     */
+    @DeleteMapping("/semantic-cache")
+    @RequireAdmin
+    public Result<Long> clearSemanticCache() {
+        return Result.ok(semanticCacheAdmin.evictAll());
     }
 }

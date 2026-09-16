@@ -29,7 +29,8 @@ import java.util.Set;
  * 仅持久化纯文本消息, 保证多轮记忆跨调用稳定回放(工具内部消息不持久化)。
  */
 @Component
-public class DbChatMemoryRepository implements ChatMemoryRepository {
+public class DbChatMemoryRepository implements ChatMemoryRepository, ChatMemoryAppender,
+        ChatMemoryCounter {
 
     private final ChatMemoryRecordMapper recordMapper;
     private final ObjectMapper objectMapper;
@@ -119,6 +120,49 @@ public class DbChatMemoryRepository implements ChatMemoryRepository {
             record.setTimestamp(now.plusSeconds(seq++));
             recordMapper.insert(record);
         }
+    }
+
+    /**
+     * 追加新消息(append-only): 只 INSERT 新增行, 不删除/重写既有历史,
+     * 时间戳使用真实当前时间(替代 saveAll 的 now+seq 伪时间)。
+     *
+     * @param conversationId 会话 ID
+     * @param newMessages    新增消息
+     */
+    @Override
+    public void append(String conversationId, List<Message> newMessages) {
+        if (newMessages == null || newMessages.isEmpty()) {
+            return;
+        }
+        for (Message message : newMessages) {
+            MessageType type = message.getMessageType();
+            if (type != MessageType.USER && type != MessageType.ASSISTANT
+                    && type != MessageType.SYSTEM) {
+                continue;
+            }
+            String text = message.getText();
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            ChatMemoryRecord record = new ChatMemoryRecord();
+            record.setConversationId(conversationId);
+            record.setType(type.name());
+            record.setContent(toJson(text));
+            record.setTimestamp(LocalDateTime.now());
+            recordMapper.insert(record);
+        }
+    }
+
+    /**
+     * 统计某会话的历史消息条数(数据库 COUNT(*), 不加载消息内容)。
+     *
+     * @param conversationId 会话 ID
+     * @return 消息条数
+     */
+    @Override
+    public long countByConversationId(String conversationId) {
+        return recordMapper.selectCount(new LambdaQueryWrapper<ChatMemoryRecord>()
+                .eq(ChatMemoryRecord::getConversationId, conversationId));
     }
 
     /**

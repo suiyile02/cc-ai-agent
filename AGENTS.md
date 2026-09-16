@@ -78,6 +78,9 @@ com.ai
 - **Spring AI:** 优先直接使用 `ChatClient`，不创建多余包装层。
 - **MyBatis-Plus:** 优先 `BaseMapper` + `LambdaQueryWrapper`，不手写 XML；只在复杂 SQL 时自定义 @Select/XML。
 - **配置:** 保持 `application.yaml` 整洁，只保留用到的配置。
+- **单一事实来源(SSOT):** 同一件事禁止在两处独立配置——Qdrant 集合名以 `app.rag.collection-name`
+  为唯一事实来源, `spring.ai.vectorstore.qdrant.collection-name` 引用 `${app.rag.collection-name}`;
+  新增配置遇到"框架与业务代码各读一份"时, 同样让一方引用另一方。
 
 ### 3. 手术式修改 (Surgical Changes)
 
@@ -103,7 +106,11 @@ com.ai
     - **Mapper:** 各模块 `<module>.mapper` 下接口继承 `BaseMapper<Xxx>`，使用 LambdaQueryWrapper 动态条件。
     - **跨模块契约:** 被其它业务包消费的 Service 必须抽出接口、调用方依赖接口而非实现
       (现有契约: `RagRetriever`←实现 `RagRetrievalService`、`IntentRouter`←实现 `KeywordIntentRouter`、
-      `ConversationMemory`←实现 `ConversationMemoryService`)；仅模块内部使用的服务可直接用实现类，不做多余抽象。
+      `ConversationMemory`←实现 `ConversationMemoryService`、`SemanticCacheAdmin`←实现 `SemanticAnswerCache`)；仅模块内部使用的服务可直接用实现类，不做多余抽象。
+    - **对话管线分工:** `chat/service/ChatService` 只做门面(会话校验/并发名额/请求链构建/同步与 SSE 输出编排)；
+      前置阶段(改写→缓存查询→路由检索→装配)统一在 `ChatPreparationService`，收尾阶段(记忆→摘要→审计→
+      缓存写入→来源展示口径)统一在 `ChatCompletionService`，来源展示口径在 `ChatSourceDisplay`。
+      **同步与流式必须共用同一份前置/收尾实现, 禁止在任一条管线里复制业务步骤。**
 
 ### MyBatis-Plus 实体规范 (Entity Conventions)
 
@@ -117,12 +124,18 @@ com.ai
     - 实体禁止包含业务方法，仅作数据载体。
     - 实体禁止直接返回给前端，必须转 VO (record)。
 - **表结构管理:** 由 `db/create_table.sql`(核心5表) + `db/schema-mysql-extra.sql` 通过 `spring.sql.init` 维护(幂等 IF NOT EXISTS)。
+- **注释强制:** 每张表必须写表注释(`COMMENT='...'`), 每个列必须写列注释——注释是列语义的唯一现场说明(状态码取值、审计字段口径、脱敏约定等)。`IF NOT EXISTS` 不会给存量库补注释, 存量库用 `db/upgrade/` 下的一次性迁移脚本(最新: `2026-09-column-comments.sql`), 其列定义照抄存量库真实结构、只追加 COMMENT。
 
 ### 向量化与 RAG 数据规范
 
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: 意图路由(KB/GENERAL) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`) -> Top-K 注入。
+- **检索整段受 `app.rag.retrieve-timeout-ms`(默认 10s)保护**: 嵌入与向量库是外部网络调用,
+  端点挂起会把对话拖住(实测单轮检索卡过 100s)。超时/异常降级为 `RetrievalOutcome.executedEmpty()`
+  ——记为 **已执行、零命中**, 而不是 `none()`(未执行), 以保持下述审计不变式。
+- **审计不变式**: `rag_decision_log(rag_mode=KB, retrieval_executed=false)` **只可能是语义缓存命中**
+  (检索超时降级记为 true, 不会混入)。缓存命中路径不产生 `context_log`(未装配上下文)。
 - **相似度阈值勿随意上调**: `similarity-threshold` 默认 0.45——实测该 embedding 模型分数量级偏低
   (正确 chunk 可能只有 0.5~0.6), 阈值 0.6 会误杀正确答案(案例: "加班调休"0.565 被过滤导致答非所问)。
   调整前必须用 `/api/ai/rag/search` 以低阈值观察真实分数分布。
@@ -133,13 +146,39 @@ com.ai
 ### 对话流水线与 SSE 事件契约
 
 - 流式接口 `/api/ai/chat/stream` 输出**类型化事件**(ServerSentEvent.event 字段)：
-  `content`(正文增量)、`sources`(引用来源**文档名** JSON 数组, 去重保序)；结尾 `data:[DONE]`(无 event 头, 兼容契约)。
-  不推送任何阶段提示/思考流事件(已按需求移除)。
+  `content`(正文增量)、`sources`(引用来源**文档名** JSON 数组, 去重保序**且不含扩展名**,
+  仅在有命中且模型未声明"未找到"时发送——空来源不发事件, 避免前端出现空 []);
+  结尾 `data:[DONE]`(无 event 头, 兼容契约)。不推送任何阶段提示/思考流事件(已按需求移除)。
+  提示词(rag-context.st)禁止模型在回答内自行罗列参考来源——来源展示统一由 sources 事件承载。
 - 意图路由关键词表(缺省含年假/报销/放假/节假日/中秋等)决定是否检索; 语料外问题返回"未找到"属正确行为。
-- 前置阶段(改写/检索/装配)在 boundedElastic 执行, 各阶段耗时必须打 INFO 日志(改写 ms/前置 ms/总 ms)——
-  端点延迟标定的数据来源, 禁止删除。
-- qwen3 类模型思维链控制: `extraBody(enable_thinking)` 按调用注入——改写/摘要默认关闭
-  (机械任务, 实测 10~29s→亚秒~数秒), 主对话默认开启(`app.chat.disable-thinking=false`)可配置。
+- 前置阶段(改写/检索/装配)在 boundedElastic 执行, 各阶段耗时必须打 INFO 日志(改写 ms/缓存查询 ms/前置 ms/总 ms)——
+  端点延迟标定的数据来源, 禁止删除。**缓存命中分支同样要打耗时**(该分支不打"前置阶段完成",
+  曾因缺日志无法定位一次 16.8s 的缓存路径卡顿)。
+- **流式请求索取 usage**: `streamUsage(true)` 只在 stream 请求注入(`app.chat.stream-include-usage`,
+  默认开)——OpenAI 兼容端点流式默认不返回 usage, 不索取则 `chat_log.total_tokens` 恒为 NULL,
+  前端走的流式主流量在成本审计里会全空白; 同步请求不注入(部分端点拒绝 stream_options 与 stream=false 并存)。
+- qwen3 类模型思维链控制: `extraBody(enable_thinking)` 按调用注入——改写/摘要/主对话**全部默认关闭**
+  (`app.chat.disable-thinking=true`)。**主对话必须关闭思维链**的两条硬理由(2026-09 线上故障实证):
+  ① qwen3 思考模式长推理时可能**整段静默不出字 >60s**, 撞上 OpenAI 客户端 okhttp 60s read timeout
+  被重置(`InterruptedIOException + StreamResetException: CANCEL`), 整轮回答只剩一条中断提示;
+  ② 关闭后总耗时从 10~60s 降到 2~6s, 首字秒级。若确需展示思考过程置 false, 同时把
+  `stream-idle-timeout-ms` 调大或关闭以容忍长思考静默。
+- **流式静默超时保护**: `app.chat.stream-idle-timeout-ms`(默认 20s)——相邻增量间隔超过该值即主动
+  终止并降级提示, 早于 okhttp 60s read timeout 触发; `spring.ai.openai.timeout`(120s)仅作二次保险。
+- **流式中断不写语义缓存**: 中断/静默超时走 `ChatCompletionService.completeInterrupted`(只写记忆与
+  审计), 禁止走 `complete()`——后者会把"中断提示"当答案缓存, 下次同问直接命中一条 19 字提示。
+
+### 语义缓存与审计不变式
+
+- 缓存命中时**跳过检索与上下文装配**: 同步接口整段返回, 流式只发 **1 个** content 事件
+  (不是逐 token 增量)——前端/测试断言"流式增量≥2"必须在冷缓存下进行。
+- 审计约定(用于区分"缓存命中"与"检索了但没命中知识块"):
+  `rag_decision_log(rag_mode=KB, retrieval_executed=false)` **只可能是缓存命中**,
+  且该轮**不会**产生 `context_log`(未装配上下文); 未命中的 KB 轮次两者都有。
+- 缓存键 = 知识库版本号 + 归一化问题 SHA-256; 文档上传/删除/重处理自动版本自增失效。
+  切换对话模型不会自动失效(键未含模型标识)——手工清空见下。
+- 运维清空: `DELETE /api/system/semantic-cache`(`@RequireAdmin`)→ 返回失效后的版本号。
+  契约 `SemanticCacheAdmin`, 实现在 `SemanticAnswerCache`。
 
 ### 多轮查询改写
 
@@ -186,7 +225,13 @@ com.ai
   `ConversationMemory.summarizeIfNeededAsync(sessionId)`, 满足触发条件(条数超
   `app.context.summary.trigger-messages`, 或 Token 超 `trigger-tokens`, 0=关闭)时在后台
   合并既有摘要生成新摘要并裁剪原始历史; 请求路径(loadHistory)禁止任何 LLM 调用。
+- **@Async 一律显式指定执行器名**: 文档入库=`ingestionExecutor`(AsyncConfig), 审计落库/滚动摘要=
+  `auditExecutor`(AsyncConfig)。禁止裸 `@Async`——context 里有多个 TaskExecutor 时 Spring 会在
+  "无名为 taskExecutor 的 bean" 上报歧义(仅告警但行为悬而未决), 显式指定名字可消除。
 - 摘要未就绪时装配走"窗口历史 + Token 预算"兜底, 不丢上下文; 摘要失败保留现状, 下轮写回后再触发。
+- **计数用数据库 COUNT(*), 禁止加载全文再取 size:** 判断"历史是否够一轮改写"走
+  `ChatMemoryCounter.countByConversationId`(每轮都调一次, 旧实现 `findByConversationId().size()`
+  会把全部历史反序列化, 开销随历史长度线性增长)。
 - 同会话的 append/摘要/裁剪共用 per-session 锁与防重入标记, 防止并发覆盖丢消息。
 
 ### 用户与鉴权
@@ -194,6 +239,7 @@ com.ai
 - 注册/登录: `/api/auth/register`、`/api/auth/login`，密码 PBKDF2 加盐哈希(`PasswordHasher`)。
 - 角色: `sys_user.role`(ADMIN/USER, 默认 USER), 登录时写入 JWT `role` claim; `UserContext.CurrentUser.isAdmin()` 判定。
 - 授权: "管理员或本人"类查询用 `@RequireSelfOrAdmin(userIdParam = "...")` 注解 + `SelfOrAdminAspect` 切面统一强制改写 userId 参数, 数据隔离由 Service 层 userId 过滤完成; 越权/无角色返回 `AUTH_FAILED`(5002, HTTP 403)。
+- 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库文档删除/重处理(影响全公司共享 RAG 内容的操作必须管理员), 新增管理类操作时同样挂载。
 - 日志归属: 四张日志表均含 `user_id`(tool_call_log 经 Spring AI `toolContext` 透传回填), 查询接口一律按"管理员或本人"过滤。
 - JWT: `JwtTokenProvider` 签发 HS256；请求带 `Authorization: Bearer <token>`。
 - 拦截器 `AuthInterceptor` 保护 `/api/**`，通过 `UserContext` 暴露当前用户；`X-User-Id` 模拟登录默认关闭, 仅 dev profile 开启, 严禁生产开启。
@@ -244,14 +290,22 @@ com.ai
 - 性能/安全/成本优化的待评估项（P1 性能成本 / P2 安全加固 / P3 架构级）统一登记在
   `docs/optimization-roadmap.md`——含每项的现状实证、方案、验收标准与触发条件；
   实施前先读该文档, 完成后在"已完成记录"补行。
-- P0 已落地: JWT 密钥启动强校验(`SecurityConfigValidator`, prod 拒绝默认/短密钥)、
-  登录失败限流(`LoginAttemptLimiter`, 用户名+IP 双维度 5 次锁 5 分钟, 错误码 6006/429)、
-  Hikari 连接池显式配置(max 25)。登录接口签名已变: `AuthService.login(LoginContext)`。
+- P0/P1/P2/P3 已全部落地(2026-09-15), 明细与验收证据见 `docs/optimization-roadmap.md` 已完成记录。
+  关键架构变化: 登录限流契约化(`LoginAttemptLimiter` 接口, Redis 实现默认/memory 可回退,
+  `app.auth.rate-limit-backend` 切换); 会话查询走 Redis 缓存(`SessionCacheService`, 异常降级 DB);
+  记忆写回 append-only(`ChatMemoryAppender`, 严禁回退"全删全插"); KeywordIndex 用读写锁(avgLen 增量);
+  Token 用量已采集落 chat_log.total_tokens; 上传有魔数校验; 工具日志脱敏; 日志按保留期定时清理;
+  语义缓存已实施(`SemanticAnswerCache`: 仅缓存未改写的 KB 命中回答, 知识库文档变更即版本失效,
+  命中跳过检索+模型调用; 知识库上传/删除/重处理代码必须调用 `semanticAnswerCache.evictAll()`)。
 
 ## 测试策略
 
 - 单元测试使用 Mockito Mock `ChatModel`/`EmbeddingModel`，禁止调用真实 API。
-- 集成/冒烟优先真实环境脚本(`docs/demo.sh`)，断言含返回文本与落库记录。
+- 集成/冒烟优先真实环境脚本(`docs/seed/e2e_test.py`)；断言含返回文本与落库记录。
+- **e2e 必须在冷缓存基线运行**: 语义缓存持久在 Redis, 上一轮写入的回答会让本轮
+  "流式增量(content≥2)"与"上下文装配日志"断言失败(缓存命中不装配、只发 1 个 content 事件)。
+  脚本段 1 已用管理员接口 `DELETE /api/system/semantic-cache` 建立冷基线, 新增断言不得依赖残缺缓存状态;
+  审计类断言(chat_log/context_log/rag_decision_log)为异步落库, 计数前需留出等待。
 - 数据库相关用例依赖 MySQL + sql init 脚本建表(需本地/容器 MySQL 可用)。
 
 ## 常用命令

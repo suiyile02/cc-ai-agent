@@ -8,6 +8,8 @@ import com.ai.context.entity.ConversationSummary;
 import com.ai.context.mapper.ConversationSummaryMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.ai.memory.ChatMemoryAppender;
+import com.ai.memory.ChatMemoryCounter;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -16,6 +18,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -34,6 +37,8 @@ import static org.mockito.Mockito.when;
 class ConversationMemoryServiceTest {
 
     private ChatMemoryRepository repository;
+    private ChatMemoryAppender memoryAppender;
+    private ChatMemoryCounter memoryCounter;
     private ConversationSummaryMapper summaryMapper;
     private ConversationSummarizer summarizer;
     private AppProperties appProperties;
@@ -42,11 +47,22 @@ class ConversationMemoryServiceTest {
     @BeforeEach
     void setUp() {
         repository = mock(ChatMemoryRepository.class);
+        memoryAppender = mock(ChatMemoryAppender.class);
+        memoryCounter = mock(ChatMemoryCounter.class);
         summaryMapper = mock(ConversationSummaryMapper.class);
         summarizer = mock(ConversationSummarizer.class);
         appProperties = new AppProperties();
-        service = new ConversationMemoryService(repository, summaryMapper, summarizer,
-                new HeuristicTokenCounter(), appProperties);
+        service = new ConversationMemoryService(repository, memoryAppender, memoryCounter,
+                summaryMapper, summarizer, new HeuristicTokenCounter(), appProperties);
+    }
+
+    @Test
+    void messageCountUsesDatabaseCountInsteadOfLoadingMessages() {
+        when(memoryCounter.countByConversationId("s1")).thenReturn(42L);
+
+        assertEquals(42, service.messageCount("s1"));
+        // 计数不再触碰消息加载路径(旧实现是 findByConversationId(...).size())
+        verify(repository, never()).findByConversationId("s1");
     }
 
     /** 构造 n 条历史消息 */

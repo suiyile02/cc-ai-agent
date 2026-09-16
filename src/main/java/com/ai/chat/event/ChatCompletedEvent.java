@@ -21,9 +21,10 @@ import java.util.List;
  * @param rewrite     多轮改写结果(供 context_log 记录; 不可空)
  * @param intentMode  意图路由结果(供 context_log 记录)
  * @param composition 上下文 Token 组成快照; null=本次不写 context_log(如流式中断)
+ * @param totalTokens 模型返回的 Token 用量(usage.totalTokens, 采自 ChatResponse; 可空)
  */
 public record ChatCompletedEvent(ChatSession session, String userMessage, String answer,
                                  List<String> sources, String modelLabel, long durationMs,
                                  QueryRewriter.RewriteResult rewrite, RagMode intentMode,
-                                 ContextComposition composition) {
+                                 ContextComposition composition, Integer totalTokens) {
 }

@@ -38,7 +38,8 @@ public enum ErrorCode {
     USERNAME_OR_PASSWORD_ERROR(6003, "用户名或密码错误", HttpStatus.UNAUTHORIZED),
     USER_DISABLED(6004, "账号已被禁用", HttpStatus.FORBIDDEN),
     TOKEN_INVALID(6005, "未登录或凭证已失效", HttpStatus.UNAUTHORIZED),
-    LOGIN_LOCKED(6006, "登录失败次数过多，已临时锁定", HttpStatus.TOO_MANY_REQUESTS);
+    LOGIN_LOCKED(6006, "登录失败次数过多，已临时锁定", HttpStatus.TOO_MANY_REQUESTS),
+    CONCURRENT_LIMIT(6010, "当前有对话进行中，请稍后再试", HttpStatus.TOO_MANY_REQUESTS);
 
     private final int code;
     private final String message;

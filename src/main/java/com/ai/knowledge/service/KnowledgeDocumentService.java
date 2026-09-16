@@ -9,6 +9,7 @@ import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
+import com.ai.user.security.RequireAdmin;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,8 @@ public class KnowledgeDocumentService {
     private final FileStorageService fileStorageService;
     private final DocumentIngestionService ingestionService;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
+    private final ObjectProvider<io.qdrant.client.QdrantClient> qdrantClientProvider;
+    private final com.ai.rag.service.SemanticAnswerCache semanticAnswerCache;
     private final AppProperties appProperties;
     private final KeywordIndex keywordIndex;
 
@@ -76,6 +79,8 @@ public class KnowledgeDocumentService {
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new BusinessException(ErrorCode.FILE_TOO_LARGE);
         }
+        // 内容与扩展名一致性校验(魔数), 防伪装文件进入解析管线(P2-1)
+        fileStorageService.validateContent(file, ext);
 
         String storagePath = fileStorageService.save(file, userId);
 
@@ -94,6 +99,7 @@ public class KnowledgeDocumentService {
             throw e;
         }
         // 事务提交后再触发异步入库(避免异步任务先于 commit 执行、查不到未提交记录)
+        semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
         ingestAfterCommit(doc.getId());
         return new KnowledgeUploadVO(doc.getId(), doc.getFileName(), doc.getStatus());
     }
@@ -128,10 +134,12 @@ public class KnowledgeDocumentService {
 
     /**
      * 删除文档：清理向量与关键词索引 → 删除记录 → 删除本地文件(向量清理失败不影响主流程)。
+     * 仅管理员可执行({@link RequireAdmin})——删除影响全公司共享的 RAG 内容。
      *
      * @param id 文档 ID
-     * @throws BusinessException 文档不存在或正在处理中
+     * @throws BusinessException 文档不存在/正在处理中, 或非管理员(5002, HTTP 403)
      */
+    @RequireAdmin
     @Transactional
     public void deleteDocument(Long id) {
         KnowledgeDocument doc = requireDocument(id);
@@ -142,6 +150,7 @@ public class KnowledgeDocumentService {
         keywordIndex.removeDocument(doc.getId());
         documentMapper.deleteById(doc.getId());
         fileStorageService.delete(doc.getStoragePath());
+        semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
         log.info("文档已删除: id={}, file={}", doc.getId(), doc.getFileName());
     }
 
@@ -151,6 +160,7 @@ public class KnowledgeDocumentService {
      * @param id 文档 ID
      * @throws BusinessException 文档不存在或正在处理中
      */
+    @RequireAdmin
     @Transactional
     public void reprocess(Long id) {
         KnowledgeDocument doc = requireDocument(id);
@@ -163,6 +173,7 @@ public class KnowledgeDocumentService {
         doc.setChunkCount(0);
         doc.setErrorMessage(null);
         documentMapper.updateById(doc);
+        semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
         // 事务提交后再触发异步入库(与 upload 同理)
         ingestAfterCommit(doc.getId());
     }
@@ -204,36 +215,28 @@ public class KnowledgeDocumentService {
     }
 
     /**
-     * 按 metadata.doc_id 删除文档全部向量点(过滤检索 → 按点删, 向量库无关)。
+     * 按 metadata.doc_id 删除文档全部向量点。
+     *
+     * <p>【已被替代】原"similaritySearch 扫描最多 1 万点再按点删"的两步法已替换为
+     * Qdrant 原生 filter delete(一步完成, O(匹配点) 而非 O(扫描上限))。
+     * 注意 payload 中 doc_id 以字符串存储, 过滤值必须 {@code String.valueOf(documentId)}。
      *
      * @param documentId 文档 ID
      */
     private void deleteVectorPoints(Long documentId) {
-        VectorStore vectorStore = vectorStoreProvider.getIfAvailable();
-        if (vectorStore == null) {
+        io.qdrant.client.QdrantClient client = qdrantClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("Qdrant 客户端不可用, 跳过向量清理: docId={}", documentId);
             return;
         }
         try {
-            // Qdrant payload 中的 doc_id 以字符串存储, 过滤值必须同为字符串, 否则匹配不到、向量残留
-            var filter = new FilterExpressionBuilder().eq("doc_id", String.valueOf(documentId)).build();
-            SearchRequest request = SearchRequest.builder()
-                    .query("doc_cleanup_" + documentId) // 占位查询(由过滤器收敛候选集)
-                    .topK(MAX_DELETE_SCAN)
-                    .similarityThresholdAll()
-                    .filterExpression(filter)
+            var filter = io.qdrant.client.grpc.Common.Filter.newBuilder()
+                    .addMust(io.qdrant.client.ConditionFactory.matchKeyword(
+                            "doc_id", String.valueOf(documentId)))
                     .build();
-            List<Document> points = vectorStore.similaritySearch(request);
-            if (points == null || points.isEmpty()) {
-                return;
-            }
-            List<String> ids = points.stream()
-                    .map(Document::getId)
-                    .filter(Objects::nonNull)
-                    .toList();
-            if (!ids.isEmpty()) {
-                vectorStore.delete(ids);
-                log.info("已清理向量 {} 条: docId={}", ids.size(), documentId);
-            }
+            client.deleteAsync(appProperties.getRag().getCollectionName(), filter)
+                    .get(15, java.util.concurrent.TimeUnit.SECONDS);
+            log.info("已按过滤条件清理向量: docId={}", documentId);
         } catch (Exception e) {
             log.warn("清理向量失败(继续后续删除流程): docId={}, err={}", documentId, e.getMessage());
         }

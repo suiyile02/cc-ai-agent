@@ -4,6 +4,8 @@ import com.ai.context.HistoryContext;
 
 import com.ai.common.TokenCounter;
 import com.ai.config.AppProperties;
+import com.ai.memory.ChatMemoryAppender;
+import com.ai.memory.ChatMemoryCounter;
 import com.ai.context.entity.ConversationSummary;
 import com.ai.context.mapper.ConversationSummaryMapper;
 import lombok.RequiredArgsConstructor;
@@ -42,13 +44,22 @@ public class ConversationMemoryService implements ConversationMemory {
     /** 摘要作为 SYSTEM 消息注入的角色/前缀/分隔开销 */
     private static final int SUMMARY_MESSAGE_OVERHEAD = 12;
 
-    /** 每会话互斥锁：串行化同一会话的"读全部→改写"记忆操作, 防止并发 append/摘要裁剪互相覆盖丢消息 */
-    private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
+    /**
+     * 每会话互斥锁(带淘汰, 防内存泄漏): 串行化同一会话的记忆写回与摘要裁剪。
+     * 上限 10 万会话, 30 分钟不访问即淘汰(活跃会话持续访问不会淘汰)。
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Object> sessionLocks =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(100_000)
+                    .expireAfterAccess(java.time.Duration.ofMinutes(30))
+                    .build();
 
     /** 正在执行异步摘要的会话集合(防同会话重复触发) */
     private final Set<String> summarizing = ConcurrentHashMap.newKeySet();
 
     private final ChatMemoryRepository memoryRepository;
+    private final ChatMemoryAppender memoryAppender;
+    private final ChatMemoryCounter memoryCounter;
     private final ConversationSummaryMapper summaryMapper;
     private final ConversationSummarizer summarizer;
     private final TokenCounter tokenCounter;
@@ -104,7 +115,7 @@ public class ConversationMemoryService implements ConversationMemory {
      *
      * @param sessionId 会话 ID
      */
-    @Async
+    @Async("auditExecutor")
     @Override
     public void summarizeIfNeededAsync(String sessionId) {
         if (!summarizing.add(sessionId)) {
@@ -160,16 +171,20 @@ public class ConversationMemoryService implements ConversationMemory {
     @Transactional
     @Override
     public void append(String sessionId, String userText, String assistantText) {
-        // 同一会话加锁: "读全部→追加→全量写回"必须原子, 否则并发轮次互相覆盖丢消息
+        // append-only 写回: 只插入本轮新增 2 条(O(新增) 次 SQL), 不再"全删全插"重写历史;
+        // 持锁与摘要裁剪的 saveAll 互斥, 防止裁剪误删刚插入的消息
+        List<Message> added = new ArrayList<>(2);
+        if (userText != null && !userText.isBlank()) {
+            added.add(new UserMessage(userText));
+        }
+        if (assistantText != null && !assistantText.isBlank()) {
+            added.add(new AssistantMessage(assistantText));
+        }
+        if (added.isEmpty()) {
+            return;
+        }
         synchronized (lockFor(sessionId)) {
-            List<Message> all = new ArrayList<>(memoryRepository.findByConversationId(sessionId));
-            if (userText != null && !userText.isBlank()) {
-                all.add(new UserMessage(userText));
-            }
-            if (assistantText != null && !assistantText.isBlank()) {
-                all.add(new AssistantMessage(assistantText));
-            }
-            memoryRepository.saveAll(sessionId, all);
+            memoryAppender.append(sessionId, added);
         }
     }
 
@@ -180,11 +195,14 @@ public class ConversationMemoryService implements ConversationMemory {
      * @return 锁对象
      */
     private Object lockFor(String sessionId) {
-        return sessionLocks.computeIfAbsent(sessionId, k -> new Object());
+        return sessionLocks.get(sessionId, k -> new Object());
     }
 
     /**
-     * 统计最近历史轮数(用于查询改写的触发判定)。
+     * 统计历史消息条数(用于查询改写的触发判定)。
+     *
+     * <p>走数据库 COUNT(*)({@link ChatMemoryCounter}), 不再"取出全部消息反序列化后取 size"
+     * ——该调用每轮对话都会执行一次, 旧实现开销随历史长度线性增长。
      *
      * @param sessionId 会话 ID
      * @return 历史消息条数
@@ -192,7 +210,7 @@ public class ConversationMemoryService implements ConversationMemory {
     @Transactional(readOnly = true)
     @Override
     public int messageCount(String sessionId) {
-        return memoryRepository.findByConversationId(sessionId).size();
+        return (int) memoryCounter.countByConversationId(sessionId);
     }
 
     /**

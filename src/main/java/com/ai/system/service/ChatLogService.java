@@ -40,7 +40,8 @@ public class ChatLogService {
      */
     @Transactional
     public void record(ChatSession session, String userMessage, String assistantReply,
-            String sourcesJson, String toolCallsJson, String modelName, Integer durationMs) {
+            String sourcesJson, String toolCallsJson, String modelName, Integer durationMs,
+            Integer totalTokens) {
         ChatLog logRow = new ChatLog();
         logRow.setSessionId(session.getSessionId());
         logRow.setUserId(session.getUserId());
@@ -50,6 +51,7 @@ public class ChatLogService {
         logRow.setToolCalls(toolCallsJson);
         logRow.setModelName(modelName);
         logRow.setDurationMs(durationMs);
+        logRow.setTotalTokens(totalTokens);
         chatLogMapper.insert(logRow);
     }
 

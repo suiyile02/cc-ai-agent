@@ -91,6 +91,17 @@
             <artifactId>spring-ai-tika-document-reader</artifactId>
         </dependency>
 
+        <!-- Redis(分布式登录限流/会话缓存; P3 架构项, Redis 服务已就绪) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- 进程内带淘汰缓存(session 锁对象防泄漏) -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Token 精确计数(jtokkit, 经 spring-ai-client-chat 传递已在 classpath, 显式声明防上游变更) -->
         <dependency>
             <groupId>com.knuddels</groupId>

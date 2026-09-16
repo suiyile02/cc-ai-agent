@@ -109,6 +109,14 @@ check('admin 登录且角色为 ADMIN', ADMIN_TOKEN and ADMIN_USER.get('role') =
 TESTER_TOKEN, _ = login('tester', 'test123')
 check('tester 登录(种子用户)', bool(TESTER_TOKEN))
 
+# 清空语义缓存, 保证后续断言(流式增量/上下文装配日志)不被上一轮的缓存命中污染
+st, r = req('DELETE', '/api/system/semantic-cache', token=E2E_TOKEN)
+check('普通用户清空语义缓存被拒绝(403/5002)', st == 403 and r.get('code') == 5002,
+      f'http={st} code={r.get("code")}')
+st, r = req('DELETE', '/api/system/semantic-cache', token=ADMIN_TOKEN)
+check('管理员清空语义缓存(冷缓存基线)', st == 200 and isinstance(r.get('data'), int) and r['data'] >= 0,
+      f"kbVersion={r.get('data')}")
+
 print('========== 2. 会话管理 ==========')
 st, r = req('POST', '/api/sessions', {'title': '【E2E】混合会话', 'sessionType': 'HYBRID'}, token=E2E_TOKEN)
 SESSION_A = r['data']['sessionId']
@@ -129,9 +137,12 @@ st, r = req('DELETE', f'/api/sessions/{B_PK}', token=E2E_TOKEN)
 check('越权删除他人会话返回 403/5002', st == 403 and r.get('code') == 5002, f'http={st}')
 
 print('========== 3. 多轮对话(RAG 检索 + 查询改写 + 工具 + 记忆) ==========')
+# 冷缓存基线(段 1 已清空语义缓存), 故本轮全部为"未命中"路径
 st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': '入职满两年的员工有多少天年假？'},
             token=E2E_TOKEN, timeout=120)
 q1_ok = st == 200 and r['data']['content'] and r['data'].get('sources')
+Q1_QUESTION = '入职满两年的员工有多少天年假？'
+Q1_CONTENT = r['data']['content'] if q1_ok else ''
 check('多轮#1 知识库问答命中来源', q1_ok,
       f"sources={len(r['data'].get('sources') or [])} (10天)" if q1_ok else f'code={r.get("code")} {r.get("message")}')
 
@@ -166,9 +177,7 @@ resp = conn.getresponse()
 stream_body = resp.read().decode('utf-8', errors='replace')
 conn.close()
 stage_events, content_chunks = [], []
-for block in stream_body.split('
-
-'):
+for block in stream_body.split('\n\n'):
     ev, datas = None, []
     for ln in block.splitlines():
         if ln.startswith('event:'):
@@ -182,9 +191,11 @@ for block in stream_body.split('
         stage_events.append(data)
     elif ev == 'content':
         content_chunks.append(data)
-check('SSE 阶段事件推送(stage>=3)', resp.status == 200 and len(stage_events) >= 3,
-      f'stages={len(stage_events)} 例={stage_events[0][:60] if stage_events else "-"}')
-check('SSE 正文增量输出(content>=2)', len(content_chunks) >= 2,
+check('SSE 无过时 stage 事件(契约已移除)', resp.status == 200 and len(stage_events) == 0,
+      f'stage events={len(stage_events)}')
+# 语义缓存命中时整段回答只发 1 个 content 事件; 本轮已在段 1 清空缓存且该问题首次出现,
+# 故必然走未命中路径, 应看到逐 token 的多个增量
+check('SSE 正文增量输出(content>=2, 未命中路径)', len(content_chunks) >= 2,
       f'chunks={len(content_chunks)} total={sum(len(c) for c in content_chunks)} 字')
 check('SSE 以 [DONE] 结束', resp.status == 200 and stream_body.rstrip().endswith('[DONE]'))
 
@@ -219,13 +230,38 @@ check('闲聊问题路由为 GENERAL 且未检索', len(general_rows) >= 1
 st, r = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
 rows = r['data']['records'] if st == 200 else []
 rewritten = [v for v in rows if v['rewrittenQuery']]
+# 冷缓存基线保证 5 轮问答都真实走了装配(缓存命中会跳过装配, 不产生 context_log)
 check('上下文装配日志落库(Token 预算)', st == 200 and r['data']['total'] >= 5, f"total={r['data']['total']}")
 if rewritten:
     check('多轮查询改写生效(rewritten_query)', True, f"示例: {rewritten[0]['userMessage'][:14]} -> {rewritten[0]['rewrittenQuery'][:24]}")
 else:
     warn('多轮查询改写生效(rewritten_query)', '改写器返回了原问题(LLM 行为), 建议查看 context-logs')
 
-print('========== 6. 知识库管理 ==========')
+print('========== 6. 语义缓存(命中短路 + 知识库变更联动失效) ==========')
+time.sleep(2)   # 审计为异步落库, 先等内容稳定再计数
+_, r = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
+CTX_BEFORE_HIT = r['data']['total']
+# 重问段 3 已问过的同一问题(独立问题, 未改写, KB 命中 → 上轮已写缓存)
+st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': Q1_QUESTION}, token=E2E_TOKEN, timeout=120)
+CACHED_CONTENT = r['data']['content'] if st == 200 and r.get('data') else ''
+check('语义缓存命中(回答与首次一致)', st == 200 and CACHED_CONTENT == Q1_CONTENT and bool(Q1_CONTENT),
+      f'len={len(CACHED_CONTENT)} 与首轮一致={CACHED_CONTENT == Q1_CONTENT}')
+st, r = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
+CTX_AFTER_HIT = r['data']['total']
+check('缓存命中跳过上下文装配(无新增 context_log)', st == 200 and CTX_AFTER_HIT == CTX_BEFORE_HIT,
+      f'{CTX_BEFORE_HIT} -> {CTX_AFTER_HIT}')
+time.sleep(1.5)   # 决策日志同为异步落库
+st, r = req('GET', f'/api/system/rag-decisions?sessionId={SESSION_A}&ragMode=KB', token=E2E_TOKEN)
+hit_rows = [v for v in (r['data']['records'] if st == 200 else []) if not v['retrievalExecuted']]
+check('缓存命中在决策日志留痕(KB 且未检索)', st == 200 and len(hit_rows) >= 1,
+      f'KB未检索行={len(hit_rows)} (最新: finalHits={hit_rows[0]["finalHits"] if hit_rows else "-"})')
+
+print('========== 7. 知识库管理 ==========')
+# 清理历史运行的残留文档(同名项目管理规范), 保证基线干净
+lst_st, lst = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=50&fileName=' + quote('项目管理规范'), token=ADMIN_TOKEN)
+for v in ((lst.get('data') or {}).get('records') or []):
+    req('DELETE', f"/api/knowledge/documents/{v['id']}", token=ADMIN_TOKEN)
+time.sleep(2)
 before = qdrant_count()
 st, r = upload(E2E_TOKEN, '测试-项目管理规范.md',
                '# 项目管理规范\n\n## 代码评审\n所有合并请求必须至少一名同事评审通过。\n\n## 发布流程\n发布窗口为每周三与周五, 需提前创建发布单。\n')
@@ -243,15 +279,25 @@ check('Qdrant 向量点数与分块一致', after_upload == before + (rec['chunk
       f'{before} -> {after_upload}')
 
 st, r = req('POST', f'/api/knowledge/documents/{DOC_E2E}/reprocess', token=E2E_TOKEN)
+check('普通用户 reprocess 被授权拒绝(403/5002)', st == 403 and r.get('code') == 5002,
+      f'http={st} code={r.get("code")}')
 time.sleep(8)
 st, r = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20&fileName=' + quote('项目管理规范'), token=E2E_TOKEN)
 rec = next((v for v in r['data']['records'] if v['id'] == DOC_E2E), None) if st == 200 else None
 check('重新入库(reprocess)', rec is not None and rec['status'] == 2, f"status={rec['status'] if rec else '-'}")
 
 st, r = req('DELETE', f'/api/knowledge/documents/{DOC_E2E}', token=E2E_TOKEN)
+check('普通用户删除文档被授权拒绝(403/5002)', st == 403 and r.get('code') == 5002,
+      f'http={st} code={r.get("code")}')
+st, r = req('DELETE', f'/api/knowledge/documents/{DOC_E2E}', token=ADMIN_TOKEN)
 after_delete = qdrant_count()
+for _ in range(5):                       # Qdrant 清理为异步生效, 轮询等待
+    if after_delete == before:
+        break
+    time.sleep(2)
+    after_delete = qdrant_count()
 st2, r2 = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20&fileName=' + quote('项目管理规范') + '', token=E2E_TOKEN)
-check('删除文档且向量同步清理', st == 200 and after_delete == before
+check('管理员删除文档且向量同步清理', st == 200 and after_delete == before
       and r2['data']['total'] == 0, f'qdrant {after_upload}->{after_delete} (基线{before})')
 
 st, r = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20', token=ADMIN_TOKEN)
@@ -263,7 +309,17 @@ st, r = req('POST', '/api/ai/rag/search', {'question': '年假有多少天', 'to
             token=E2E_TOKEN)
 check('RAG 检索调试接口', st == 200 and r['data'], f"hits={len(r['data'] or [])}")
 
-print('========== 7. 会话生命周期与异常路径 ==========')
+# 知识库变更(上传/删除)已使语义缓存失效: 重问段 6 命中过缓存的问题应重新装配并再落 context_log
+time.sleep(2)   # 同上: 等异步审计落库
+_, r = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
+CTX_BEFORE_KBCHANGE = r['data']['total']
+st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': Q1_QUESTION}, token=E2E_TOKEN, timeout=120)
+_, r2 = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
+check('知识库变更后语义缓存联动失效(重新装配)', st == 200 and bool(r['data']['content'])
+      and r2['data']['total'] > CTX_BEFORE_KBCHANGE,
+      f"context_log {CTX_BEFORE_KBCHANGE} -> {r2['data']['total']}")
+
+print('========== 8. 会话生命周期与异常路径 ==========')
 st, r = req('POST', '/api/sessions', {'title': '【E2E】待归档', 'sessionType': 'RAG'}, token=E2E_TOKEN)
 C_PK = r['data']['id']
 C_SID = r['data']['sessionId']

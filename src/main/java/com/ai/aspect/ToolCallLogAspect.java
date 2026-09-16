@@ -1,6 +1,7 @@
 package com.ai.aspect;
 import com.ai.system.service.ToolCallLogService;
 
+import com.ai.common.SensitiveDataMasker;
 import com.ai.common.Strings;
 import com.ai.system.entity.ToolCallLog;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,7 +41,8 @@ public class ToolCallLogAspect {
         long start = System.currentTimeMillis();
         String toolName = tool.name() == null || tool.name().isBlank()
                 ? pjp.getSignature().getName() : tool.name();
-        String inputParams = toJson(stripToolContext(pjp.getArgs()));
+        // 工具入参/出参可能携带用户真实手机号/邮箱, 落库前脱敏(P2-3)
+        String inputParams = SensitiveDataMasker.mask(toJson(stripToolContext(pjp.getArgs())));
         ToolContext toolContext = findToolContext(pjp.getArgs());
 
         ToolCallLog entry = new ToolCallLog();
@@ -61,7 +63,7 @@ public class ToolCallLogAspect {
         try {
             Object result = pjp.proceed();
             entry.setStatus("SUCCESS");
-            entry.setOutputResult(toJson(result));
+            entry.setOutputResult(SensitiveDataMasker.mask(toJson(result)));
             return result;
         } catch (Throwable e) {
             entry.setStatus("FAILED");
