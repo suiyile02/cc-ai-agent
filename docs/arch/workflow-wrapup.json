@@ -1,0 +1,168 @@
+{
+ "schema_version": 2,
+ "diagram_type": "workflow",
+ "meta": {
+  "title": "生成分支与收尾：工具循环、降级、记忆与审计",
+  "locale": "zh-CN",
+  "quality_profile": "showcase"
+ },
+ "lanes": [
+  {
+   "id": "model",
+   "label": "模型与工具"
+  },
+  {
+   "id": "exception",
+   "label": "异常路径",
+   "variant": "exception"
+  },
+  {
+   "id": "wrap",
+   "label": "收尾 · 审计 · 输出"
+  }
+ ],
+ "phases": [
+  {
+   "id": "gen",
+   "label": "生成与工具",
+   "fromCol": 0,
+   "toCol": 2,
+   "variant": "emphasis"
+  },
+  {
+   "id": "wrap",
+   "label": "收尾 · 审计 · 输出",
+   "fromCol": 3,
+   "toCol": 4
+  }
+ ],
+ "mainPath": [
+  "generate",
+  "memory",
+  "auditDone",
+  "cacheWrite",
+  "reply"
+ ],
+ "nodes": [
+  {
+   "id": "generate",
+   "lane": "model",
+   "col": 0,
+   "type": "external",
+   "label": "模型生成",
+   "sublabel": "关思维链 · 20s 静默超时",
+   "width": 132
+  },
+  {
+   "id": "tool",
+   "lane": "model",
+   "col": 1,
+   "type": "backend",
+   "label": "工具调用",
+   "sublabel": "结果回填模型继续生成",
+   "width": 132
+  },
+  {
+   "id": "degrade",
+   "lane": "exception",
+   "col": 2,
+   "type": "backend",
+   "label": "中断降级",
+   "sublabel": "静默超时/流错误 → 返回提示",
+   "width": 132
+  },
+  {
+   "id": "memory",
+   "lane": "wrap",
+   "col": 1,
+   "type": "backend",
+   "label": "记忆写回",
+   "sublabel": "append-only + 摘要",
+   "width": 132
+  },
+  {
+   "id": "auditDone",
+   "lane": "wrap",
+   "col": 2,
+   "type": "backend",
+   "label": "完成审计",
+   "sublabel": "chat_log + context_log",
+   "width": 132
+  },
+  {
+   "id": "cacheWrite",
+   "lane": "wrap",
+   "col": 3,
+   "type": "backend",
+   "label": "缓存写入",
+   "sublabel": "正缓存 + 负缓存",
+   "tag": "Redis",
+   "width": 132
+  },
+  {
+   "id": "reply",
+   "lane": "wrap",
+   "col": 4,
+   "type": "frontend",
+   "label": "回答 + 来源",
+   "sublabel": "回前端：content → sources",
+   "width": 132
+  }
+ ],
+ "edges": [
+  {
+   "from": "generate",
+   "to": "tool",
+   "label": "要求调用工具",
+   "role": "branch"
+  },
+  {
+   "from": "generate",
+   "to": "degrade",
+   "label": "静默超时 / 流中断",
+   "role": "error"
+  },
+  {
+   "from": "generate",
+   "to": "memory",
+   "label": "生成完成",
+   "role": "main"
+  },
+  {
+   "from": "memory",
+   "to": "auditDone",
+   "label": "写审计事件",
+   "role": "main"
+  },
+  {
+   "from": "auditDone",
+   "to": "cacheWrite",
+   "label": "再写缓存",
+   "role": "main"
+  },
+  {
+   "from": "cacheWrite",
+   "to": "reply",
+   "label": "回答 + 来源",
+   "role": "return"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "amber",
+   "title": "异常路径（终止）",
+   "items": [
+    "静默超时/流错误走 completeInterrupted：只写记忆与审计，不写语义缓存",
+    "降级提示直接返回，避免把中断提示缓存成答案"
+   ]
+  },
+  {
+   "dot": "emerald",
+   "title": "收尾顺序（异步，不阻塞回答）",
+   "items": [
+    "记忆写回 → 审计事件 → 正/负缓存写入，全部在回答产出后执行",
+    "摘要超阈值时后台滚动压缩，不占请求路径"
+   ]
+  }
+ ]
+}

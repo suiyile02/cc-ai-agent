@@ -1,0 +1,231 @@
+{
+ "schema_version": 2,
+ "diagram_type": "workflow",
+ "meta": {
+  "title": "问答主流程：从前端提问到模型生成",
+  "locale": "zh-CN",
+  "quality_profile": "showcase"
+ },
+ "lanes": [
+  {
+   "id": "ui",
+   "label": "前端 / 用户"
+  },
+  {
+   "id": "prep",
+   "label": "入口与前置"
+  },
+  {
+   "id": "rag",
+   "label": "检索与上下文"
+  },
+  {
+   "id": "model",
+   "label": "模型生成"
+  }
+ ],
+ "phases": [
+  {
+   "id": "intake",
+   "label": "请求入口",
+   "fromCol": 0,
+   "toCol": 0
+  },
+  {
+   "id": "prep_cache",
+   "label": "改写与缓存",
+   "fromCol": 1,
+   "toCol": 2,
+   "variant": "emphasis"
+  },
+  {
+   "id": "route_retrieve",
+   "label": "路由 · 检索",
+   "fromCol": 3,
+   "toCol": 3
+  },
+  {
+   "id": "generate",
+   "label": "装配 · 生成 · 输出",
+   "fromCol": 4,
+   "toCol": 5
+  }
+ ],
+ "mainPath": [
+  "user",
+  "guard",
+  "rewrite",
+  "cache",
+  "route",
+  "retrieve",
+  "assemble",
+  "generate",
+  "reply"
+ ],
+ "nodes": [
+  {
+   "id": "user",
+   "lane": "ui",
+   "col": 0,
+   "type": "external",
+   "label": "用户提问",
+   "sublabel": "同步或 SSE 流式请求",
+   "width": 132
+  },
+  {
+   "id": "replyFast",
+   "lane": "ui",
+   "col": 3,
+   "type": "frontend",
+   "label": "秒回响应",
+   "sublabel": "缓存命中直接返回",
+   "width": 132
+  },
+  {
+   "id": "reply",
+   "lane": "model",
+   "col": 5,
+   "type": "frontend",
+   "label": "回答 + 来源",
+   "sublabel": "回前端：content → sources",
+   "width": 132
+  },
+  {
+   "id": "guard",
+   "lane": "prep",
+   "col": 0,
+   "type": "security",
+   "label": "鉴权 · 会话 · 并发",
+   "sublabel": "JWT → 会话校验 → 并发名额",
+   "tag": "fail-closed",
+   "width": 132
+  },
+  {
+   "id": "rewrite",
+   "lane": "prep",
+   "col": 1,
+   "type": "backend",
+   "label": "多轮查询改写",
+   "sublabel": "无线索跳过；失败熔断 60s",
+   "width": 132
+  },
+  {
+   "id": "cache",
+   "lane": "prep",
+   "col": 2,
+   "type": "backend",
+   "label": "语义缓存查询",
+   "sublabel": "正缓存→秒回；负缓存→未找到",
+   "tag": "Redis",
+   "width": 132
+  },
+  {
+   "id": "route",
+   "lane": "prep",
+   "col": 3,
+   "type": "backend",
+   "label": "意图路由",
+   "sublabel": "关键词命中→KB；闲聊→跳过",
+   "width": 132
+  },
+  {
+   "id": "retrieve",
+   "lane": "rag",
+   "col": 3,
+   "type": "backend",
+   "label": "混合检索",
+   "sublabel": "语义+BM25 → RRF → 重排",
+   "width": 132
+  },
+  {
+   "id": "assemble",
+   "lane": "rag",
+   "col": 4,
+   "type": "backend",
+   "label": "上下文装配",
+   "sublabel": "预算四段：system/历史/RAG",
+   "width": 132
+  },
+  {
+   "id": "generate",
+   "lane": "model",
+   "col": 4,
+   "type": "external",
+   "label": "模型生成",
+   "sublabel": "关思维链 · 20s 静默超时保护",
+   "width": 132
+  }
+ ],
+ "edges": [
+  {
+   "from": "user",
+   "to": "guard",
+   "label": "Bearer Token",
+   "role": "main"
+  },
+  {
+   "from": "guard",
+   "to": "rewrite",
+   "label": "校验通过",
+   "role": "main"
+  },
+  {
+   "from": "rewrite",
+   "to": "cache",
+   "role": "main"
+  },
+  {
+   "from": "cache",
+   "to": "replyFast",
+   "label": "命中 → 短路返回",
+   "role": "branch"
+  },
+  {
+   "from": "cache",
+   "to": "route",
+   "label": "未命中",
+   "role": "main"
+  },
+  {
+   "from": "route",
+   "to": "retrieve",
+   "label": "KB：执行检索",
+   "role": "main"
+  },
+  {
+   "from": "route",
+   "to": "assemble",
+   "label": "GENERAL：跳过检索",
+   "role": "branch"
+  },
+  {
+   "from": "retrieve",
+   "to": "assemble",
+   "label": "Top-K 命中文档",
+   "role": "main"
+  },
+  {
+   "from": "assemble",
+   "to": "generate",
+   "label": "system + 历史 + RAG + 提问",
+   "role": "main"
+  },
+  {
+   "from": "generate",
+   "to": "reply",
+   "label": "回答 + 来源",
+   "role": "main"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "两条短路（跳过检索与模型）",
+   "items": [
+    "正缓存命中：整段回答直接返回，流式只发 1 个 content 事件",
+    "负缓存命中：已确认零命中的问题 30 分钟内直接答未找到",
+    "检索整段 10s 超时按已执行零命中降级，不阻塞对话"
+   ]
+  }
+ ]
+}
