@@ -82,6 +82,14 @@ public class AppProperties {
                 "会议室", "预订", "信息安全", "订单", "单号", "物流", "快递", "员工", "部门", "职位", "电话", "邮箱",
                 "福利", "标准", "公司",
                 "放假", "节假日", "中秋", "国庆", "春节", "元旦", "调休", "补班");
+        /**
+         * 工具类问题关键词表({@code app.rag.tool-keywords})：命中即判为 TOOL 类意图——
+         * 答案在业务库(经 BusinessTools 查询, 如 orders 表), 知识库检索查不到,
+         * 因此跳过检索直接交给模型自主调工具。优先于 {@link #internalKeywords} 判定。
+         * 缺省词表见下, 可在 yaml 覆盖。
+         */
+        private List<String> toolKeywords = List.of(
+                "订单", "单号", "物流", "快递", "运单", "发货", "收货", "跟踪");
     }
 
     @Data

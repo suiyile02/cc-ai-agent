@@ -42,7 +42,9 @@ public class PromptService {
         if (type == SessionType.AGENT) {
             return baseSystem(type);
         }
-        if (mode == RagMode.GENERAL) {
+        // TOOL(工具类)与 GENERAL(闲聊)都不注入知识库上下文, 以自由问答作答——
+        // 工具由 Spring AI 的 ChatClient.tools() 独立注入, 模型会自主决定调用
+        if (mode == RagMode.GENERAL || mode == RagMode.TOOL) {
             return load("prompts/general-system.st");
         }
         if (hasContext && contextText != null && !contextText.isBlank()) {

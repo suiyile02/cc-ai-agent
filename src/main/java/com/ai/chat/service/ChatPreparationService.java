@@ -143,20 +143,26 @@ public class ChatPreparationService {
 
     /**
      * 意图路由 + RAG 检索：AGENT 会话不检索；RAG/HYBRID 会话在 autoRoute=true 时按问题内容路由——
-     * 常识/闲聊(mode=GENERAL)跳过检索, 知识库类问题(mode=KB)才执行混合检索。
+     * 工具类(mode=TOOL)/常识闲聊(mode=GENERAL)跳过检索, 知识库类问题(mode=KB)才执行混合检索。
      *
      * @param session     会话
      * @param userMessage 用户消息
      * @return RAG 上下文快照
      */
     private RagContext resolveRagContext(ChatSession session, String userMessage) {
+        // 工具类问题(查订单/查物流等)答案在业务库, 知识库检索查不到——无条件跳过,
+        // 不受 auto-route 开关影响; 模型在干净上下文下自主调 BusinessTools
+        RagMode intent = intentRouter.route(userMessage);
+        if (intent == RagMode.TOOL) {
+            log.debug("工具类问题, 跳过检索(交给模型调工具): {}", userMessage);
+            return new RagContext(List.of(), RagMode.TOOL, RetrievalOutcome.none());
+        }
         boolean ragSession = session.getSessionType() == SessionType.RAG
                 || session.getSessionType() == SessionType.HYBRID;
         if (!ragSession) {
             return RagContext.empty();
         }
-        if (appProperties.getRag().isAutoRoute()
-                && intentRouter.route(userMessage) == RagMode.GENERAL) {
+        if (appProperties.getRag().isAutoRoute() && intent == RagMode.GENERAL) {
             log.debug("RAG 意图路由：通用/常识问题, 跳过检索 sessionId={}", session.getSessionId());
             return RagContext.empty();
         }
