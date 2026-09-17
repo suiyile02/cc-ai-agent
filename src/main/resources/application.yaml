@@ -86,6 +86,7 @@ app:
     auto-route: true                      # 意图路由: 常识/闲聊自动跳过 RAG 检索直接作答; false=每次都检索
     auto-rebuild-index: true              # 启动时自动重建关键词索引(从 Qdrant 读回分块, 不重新向量化)
     # internal-keywords: [...]            # 意图路由关键词表(缺省内置企业词表, 见 AppProperties, 可在此覆盖)
+    # tool-keywords: [...]                # 工具类问题词表(订单/物流/快递等, 缺省见 AppProperties): 命中即跳过检索交给工具调用
     hybrid-enabled: true                  # 混合检索: 语义向量 + 关键词(BM25) 多路召回; false=仅语义检索
     rerank-mode: score                    # 重排: score=分数融合 | llm=大模型重排(失败回退score) | none=仅RRF排序
     retrieve-timeout-ms: 10000            # 检索整段预算(嵌入+向量库+关键词+重排); 超时按"已执行零命中"降级, 避免慢端点把对话拖到上百秒

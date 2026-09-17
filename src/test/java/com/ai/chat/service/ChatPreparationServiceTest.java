@@ -131,4 +131,24 @@ class ChatPreparationServiceTest {
         assertNull(prep.cachedAnswer());
         verify(semanticAnswerCache, never()).isMiss(anyString());
     }
+
+    @Test
+    void toolQuestionSkipsRetrievalAndMarksTool() {
+        when(queryRewriter.rewrite(anyString(), any(), anyString()))
+                .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
+        when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        ChatPreparationService.PreparedChat prep = service.prepare(session(), QUESTION);
+
+        assertEquals(RagMode.TOOL, prep.rag().mode(), "工具类问题审计应标记为 TOOL");
+        assertTrue(prep.rag().hits().isEmpty(), "工具类问题不得返回检索命中");
+        // 工具类问题跳过检索与缓存(答案在业务库, 不在知识库)
+        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        verify(semanticAnswerCache, never()).get(anyString());
+        // 决策审计照常发布(rag_mode=TOOL)
+        verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
+    }
 }

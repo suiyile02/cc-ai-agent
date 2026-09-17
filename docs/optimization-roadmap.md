@@ -147,6 +147,33 @@
 
 ---
 
+## 已完成记录（2026-09-17, 意图路由三态: 规则引擎扩展第一步)
+
+**问题**: 实测"查询订单状态"这类工具问题仍走知识库检索——`internalKeywords` 词表含"订单/单号/物流/快递",
+`KeywordIntentRouter` 命中即判 KB → `resolveRagContext` 执行混合检索, 白费一次 embedding+Qdrant,
+还可能命中无关制度干扰回答; 而答案实际在业务库(`orders` 表, 经 `queryOrder` 工具查询)。
+
+**变更**: `RagMode` 从两态扩为三态, 工具问题在规则层直接分流。
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| 路由三态 | `RagMode` 新增 `TOOL`; `KeywordIntentRouter.route()` 判定顺序: 命中 `app.rag.tool-keywords`(新增, 订单/单号/物流/快递/运单/发货/收货/跟踪) → TOOL; 命中 `internal-keywords` → KB; 否则 GENERAL | 单测 3 例(TOOL 命中/可配置/优先级) |
+| 跳过检索 | `ChatPreparationService.resolveRagContext` 最前判断 TOOL → 返回 `RagContext(mode=TOOL)` 空上下文, **无条件**跳过检索(不受 auto-route 影响) | 单测 `toolQuestionSkipsRetrievalAndMarksTool`: 不调 `retrieveOutcome`、不进缓存、审计发布 |
+| 提示词 | `PromptService.systemFor`: TOOL 与 GENERAL 同走自由问答(general-system.st), 工具由 ChatClient.tools() 独立注入 | — |
+| 缓存隔离 | 工具问题 `route != KB` 天然排除语义缓存(答案随实时数据变, 防串味) | 单测 verify `never().get(...)` |
+
+**运行时实测(全链路)**:
+- 问"帮我查一下订单 SO20260101001 的物流状态" → 回答返回真实数据(已发货/SF1234567890), `sources=[]`(无检索来源),
+  `rag_decision_log: rag_mode=TOOL, retrieval_executed=false`, `tool_call_log` 记录 `queryOrder SUCCESS`。
+- 对照"年假满两年能休几天?" → `rag_mode=KB, retrieval_executed=true`, 正常检索作答。
+- 回归: 单测 126/126 通过(新增 3 例: 路由 TOOL×2 + 前置跳过检索×1)。
+
+**演进规划(未实施, 待用户评估)**: 第二步"意图检索层"——embedding 语义召回替代纯关键词泛化
+(新增 Qdrant `intent_index` 集合 + 意图示例种子 + 相似度阈值, `CompositeIntentRouter` 组合
+规则短路→意图检索→低置信才 LLM Judge 纠偏); 第三步澄清意图(CLARIFY)。详见批次方案。
+
+---
+
 ## 已完成记录（2026-09-16, 流式对话中断故障修复: 思维链静默撞 okhttp 超时)
 
 **故障现场(用户提供日志)**: 会话 `0f6908da...` 第 2 轮, 前置完成(21:13:46)后模型流 60 秒无任何增量,
