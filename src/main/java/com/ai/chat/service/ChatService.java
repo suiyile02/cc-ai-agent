@@ -13,7 +13,6 @@ import com.ai.config.ChatClientProvider;
 import com.ai.session.entity.ChatSession;
 import com.ai.session.service.ChatSessionService;
 import com.ai.session.entity.ChatSession.SessionType;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -23,7 +22,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -50,7 +48,6 @@ public class ChatService {
     private final RagRetriever ragRetriever;
     private final BusinessTools businessTools;
     private final AppProperties appProperties;
-    private final ObjectMapper objectMapper;
 
     /**
      * 同步问答。
@@ -69,7 +66,7 @@ public class ChatService {
             PreparedChat prep = preparation.prepare(session, userMessage);
             if (prep.cachedAnswer() != null) {
                 completion.completeCached(session, userMessage, prep, start);
-                return new ChatResponse(prep.cachedAnswer().content(), prep.cachedAnswer().sources());
+                return new ChatResponse(prep.cachedAnswer().content());
             }
             ChatClient.ChatClientRequestSpec spec =
                     buildSpec(requireChatClient(), session, prep.assembled(), false);
@@ -83,17 +80,16 @@ public class ChatService {
             }
             String answer = extractText(chatResponse);
             Integer usage = usageTotal(chatResponse);
-            List<String> displayed = completion.complete(session, userMessage, prep,
-                    answer, usage, start);
-            return new ChatResponse(answer, displayed);
+            completion.complete(session, userMessage, prep, answer, usage, start);
+            return new ChatResponse(answer);
         } finally {
             guardHandle.close();
         }
     }
 
     /**
-     * 流式问答(SSE 类型化事件流)：CONTENT(正文增量) → SOURCES(引用来源文档名, 非空才发送)；
-     * 结束标记 data:[DONE] 由 Controller 追加。
+     * 流式问答(SSE 类型化事件流)：仅 CONTENT(正文增量) 事件; 结束标记 data:[DONE] 由 Controller 追加。
+     * 引用来源不再下发前端(只落库 chat_log.sources)。
      * 前置阶段在 boundedElastic 上执行; 并发名额在流终止(完成/出错/取消)时释放。
      *
      * @param sessionId   会话 ID(需存在、进行中且归属当前用户)
@@ -116,13 +112,8 @@ public class ChatService {
                 // 语义缓存命中: 以完整回答一次性下发(前端表现为秒回)
                 if (prep.cachedAnswer() != null) {
                     completion.completeCached(session, userMessage, prep, start);
-                    List<ChatStreamEvent> events = new ArrayList<>();
-                    events.add(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT,
+                    return Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT,
                             prep.cachedAnswer().content()));
-                    if (!prep.cachedAnswer().sources().isEmpty()) {
-                        events.add(sourcesEvent(prep.cachedAnswer().sources()));
-                    }
-                    return Flux.fromIterable(events);
                 }
                 return streamAnswer(session, userMessage, prep, start);
             }).onErrorResume(e -> {
@@ -200,7 +191,7 @@ public class ChatService {
     }
 
     /**
-     * 流式收尾：经 completion 统一收尾(记忆/摘要/审计/缓存), 并按需追加 SOURCES 事件。
+     * 流式收尾：经 completion 统一收尾(记忆/摘要/审计/缓存)。来源只落库, 不再下发前端。
      *
      * @param session     会话
      * @param userMessage 用户消息
@@ -208,21 +199,17 @@ public class ChatService {
      * @param collected   已收集的回答全文
      * @param start       请求开始时间戳
      * @param usageHolder 模型 Token 用量
-     * @return SOURCES 事件(无展示来源时为空流)
+     * @return 空流(不再发送来源事件)
      */
     private Flux<ChatStreamEvent> finishStream(ChatSession session, String userMessage,
             PreparedChat prep, StringBuilder collected, long start, int[] usageHolder) {
         long cost = System.currentTimeMillis() - start;
         String answer = collected.toString();
-        List<String> displayed = completion.complete(session, userMessage, prep, answer,
+        completion.complete(session, userMessage, prep, answer,
                 usageHolder[0] > 0 ? usageHolder[0] : null, start);
-        log.info("流式对话完成: session={}, 总耗时 {}ms, 回答 {} 字, 来源 {}",
-                session.getSessionId(), cost, answer.length(), displayed);
-        // 无来源(未命中/工具问答/模型声明未找到)时不发送 SOURCES 事件, 避免前端出现空 []
-        if (displayed.isEmpty()) {
-            return Flux.empty();
-        }
-        return Flux.just(sourcesEvent(displayed));
+        log.info("流式对话完成: session={}, 总耗时 {}ms, 回答 {} 字",
+                session.getSessionId(), cost, answer.length());
+        return Flux.empty();
     }
 
     /**
@@ -312,8 +299,7 @@ public class ChatService {
      * @param chatResponse 模型响应(可空)
      * @return 回答文本(可为空串)
      */
-    private String extractText(org.springframework.ai.chat.model.ChatResponse chatResponse) {
-        if (chatResponse == null || chatResponse.getResult() == null
+    private String extractText(org.springframework.ai.chat.model.ChatResponse chatResponse) {        if (chatResponse == null || chatResponse.getResult() == null
                 || chatResponse.getResult().getOutput() == null) {
             return "";
         }
@@ -334,20 +320,5 @@ public class ChatService {
         }
         Integer total = chatResponse.getMetadata().getUsage().getTotalTokens();
         return total != null && total > 0 ? total : null;
-    }
-
-    /**
-     * 构造 SOURCES 事件(data 为来源文档名 JSON 数组)。
-     *
-     * @param sources 来源文档名列表
-     * @return SOURCES 事件
-     */
-    private ChatStreamEvent sourcesEvent(List<String> sources) {
-        try {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES,
-                    objectMapper.writeValueAsString(sources));
-        } catch (Exception e) {
-            return new ChatStreamEvent(ChatStreamEvent.EventType.SOURCES, "[]");
-        }
     }
 }

@@ -33,7 +33,7 @@ import java.time.Duration;
  */
 @Slf4j
 @Component
-@Primary
+@Primary    //标注为优先实现类（当有多个实现类时，优先选择）
 @RequiredArgsConstructor
 public class CachingIntentRouter implements IntentRouter, IntentCacheAdmin {
 

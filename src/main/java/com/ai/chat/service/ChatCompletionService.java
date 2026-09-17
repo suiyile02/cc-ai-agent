@@ -44,9 +44,8 @@ public class ChatCompletionService {
      * @param answer      回答全文
      * @param usage       模型 Token 用量(可空)
      * @param startMs     请求开始时间戳
-     * @return 展示用来源文档名列表
      */
-    public List<String> complete(ChatSession session, String userMessage,
+    public void complete(ChatSession session, String userMessage,
             ChatPreparationService.PreparedChat prep, String answer, Integer usage, long startMs) {
         memoryService.append(session.getSessionId(), userMessage, answer);
         memoryService.summarizeIfNeededAsync(session.getSessionId());
@@ -67,7 +66,6 @@ public class ChatCompletionService {
                 semanticAnswerCache.putMiss(prep.retrievalQuery());
             }
         }
-        return ChatSourceDisplay.displayedSources(answer, sourceNames);
     }
 
     /**

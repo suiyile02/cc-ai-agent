@@ -109,7 +109,7 @@ com.ai
       `ConversationMemory`←实现 `ConversationMemoryService`、`SemanticCacheAdmin`←实现 `SemanticAnswerCache`)；仅模块内部使用的服务可直接用实现类，不做多余抽象。
     - **对话管线分工:** `chat/service/ChatService` 只做门面(会话校验/并发名额/请求链构建/同步与 SSE 输出编排)；
       前置阶段(改写→缓存查询→路由检索→装配)统一在 `ChatPreparationService`，收尾阶段(记忆→摘要→审计→
-      缓存写入→来源展示口径)统一在 `ChatCompletionService`，来源展示口径在 `ChatSourceDisplay`。
+      缓存写入→来源落库)统一在 `ChatCompletionService`，来源文档名提取与"未找到"判定在 `ChatSourceDisplay`。
       **同步与流式必须共用同一份前置/收尾实现, 禁止在任一条管线里复制业务步骤。**
 
 ### MyBatis-Plus 实体规范 (Entity Conventions)
@@ -157,10 +157,9 @@ com.ai
 ### 对话流水线与 SSE 事件契约
 
 - 流式接口 `/api/ai/chat/stream` 输出**类型化事件**(ServerSentEvent.event 字段)：
-  `content`(正文增量)、`sources`(引用来源**文档名** JSON 数组, 去重保序**且不含扩展名**,
-  仅在有命中且模型未声明"未找到"时发送——空来源不发事件, 避免前端出现空 []);
-  结尾 `data:[DONE]`(无 event 头, 兼容契约)。不推送任何阶段提示/思考流事件(已按需求移除)。
-  提示词(rag-context.st)禁止模型在回答内自行罗列参考来源——来源展示统一由 sources 事件承载。
+  仅 `content`(正文增量); 结尾 `data:[DONE]`(无 event 头, 兼容契约)。
+  不推送阶段提示/思考流/来源事件——**引用来源不再返回前端(2026-09 契约变更)**,
+  只落库 `chat_log.sources`(审计走系统日志接口)。
 - 意图路由关键词表(缺省含年假/报销/放假/节假日/中秋等)决定是否检索; 语料外问题返回"未找到"属正确行为。
 - 前置阶段(改写/检索/装配)在 boundedElastic 执行, 各阶段耗时必须打 INFO 日志(改写 ms/缓存查询 ms/前置 ms/总 ms)——
   端点延迟标定的数据来源, 禁止删除。**缓存命中分支同样要打耗时**(该分支不打"前置阶段完成",

@@ -85,8 +85,8 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ### 3.2 智能对话（需求第 3 章）
 | 方法/路径 | 说明 |
 |---|---|
-| `POST /api/ai/chat` | 同步问答，返回 `{content, sources}` |
-| `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:content`(正文增量) → `event:sources`(引用来源**文档名**, 去重保序且不含扩展名, 无来源时不发) → `data:[DONE]`；不推送阶段提示/思考流 |
+| `POST /api/ai/chat` | 同步问答，返回 `{content}`（引用来源不再返回前端，只落库 `chat_log.sources`） |
+| `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:content`(正文增量) → `data:[DONE]`；不推送阶段提示/思考流/来源事件（引用来源只落库，审计走系统日志接口） |
 | `POST /api/ai/rag/search` | RAG 检索调试（topK/阈值即时调参看命中） |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
@@ -196,7 +196,7 @@ docker-compose.yml          Qdrant+MySQL
 
 > 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory` / `SemanticCacheAdmin`），调用方依赖接口而非实现。
 
-> 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（改写→语义缓存查询→路由检索→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源口径）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
+> 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（改写→语义缓存查询→路由检索→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
 
 ## 6. 已知简化与后续路线（非阻塞项）
 
