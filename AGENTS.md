@@ -143,10 +143,14 @@ com.ai
   后续优化方向: 启动时对 status=2 文档自动重建关键词索引(仅重建索引, 不重新向量化)。
 - 每次对话的意图路由/检索决策自动落库 `rag_decision_log`(见 `/api/system/rag-decisions`)。
 - **意图路由三态(2026-09 规则引擎扩展)**: `RagMode` = KB(知识库检索) / TOOL(工具调用) / GENERAL(闲聊)。
-  - 判定顺序: 命中 `app.rag.tool-keywords`(订单/物流/快递等) → **TOOL, 无条件跳过检索**(答案在业务库,
-    `BusinessTools` 查询, 检索知识库查不到; 且不受 auto-route 开关影响);
+  - 判定顺序: 命中 `app.rag.tool-keywords`(订单/物流/快递/包裹等, 含少量同义词) → **TOOL, 无条件跳过检索**
+    (答案在业务库, `BusinessTools` 查询, 检索知识库查不到; 且不受 auto-route 开关影响);
     命中 `app.rag.internal-keywords` → KB, 检索; 否则 GENERAL, 跳过。
   - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味), 决策审计记 `rag_mode=TOOL, retrieval_executed=false`。
+  - **意图路由结果缓存**(`CachingIntentRouter` @Primary 装饰器): 问题→路由结果缓存 Redis
+    (`rag:intent:v{version}:{sha256}`, TTL 默认 60 分钟)。一致性/时效性: ① TTL 兜底旧词表结果自然过期;
+    ② 改路由词表后调 `DELETE /api/system/intent-cache`(@RequireAdmin)版本自增立即失效;
+    ③ Redis 异常一律按未命中处理走真实路由, 绝不影响对话。
   - 演进规划: 后续可在规则引擎之上叠加"意图检索"(embedding 语义召回, 替代纯关键词泛化)与
     "LLM Judge 纠偏"(低置信二次确认), 见 `docs/optimization-roadmap.md` 路由分层方案。
 

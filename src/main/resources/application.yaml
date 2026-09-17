@@ -112,6 +112,9 @@ app:
     enabled: true
     ttl-hours: 24            # 正缓存有效期 24h; 知识库文档变更会立即全部失效
     miss-ttl-minutes: 30     # 负缓存(穿透防护): 检索零命中的问题 30 分钟内直接返回"未找到", 不再打检索+模型
+  intent-cache:
+    enabled: true
+    ttl-minutes: 60          # 意图路由结果缓存(问题→TOOL/KB/GENERAL); 改路由词表后可 DELETE /api/system/intent-cache 立即失效
   # ============ 并发防护(B3): 单用户并发对话上限 ============
   concurrency:
     max-concurrent-per-user: 3    # 超并发返回 429/6010

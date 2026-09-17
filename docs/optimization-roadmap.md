@@ -157,16 +157,15 @@
 
 | 项 | 变更 | 验收证据 |
 |---|---|---|
-| 路由三态 | `RagMode` 新增 `TOOL`; `KeywordIntentRouter.route()` 判定顺序: 命中 `app.rag.tool-keywords`(新增, 订单/单号/物流/快递/运单/发货/收货/跟踪) → TOOL; 命中 `internal-keywords` → KB; 否则 GENERAL | 单测 3 例(TOOL 命中/可配置/优先级) |
+| 路由三态 | `RagMode` 新增 `TOOL`; `KeywordIntentRouter.route()` 判定顺序: 命中 `app.rag.tool-keywords`(新增, 订单/单号/物流/快递/运单/发货/收货/跟踪/包裹/货运/物流信息) → TOOL; 命中 `internal-keywords` → KB; 否则 GENERAL | 单测 5 例(TOOL 命中/同义词/可配置/优先级) |
 | 跳过检索 | `ChatPreparationService.resolveRagContext` 最前判断 TOOL → 返回 `RagContext(mode=TOOL)` 空上下文, **无条件**跳过检索(不受 auto-route 影响) | 单测 `toolQuestionSkipsRetrievalAndMarksTool`: 不调 `retrieveOutcome`、不进缓存、审计发布 |
 | 提示词 | `PromptService.systemFor`: TOOL 与 GENERAL 同走自由问答(general-system.st), 工具由 ChatClient.tools() 独立注入 | — |
 | 缓存隔离 | 工具问题 `route != KB` 天然排除语义缓存(答案随实时数据变, 防串味) | 单测 verify `never().get(...)` |
+| 意图路由结果缓存 | 新增 `CachingIntentRouter`(@Primary 装饰器) + `IntentCacheAdmin` 契约 + `DELETE /api/system/intent-cache`(@RequireAdmin): 问题→路由结果缓存 Redis(`rag:intent:v{version}:{sha256}`, TTL 默认 60 分钟); 改词表后调接口版本自增立即失效; Redis 异常降级走真实路由 | 单测 6 例(命中/未命中写缓存/异常降级/disabled/版本自增/归一化); 运行时: 订单问题两次 TOOL 一致、管理接口普通用户 5002/管理员版本 0→1、日志 0 Redis 异常 |
 
-**运行时实测(全链路)**:
-- 问"帮我查一下订单 SO20260101001 的物流状态" → 回答返回真实数据(已发货/SF1234567890), `sources=[]`(无检索来源),
-  `rag_decision_log: rag_mode=TOOL, retrieval_executed=false`, `tool_call_log` 记录 `queryOrder SUCCESS`。
-- 对照"年假满两年能休几天?" → `rag_mode=KB, retrieval_executed=true`, 正常检索作答。
-- 回归: 单测 126/126 通过(新增 3 例: 路由 TOOL×2 + 前置跳过检索×1)。
+**运行时实测(全链路)**: 问订单 → TOOL 不检索返回真实物流(已发货/收件人张三); 同问题再问意图缓存命中;
+`DELETE /api/system/intent-cache` 普通用户 403/5002、管理员版本号自增; 年假问题仍 KB(本次命中语义缓存,
+审计按不变式记 `KB+未检索`, 日志确认"语义缓存命中")。回归: 单测 132/132(新增 6+2 例)。
 
 **演进规划(未实施, 待用户评估)**: 第二步"意图检索层"——embedding 语义召回替代纯关键词泛化
 (新增 Qdrant `intent_index` 集合 + 意图示例种子 + 相似度阈值, `CompositeIntentRouter` 组合

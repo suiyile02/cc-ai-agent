@@ -40,6 +40,9 @@ class KeywordIntentRouterTest {
         assertEquals(RagMode.TOOL, router.route("查询订单 A123 的物流状态"));
         assertEquals(RagMode.TOOL, router.route("帮我查一下快递到哪了"));
         assertEquals(RagMode.TOOL, router.route("单号 O2025 发货了吗"));
+        // 内置同义词扩展(治标缓解"换个说法就漏")
+        assertEquals(RagMode.TOOL, router.route("我的包裹到哪了"));
+        assertEquals(RagMode.TOOL, router.route("这个订单的物流信息"));
     }
 
     @Test
