@@ -21,6 +21,7 @@ public class AppProperties {
     private Cors cors = new Cors();
     private LogRetention logRetention = new LogRetention();
     private SemanticCache semanticCache = new SemanticCache();
+    private IntentCache intentCache = new IntentCache();
     private Ingestion ingestion = new Ingestion();
     private Concurrency concurrency = new Concurrency();
 
@@ -86,10 +87,14 @@ public class AppProperties {
          * 工具类问题关键词表({@code app.rag.tool-keywords})：命中即判为 TOOL 类意图——
          * 答案在业务库(经 BusinessTools 查询, 如 orders 表), 知识库检索查不到,
          * 因此跳过检索直接交给模型自主调工具。优先于 {@link #internalKeywords} 判定。
+         *
+         * <p>已内置少量高频同义说法(包裹/货运/物流信息), 缓解"换个说法就漏"；
+         * 但关键词表本质上仍需人工维护(治标), 真正的语义泛化靠后续"意图检索层"(见 roadmap)。
          * 缺省词表见下, 可在 yaml 覆盖。
          */
         private List<String> toolKeywords = List.of(
-                "订单", "单号", "物流", "快递", "运单", "发货", "收货", "跟踪");
+                "订单", "单号", "物流", "快递", "运单", "发货", "收货", "跟踪",
+                "包裹", "货运", "物流信息");
     }
 
     @Data
@@ -275,6 +280,21 @@ public class AppProperties {
         private int ttlHours = 1;
         /** 负缓存有效期(分钟): 检索零命中的问题短时间视为无答案, 防穿透反复打检索+模型 */
         private int missTtlMinutes = 30;
+    }
+
+    /** 意图路由结果缓存(app.intent-cache.*)：问题 → 路由结果(TOOL/KB/GENERAL) 的短 TTL 缓存 */
+    @Data
+    public static class IntentCache {
+        /** 是否启用 */
+        private boolean enabled = true;
+        /**
+         * 缓存有效期(分钟, 默认 60)。
+         *
+         * <p>时效性设计: 路由结果是"这个说法属于哪类", 本身宽松可容忍短时陈旧——
+         * TTL 负责让旧词表结果自然过期; 修改路由词表(关键字/同义词)后可调
+         * {@code DELETE /api/system/intent-cache}(管理员)按版本号立即失效, 不必等 TTL。
+         */
+        private int ttlMinutes = 60;
     }
 
     /** 文档解析防护(app.ingestion.*)：解析超时与解压炸弹预检(A2) */
