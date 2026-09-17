@@ -147,6 +147,22 @@
 
 ---
 
+## 已完成记录（2026-09-17, 对话契约变更: 引用来源不再返回前端)
+
+**变更**: 引用来源只落库 `chat_log.sources`, 不再通过同步响应/SSE 事件返回前端。
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| 同步接口 | `ChatResponse` 删除 `sources` 字段, 同步返回仅 `{content}` | 运行时: 响应 data 字段只剩 `['content']` |
+| 流式接口 | 删除 `sourcesEvent` 与 `EventType.SOURCES/STAGE`, 只发 `content` 事件 | 运行时: 事件类型统计仅 `{'content': 31}` + `[DONE]` |
+| 落库保留 | `ChatCompletionService.complete()` 改 void; `sourceNames`(去重去扩展名)仍经事件写入 `chat_log.sources` | 运行时: `chat_log.sources=["员工手册示例","考勤与假期制度"]` |
+| 清理 | 删除 `ChatSourceDisplay.displayedSources`(前端展示口径无消费方); `declaresNoResult` 保留(缓存写入判断) | 单测同步删该用例 |
+
+**回归**: 单测 131/131; e2e 52/52(多轮#1 断言改为只校验回答内容)。
+**前端影响**: SSE 不再收到 `sources` 事件、同步不再有 `sources` 字段; 来源审计统一走 `/api/system/chat-logs`。
+
+---
+
 ## 已完成记录（2026-09-17, 意图路由三态: 规则引擎扩展第一步)
 
 **问题**: 实测"查询订单状态"这类工具问题仍走知识库检索——`internalKeywords` 词表含"订单/单号/物流/快递",

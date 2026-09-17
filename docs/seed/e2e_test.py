@@ -140,11 +140,12 @@ print('========== 3. 多轮对话(RAG 检索 + 查询改写 + 工具 + 记忆) =
 # 冷缓存基线(段 1 已清空语义缓存), 故本轮全部为"未命中"路径
 st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': '入职满两年的员工有多少天年假？'},
             token=E2E_TOKEN, timeout=120)
-q1_ok = st == 200 and r['data']['content'] and r['data'].get('sources')
+q1_ok = st == 200 and bool(r['data']['content'])
 Q1_QUESTION = '入职满两年的员工有多少天年假？'
 Q1_CONTENT = r['data']['content'] if q1_ok else ''
-check('多轮#1 知识库问答命中来源', q1_ok,
-      f"sources={len(r['data'].get('sources') or [])} (10天)" if q1_ok else f'code={r.get("code")} {r.get("message")}')
+# 来源不再返回前端(只落库 chat_log.sources), 此处只校验回答内容
+check('多轮#1 知识库问答回答正常', q1_ok,
+      f"content={r['data']['content'][:40]}" if q1_ok else f'code={r.get("code")} {r.get("message")}')
 
 st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': '那病假呢？'}, token=E2E_TOKEN, timeout=120)
 check('多轮#2 追问(依赖查询改写)', st == 200 and r['data']['content'], f"content={r['data']['content'][:40] if r.get('data') else r.get('message')}")

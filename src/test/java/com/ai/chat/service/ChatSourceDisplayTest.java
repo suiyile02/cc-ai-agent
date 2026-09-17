@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ChatSourceDisplay} 单元测试：文档名去扩展名、模型声明"未找到"的识别与展示口径。
+ * {@link ChatSourceDisplay} 单元测试：文档名去扩展名去重、模型声明"未找到"的识别。
  */
 class ChatSourceDisplayTest {
 
@@ -36,10 +36,4 @@ class ChatSourceDisplayTest {
         assertFalse(ChatSourceDisplay.declaresNoResult(null));
     }
 
-    @Test
-    void displayedSourcesEmptyWhenNoResultDeclared() {
-        var raw = List.of("员工手册示例");
-        assertTrue(ChatSourceDisplay.displayedSources("知识库中未找到相关信息", raw).isEmpty());
-        assertEquals(raw, ChatSourceDisplay.displayedSources("正常回答", raw));
-    }
 }

@@ -80,7 +80,7 @@ class ChatPipelineTest {
         appProperties = new AppProperties();
         service = new ChatService(sessionService, preparation, completion, concurrencyGuard,
                 chatClientProvider, mock(com.ai.rag.RagRetriever.class), mock(BusinessTools.class),
-                appProperties, new com.fasterxml.jackson.databind.ObjectMapper());
+                appProperties);
     }
 
     private AssembledPrompt assembled;
@@ -163,7 +163,6 @@ class ChatPipelineTest {
         com.ai.chat.dto.ChatResponse r = service.chat(SID, QUESTION, UID);
 
         assertEquals("缓存答案", r.content());
-        assertEquals(List.of("员工手册"), r.sources());
         verify(completion).completeCached(any(), eq(QUESTION), any(), anyLong());
         verify(completion, never()).complete(any(), anyString(), any(), anyString(), any(), anyLong());
     }
@@ -172,44 +171,36 @@ class ChatPipelineTest {
     void syncMissGeneratesAnswerAndStoresCache() {
         when(preparation.prepare(any(), eq(QUESTION))).thenReturn(missPrep());
         givenModelAnswers("生成回答");
-        when(completion.complete(any(), eq(QUESTION), any(), eq("生成回答"), eq(100), anyLong()))
-                .thenReturn(List.of("员工手册"));
 
         com.ai.chat.dto.ChatResponse r = service.chat(SID, QUESTION, UID);
 
         assertEquals("生成回答", r.content());
-        assertEquals(List.of("员工手册"), r.sources());
         verify(completion).complete(any(), eq(QUESTION), any(), eq("生成回答"), eq(100), anyLong());
     }
 
     @Test
-    void streamCacheHitEmitsContentAndSources() {
+    void streamCacheHitEmitsContentOnly() {
         when(preparation.prepare(any(), eq(QUESTION))).thenReturn(hitPrep());
+
+        List<ChatStreamEvent> events = service.chatStream(SID, QUESTION, UID).collectList().block();
+
+        assertEquals(1, events.size());
+        assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(0).type());
+        assertEquals("缓存答案", events.get(0).data());
+        verify(completion).completeCached(any(), eq(QUESTION), any(), anyLong());
+    }
+
+    @Test
+    void streamMissEmitsContentChunksOnly() {
+        when(preparation.prepare(any(), eq(QUESTION))).thenReturn(missPrep());
+        givenModelAnswers("生成回答");
 
         List<ChatStreamEvent> events = service.chatStream(SID, QUESTION, UID).collectList().block();
 
         assertEquals(2, events.size());
         assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(0).type());
-        assertEquals("缓存答案", events.get(0).data());
-        assertEquals(ChatStreamEvent.EventType.SOURCES, events.get(1).type());
-        assertEquals(List.of("员工手册"), jsonListOf(events.get(1).data()));
-        verify(completion).completeCached(any(), eq(QUESTION), any(), anyLong());
-    }
-
-    @Test
-    void streamMissEmitsContentChunksThenSources() {
-        when(preparation.prepare(any(), eq(QUESTION))).thenReturn(missPrep());
-        givenModelAnswers("生成回答");
-        when(completion.complete(any(), eq(QUESTION), any(), eq("你好"), any(), anyLong()))
-                .thenReturn(List.of("员工手册"));
-
-        List<ChatStreamEvent> events = service.chatStream(SID, QUESTION, UID).collectList().block();
-
-        assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(0).type());
         assertEquals("你", events.get(0).data());
         assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(1).type());
-        assertEquals(ChatStreamEvent.EventType.SOURCES, events.get(2).type());
-        assertTrue(events.stream().noneMatch(e -> "[]".equals(e.data())));
         verify(guardHandle, Mockito.atLeastOnce()).close(); // doFinally 释放名额
     }
 
@@ -227,8 +218,6 @@ class ChatPipelineTest {
         ChatResponse first = responseWith("你", 0);
         ChatResponse second = responseWith("好", 50);
         when(streamSpec.chatResponse()).thenReturn(Flux.just(first, second, usageOnly));
-        when(completion.complete(any(), eq(QUESTION), any(), eq("你好"), eq(1047), anyLong()))
-                .thenReturn(List.of("员工手册"));
 
         service.chatStream(SID, QUESTION, UID).collectList().block();
 
@@ -245,14 +234,6 @@ class ChatPipelineTest {
         when(resp.getResult()).thenReturn(null);
         when(resp.getMetadata()).thenReturn(metadata);
         return resp;
-    }
-
-    private List<String> jsonListOf(String json) {
-        try {
-            return new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, List.class);
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
     }
 
     /**

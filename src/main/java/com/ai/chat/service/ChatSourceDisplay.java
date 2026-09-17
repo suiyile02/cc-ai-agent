@@ -5,16 +5,15 @@ import com.ai.chat.dto.SourceVO;
 import java.util.List;
 
 /**
- * 来源展示口径(前端契约)：引用来源只展示**文档名**(去扩展名、去重保序)，
- * 且模型回答声明"知识库未找到"时不展示来源。
+ * 来源文档名提取与"未找到"判定(审计与缓存口径)。
  *
- * <p>审计日志(chat_log.sources)保留真实召回记录, 不经过本类过滤。
+ * <p>引用来源只落库 {@code chat_log.sources} 与语义缓存, 不再返回前端(2026-09 契约变更)。
  */
 public final class ChatSourceDisplay {
 
     /**
      * 语义负缓存命中时的固定回答(与 base-system.st 的"知识库未找到"口径一致,
-     * 文本命中 {@link #declaresNoResult(String)} 故来源展示为空)。
+     * 文本命中 {@link #declaresNoResult(String)} 故不入正缓存)。
      */
     public static final String NO_RESULT_ANSWER = "知识库中未找到相关信息，请确认问题或补充相关资料后重试。";
 
@@ -54,7 +53,7 @@ public final class ChatSourceDisplay {
     }
 
     /**
-     * 判断模型回答是否声明"知识库未找到"(声明时前端不应展示参考来源)。
+     * 判断模型回答是否声明"知识库未找到"(命中时不该写正缓存——"未找到"不是可复用答案)。
      *
      * @param answer 回答全文
      * @return true=回答声明未找到相关信息
@@ -66,16 +65,5 @@ public final class ChatSourceDisplay {
         return answer.contains("知识库中未找到") || answer.contains("未找到相关信息")
                 || answer.contains("未找到相关资料") || answer.contains("知识库未找到")
                 || answer.contains("未检索到相关");
-    }
-
-    /**
-     * 计算前端展示口径的来源列表: 模型声明"未找到"时返回空列表。
-     *
-     * @param answer   回答全文
-     * @param rawNames 真实召回的来源文档名
-     * @return 展示用来源列表
-     */
-    public static List<String> displayedSources(String answer, List<String> rawNames) {
-        return declaresNoResult(answer) ? List.of() : rawNames;
     }
 }
