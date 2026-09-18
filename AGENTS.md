@@ -256,6 +256,13 @@ com.ai
 ### 用户与鉴权
 
 - 注册/登录: `/api/auth/register`、`/api/auth/login`，密码 PBKDF2 加盐哈希(`PasswordHasher`)。
+- **登录限流的降级口径(读写一致, 强制)**: `RedisLoginAttemptLimiter` 读写两侧都必须自行捕获 Redis 异常——
+  读侧 `isLocked`/`remainingLockMs` 异常时按"未锁定/0"放行并打 WARN, 写侧 `fail`/`del` 同样吞异常。
+  **禁止**让 `RedisConnectionFailureException` 冒到 `GlobalExceptionHandler`(否则"限流存储故障"变成"登录接口
+  500/5001", Redis 挂 ⇒ 整站无法登录); 也不引入"故障即拒绝"开关(会把基础设施故障放大成 DoS)。
+  代价(故障期无防护)由 WARN 暴露。另: 进程内实现 `InMemoryLoginAttemptLimiter` 的过期条目由
+  `recordFailure` 在条目数超过 `EVICT_THRESHOLD`(1000) 时顺带清理——**必须保留该门控**, 无阈值则每次
+  失败全表扫, 撞库(大量不同用户名)时退化成 O(n²) 自伤; 阈值不放宽到"每次都扫"。
 - 角色: `sys_user.role`(ADMIN/USER, 默认 USER), 登录时写入 JWT `role` claim; `UserContext.CurrentUser.isAdmin()` 判定。
 - 授权: "管理员或本人"类查询用 `@RequireSelfOrAdmin(userIdParam = "...")` 注解 + `SelfOrAdminAspect` 切面统一强制改写 userId 参数, 数据隔离由 Service 层 userId 过滤完成; 越权/无角色返回 `AUTH_FAILED`(5002, HTTP 403)。
 - 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库文档删除/重处理(影响全公司共享 RAG 内容的操作必须管理员), 新增管理类操作时同样挂载。
@@ -340,7 +347,9 @@ com.ai
 - **开发:** `mvn spring-boot:run`(安全基线) / `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)
 - **测试:** `mvn test`
 - **清理:** `mvn clean`
-- **基础设施:** `docker compose up -d` (Qdrant/MySQL)
+- **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动
+  (默认 `localhost:6379`, 可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖)——登录限流、会话缓存、
+  语义缓存、意图缓存、令牌黑名单都用它; 不可用时各侧按上述降级口径放行, 不影响登录与对话。
 - **建表:** 由启动期 `spring.sql.init` 自动执行(db/ 下脚本)。
 - **测试后必须停后端:** 每次运行/验证结束立即停止后端进程并确认 9090 端口已释放——
   Git Bash 的 `kill` 常杀不死 Windows 进程, 需用

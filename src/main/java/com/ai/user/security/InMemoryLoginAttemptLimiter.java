@@ -16,12 +16,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * 锁定期内直接拒绝(不查库不比对密码, 避免被当作探测口令的旁路)。
  *
  * <p>实现为进程内 Map——单实例有效; 多实例部署时应替换为 Redis 计数(见优化路线 P3)。
- * 条目带最后访问时间, 由 {@link #evictStale(long)} 定期清理防内存增长。
+ * 条目带最后访问时间, 由 {@link #evictStale(long)} 清理防内存增长: 触发点在失败记录路径,
+ * 且仅在条目数超过 {@link #EVICT_THRESHOLD} 时才扫(否则每个新失败用户名/IP 都会永久驻留)。
  */
 @org.springframework.stereotype.Component
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         name = "app.auth.rate-limit-backend", havingValue = "memory")
 public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
+
+    /**
+     * 过期清理阈值：条目数超过该值才在失败记录路径顺带扫一次。
+     * 门控是必要的——不设阈值则每次失败都线性扫描, 撞库(大量不同用户名)时退化成 O(n²) 自伤。
+     */
+    static final int EVICT_THRESHOLD = 1000;
 
     /** 失败记录条目 */
     static final class Attempt {
@@ -38,7 +45,7 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
     private static final long WINDOW_MS = 10 * 60_000L;      // 失败计数窗口 10 分钟
     private static final long LOCK_MS = 5 * 60_000L;         // 锁定 5 分钟
 
-    /** key = username 或 ip:<ip> */
+    /** key = username 或 ip:&lt;ip&gt; */
     private final Map<String, Attempt> attempts = new ConcurrentHashMap<>();
 
     /**
@@ -55,14 +62,30 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
     }
 
     /**
-     * 记录一次失败(两维度各计一次), 达阈值进入锁定。
+     * 记录一次失败(两维度各计一次), 达阈值进入锁定; 条目过多时顺带清理过期条目。
      *
      * @param username 登录名
      * @param ip       来源 IP
      */
     @Override
     public void recordFailure(String username, String ip) {
-        long now = System.currentTimeMillis();
+        recordFailure(username, ip, System.currentTimeMillis());
+    }
+
+    /**
+     * 记录一次失败(指定时钟重载)。
+     *
+     * <p>【仅测试引用】生产路径走 {@link #recordFailure(String, String)}; 本重载供单测构造
+     * "已过期的历史条目"以验证阈值门控的清理确实被失败记录路径触发(否则无法在不等待 15 分钟的情况下复现)。
+     *
+     * @param username 登录名
+     * @param ip       来源 IP
+     * @param now      当前毫秒时间戳
+     */
+    void recordFailure(String username, String ip, long now) {
+        if (attempts.size() > EVICT_THRESHOLD) {
+            evictStale(now);
+        }
         fail(username, now);
         fail(ipKey(ip), now);
     }
@@ -93,7 +116,8 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
     }
 
     /**
-     * 清理过期条目(窗口与锁均已过期的), 防止 Map 无限增长; 由登录路径顺带触发。
+     * 清理过期条目(窗口与锁均已过期的), 防止 Map 无限增长;
+     * 由失败记录路径在条目数超过 {@link #EVICT_THRESHOLD} 时触发。
      *
      * @param now 当前毫秒时间戳
      * @return 清理后的条目数(诊断用)
@@ -101,6 +125,18 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
     int evictStale(long now) {
         attempts.entrySet().removeIf(e ->
                 now - Math.max(e.getValue().windowStartMs, e.getValue().lockedUntilMs) > WINDOW_MS + LOCK_MS);
+        return attempts.size();
+    }
+
+    /**
+     * 当前跟踪的条目数。
+     *
+     * <p>【仅测试引用】用于断言"阈值门控的过期清理"确实生效(内存增长防护无法从登录行为反推:
+     * 过期条目在 {@link #fail(String, long)} 里会被滑动窗口重置, 语义上无害, 但会一直占着 Map)。
+     *
+     * @return Map 中的条目数
+     */
+    int trackedEntries() {
         return attempts.size();
     }
 

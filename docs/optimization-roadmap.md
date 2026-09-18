@@ -147,6 +147,36 @@
 
 ---
 
+## 已完成记录（2026-09-19, 登录限流读侧降级 + 进程内条目清理触发点)
+
+**问题**: `RedisLoginAttemptLimiter` 读写降级口径不一致——写侧 `fail()`/`del()` 有 try/catch 放行,
+而读侧 `isLocked()`/`remainingLockMs()` 裸调 Redis。Redis 是**默认**限流后端
+(`@ConditionalOnProperty(matchIfMissing = true)`), 于是 Redis 不可达时 `AuthService.login:63` 的
+`isLocked` 直接抛异常 → `GlobalExceptionHandler:134-139` 兜底 → **HTTP 500 / 5001**,
+即"限流存储故障"被放大成"整站无法登录"。顺带发现: `InMemoryLoginAttemptLimiter.evictStale()` 无任何生产调用方
+(javadoc 写着"由登录路径顺带触发"却从未接上), 进程内实现的 Map 随用户名/IP 无限增长。
+
+**变更**:
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| 读侧 fail-open | `isLocked` catch → WARN + `false`; `remainingLockMs` catch → 0; 类 javadoc 写明"读写一致、一律放行、不做可拒绝开关(会把基础设施故障放大成整站不可登录)" | 真实探针(临时用例, 用 Lettuce 连无监听的 127.0.0.1:6399): 裸 `hasKey` 抛 `RedisConnectionFailureException: Unable to connect to Redis`(确为 `DataAccessException` 子类 → 会被兜底成 500), 降级后 `isLocked=false`/`remainingLockMs=0`/`recordFailure` 不抛 |
+| 降级契约固化 | 新增 `RedisLoginAttemptLimiterTest` 6 例(Redis down 放行/锁定键仍在→true/TTL 正常读取/写侧吞异常/第 5 次失败写锁定键并删计数的原语义回归) | 单测 6/6 |
+| 进程内条目清理 | `recordFailure` 拆出时钟重载, 条目数 > `EVICT_THRESHOLD`(1000) 时顺带 `evictStale(now)`; **门控是刻意的**: 无阈值则每次失败全表扫, 撞库时退化成 O(n²) 自伤 | 单测 `failurePathEvictsStaleEntriesOnceOverThreshold`(越阈后只剩本轮 2 条) + `noEvictionWhileBelowThreshold`(未越阈不清理) |
+
+**未改动**: `LoginAttemptLimiter` 接口签名、`AuthService`(降级在读侧吸收, 调用方零改动)、
+`@ConditionalOnProperty` 装配口径、`InMemoryLoginAttemptLimiter` 的窗口/锁定语义、`ErrorCode.LOGIN_LOCKED(6006)`、
+`docker-compose.yml`(**本次按用户决定不动**: 本机已有 Redis 占 6379, 纳管会造成端口冲突; 改为在 README §2 与
+AGENTS.md「常用命令」显式登记"Redis 需自行启动 + 不可用时全线降级")。
+**新增测试私有面**: `recordFailure(String,String,long)` 与 `trackedEntries()` 均标注【仅测试引用】
+(内存增长无法从登录行为反推: 过期条目会被滑动窗口重置, 语义无害、只是占内存, 故需条目数观测量)。
+
+**回归**: 单测 **155/155**(147 + 6 + 2), BUILD SUCCESS。
+**待补**: 未做"停 Redis → 打登录接口看 6006 而非 500"的运行时端到端(需带凭据请求, 未获授权);
+读侧异常路径已由上述真实 Lettuce 探针覆盖。
+
+---
+
 ## 已完成记录（2026-09-19, 语义缓存失效维度补全: 模型标识 + 工具轮次闸门)
 
 **问题**: 缓存键只有 `知识库版本 + 问题 SHA-256`, 两处口径不足——
@@ -390,6 +420,9 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
   ——Spring AI 会把工具错误回传模型, 模型据此收尾作答。
 - **改动点**: `ChatService`(toolContext 传计数器)、`ToolCallLogAspect`(计数+超限)、
   `ErrorCode.TOOL_CALL_LIMIT(6009, 429)`。
+  **进度提示(2026-09-19)**: 计数器链路已随"语义缓存工具轮次闸门"落地
+  (`PreparedChat.toolCalls` → `buildSpec` 的 `toolContext["toolCalls"]` → `ToolCallLogAspect` 自增),
+  本项只剩"超限抛错 + 错误码", 工作量下调约一半。
 - **验收**: 诱导多工具场景日志显示第 9 次调用被拒且对话仍正常收尾。
 - **工作量**: 2~3 小时。
 

@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link InMemoryLoginAttemptLimiter} 单元测试：失败累计/锁定/窗口重置/成功清零/双维度。
- * (Redis 实现行为等价, 键/TTL 语义由 RedisLoginAttemptLimiter 承担, 集成环境验证。)
+ * {@link InMemoryLoginAttemptLimiter} 单元测试：失败累计/锁定/窗口重置/成功清零/双维度/条目清理。
+ * (Redis 实现语义等价, 其键与 TTL 口径、降级契约见 {@link RedisLoginAttemptLimiterTest}。)
  */
 class LoginAttemptLimiterTest {
 
@@ -78,5 +78,39 @@ class LoginAttemptLimiterTest {
             limiter.recordFailure("dave", null);
         }
         assertTrue(limiter.isLocked("dave", null));
+    }
+
+    /**
+     * 内存泄漏防护: 条目数越过阈值后, 失败记录路径必须清掉过期条目。
+     *
+     * <p>缺陷原状: {@code evictStale} 无任何生产调用方, 每个出现过的用户名/IP 永久驻留。
+     * 用"25 分钟前"的失败构造已过期条目(窗口 10min + 锁定 5min 均已过)。
+     */
+    @Test
+    void failurePathEvictsStaleEntriesOnceOverThreshold() {
+        long now = System.currentTimeMillis();
+        long stale = now - 25 * 60_000L;
+        for (int i = 0; i <= InMemoryLoginAttemptLimiter.EVICT_THRESHOLD; i++) {
+            limiter.recordFailure("attacker" + i, null, stale);
+        }
+        assertTrue(limiter.trackedEntries() > InMemoryLoginAttemptLimiter.EVICT_THRESHOLD,
+                "前置条件: 已越过清理阈值");
+
+        limiter.recordFailure("fresh-user", null, now);
+
+        assertEquals(2, limiter.trackedEntries(), "过期条目应被本轮失败记录清理, 只剩新用户名+IP 两条");
+    }
+
+    /** 阈值门控: 条目很少时不做线性扫描(否则撞库场景每次失败都全表扫, 退化为 O(n²)) */
+    @Test
+    void noEvictionWhileBelowThreshold() {
+        long now = System.currentTimeMillis();
+        long stale = now - 25 * 60_000L;
+        limiter.recordFailure("eve", null, stale);
+        int before = limiter.trackedEntries();
+
+        limiter.recordFailure("frank", null, now);
+
+        assertEquals(before + 1, limiter.trackedEntries(), "未越阈则不清理, 过期条目仍在");
     }
 }
