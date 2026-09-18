@@ -14,8 +14,13 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * 工具调用日志切面(需求 4.4)：对 @Tool 方法环绕记录入参/出参/耗时/状态到 tool_call_log。
+ *
+ * <p>顺带维护 toolContext 里的本轮工具调用计数(键 {@code toolCalls})——对话收尾阶段据此
+ * 决定是否跳过语义缓存写入。
  *
  * <p>说明：会话 ID 未透传到工具上下文时置空，可后续通过 ToolContext 传递补全。
  */
@@ -57,6 +62,11 @@ public class ToolCallLogAspect {
             }
             if (userId instanceof Number uid) {
                 entry.setUserId(uid.longValue());
+            }
+            // 本轮工具调用计数: 语义缓存写入侧据此判定"回答含实时业务数据", 非零则不缓存
+            // (跨用户共享的缓存一旦存进个性化/实时答案即为串味事故)
+            if (toolContext.getContext().get("toolCalls") instanceof AtomicInteger counter) {
+                counter.incrementAndGet();
             }
         }
 

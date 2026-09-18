@@ -1,6 +1,7 @@
 package com.ai.rag.service;
 
 import com.ai.config.AppProperties;
+import com.ai.config.ChatClientProvider;
 import com.ai.rag.SemanticCacheAdmin;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -19,12 +20,17 @@ import java.util.List;
  * <p>设计要点:
  * <ul>
  *   <li>仅缓存"独立完整"的问题——经过多轮改写(含指代)的问题依赖会话上下文, 不入缓存;</li>
- *   <li>键 = 知识库版本号 + 归一化问题的 SHA-256: 知识库文档上传/删除/重处理会使版本号自增,
- *       旧缓存随 TTL 自然淘汰, 实现知识库变更联动失效;</li>
+ *   <li>键 = 知识库版本号 + 对话模型标识 + 归一化问题的 SHA-256。知识库文档上传/删除/重处理会使
+ *       版本号自增, 旧缓存随 TTL 自然淘汰, 实现知识库变更联动失效; 模型标识使切换对话模型后
+ *       旧模型产出的回答不再被命中(回答风格/质量随模型变化, 与知识库无关, 只能靠键隔离);</li>
  *   <li>精确匹配(归一化后完全一致), 不做向量相似度匹配——相似度匹配存在"相近问题错配答案"的正确性风险;</li>
  *   <li>负缓存(穿透防护): 检索已执行且零命中(非超时降级)的问题写入短 TTL 的"无答案"标记,
  *       短时间内的重复提问直接返回固定"未找到"文案, 不再反复打检索+模型调用;
  *       降级导致的零命中不写负缓存, 避免把瞬时故障误判为无答案;</li>
+ *   <li>缓存条目是<b>跨用户共享</b>的(公司知识库的同一问题对所有人答案一致), 因此写入侧必须排除
+ *       任何含个性化内容的回答——本轮发生过工具调用的回答由收尾阶段拦截不写
+ *       (工具调用计数经 toolContext 透传, 见 ChatService/ChatCompletionService),
+ *       依赖会话历史的改写问题由前置阶段的 cacheEligible 排除;</li>
  *   <li>Redis 异常一律降级为未命中, 绝不影响对话主流程。</li>
  * </ul>
  *
@@ -45,6 +51,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final AppProperties appProperties;
+    private final ChatClientProvider chatClientProvider;
 
     /** 缓存的回答(来源为去扩展名的文档名列表) */
     public record CachedAnswer(String content, List<String> sources) {
@@ -147,7 +154,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
 
     /**
      * 写入负缓存: 检索已执行但零命中(非降级) → 该问题在 missTtlMinutes 内视为无答案。
-     * 键同样带知识库版本号, 文档变更随版本自增自然失效。
+     * 键与正缓存同一命名空间(知识库版本号 + 模型标识), 文档变更与切换模型均随之失效。
      *
      * @param question 原始问题
      */
@@ -178,14 +185,38 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
         return v == null ? 0 : Long.parseLong(v);
     }
 
-    /** 正缓存键: v1:question-sha256 */
+    /**
+     * 正缓存键: {@code rag:answer:v{知识库版本}:m{对话模型}:{问题sha256}}。
+     * 模型维度使"切换对话模型"立即形成新的命名空间(旧模型的回答不再被命中, 随 TTL 淘汰)。
+     */
     private String answerKey(String question, long version) {
-        return ANSWER_KEY_PREFIX + "v" + version + ":" + digest(normalize(question));
+        return ANSWER_KEY_PREFIX + namespace(version) + ":" + digest(normalize(question));
     }
 
-    /** 负缓存键: v1:question-sha256(与正缓存同命名空间规则, 版本号一致) */
+    /**
+     * 负缓存键: 与正缓存同一命名空间规则(版本号 + 模型标识一致), 仅前缀不同。
+     */
     private String missKey(String question, long version) {
-        return MISS_KEY_PREFIX + "v" + version + ":" + digest(normalize(question));
+        return MISS_KEY_PREFIX + namespace(version) + ":" + digest(normalize(question));
+    }
+
+    /**
+     * 键命名空间: {@code v{知识库版本}:m{对话模型}}——两个失效维度(知识库变更、模型变更)合一。
+     *
+     * @param version 当前知识库版本号
+     * @return 命名空间片段(不含前缀)
+     */
+    private String namespace(long version) {
+        return "v" + version + ":m" + modelTag();
+    }
+
+    /**
+     * 模型标识(键的一部分)：只保留 Redis 键友好字符, 其余替换为下划线, 便于运维 grep。
+     *
+     * @return 模型标识, 如 {@code qwen3.8-max}
+     */
+    private String modelTag() {
+        return chatClientProvider.modelLabel().replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     /** 归一化: 去首尾空白 + 小写 + 移除全部空白字符 */

@@ -1,7 +1,7 @@
 package com.ai.chat.service;
 
 import com.ai.chat.event.ChatCompletedEvent;
-import com.ai.config.AppProperties;
+import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
 import com.ai.context.service.QueryRewriter;
 import com.ai.rag.RagMode;
@@ -9,8 +9,6 @@ import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
@@ -20,8 +18,9 @@ import java.util.List;
  * 对话收尾(同步/流式共用)：记忆写回 → 摘要触发 → 完成审计事件 → 语义缓存写入 → 来源展示口径。
  *
  * <p>统一两条管线此前各自实现的"收尾"段。语义缓存的写入条件在此统一判定:
- * 正缓存仅写"未改写的独立问题 + KB 命中 + 回答未声明未找到";
- * 负缓存(穿透防护)仅写"检索已执行且零命中(非降级)"的无答案问题。
+ * 正缓存仅写"未改写的独立问题 + KB 命中 + 回答未声明未找到 + 本轮未调用工具";
+ * 负缓存(穿透防护)仅写"检索已执行且零命中(非降级, 且本轮未调用工具)"的无答案问题。
+ * 缓存条目跨用户共享, 故工具轮次(答案含业务库实时数据)一律排除。
  */
 @Slf4j
 @Service
@@ -31,12 +30,14 @@ public class ChatCompletionService {
     private final ConversationMemory memoryService;
     private final SemanticAnswerCache semanticAnswerCache;
     private final ApplicationEventPublisher eventPublisher;
-    private final ObjectProvider<ChatModel> chatModelProvider;
-    private final AppProperties appProperties;
+    private final ChatClientProvider chatClientProvider;
 
     /**
      * 正常完成收尾：写回记忆/触发摘要/发布完成事件(真实来源)/写语义缓存,
      * 返回前端展示口径的来源列表(模型声明"未找到"时为空)。
+     *
+     * <p>缓存写入前置条件之一: {@code prep.toolCalls()} 为 0——本轮调用过工具时答案含
+     * 业务库实时数据(员工联系方式/订单状态), 而缓存是跨用户共享的, 写入即造成串数据。
      *
      * @param session     会话
      * @param userMessage 用户消息
@@ -54,7 +55,13 @@ public class ChatCompletionService {
                 System.currentTimeMillis() - startMs, prep.rw(), prep.rag().mode(),
                 prep.assembled() == null ? null : prep.assembled().composition(), usage);
         // 写入语义缓存: 正缓存(KB 命中且问题未改写且回答非"未找到") + 负缓存(穿透防护)
-        if (prep.cacheEligible() && prep.rag().mode() == RagMode.KB) {
+        // 本轮调用过工具 → 回答含业务库实时数据(员工联系方式/订单状态), 且缓存条目跨用户共享,
+        // 因此正/负缓存一律不写(否则他人同问即命中这条带他人数据的答案)。
+        int toolCalls = prep.toolCalls().get();
+        if (toolCalls > 0) {
+            log.info("本轮发生 {} 次工具调用, 跳过语义缓存写入: session={}, question={}",
+                    toolCalls, session.getSessionId(), prep.retrievalQuery());
+        } else if (prep.cacheEligible() && prep.rag().mode() == RagMode.KB) {
             if (!prep.rag().hits().isEmpty() && !ChatSourceDisplay.declaresNoResult(answer)) {
                 semanticAnswerCache.put(prep.retrievalQuery(), answer, sourceNames);
             } else if (prep.rag().hits().isEmpty()
@@ -118,22 +125,6 @@ public class ChatCompletionService {
             List<String> sources, long durationMs, QueryRewriter.RewriteResult rw,
             RagMode mode, com.ai.context.ContextComposition composition, Integer totalTokens) {
         eventPublisher.publishEvent(new ChatCompletedEvent(session, userMessage, answer,
-                sources, resolveModelLabel(), durationMs, rw, mode, composition, totalTokens));
-    }
-
-    /**
-     * 解析对话日志用的模型名：优先取 ChatModel 默认选项中的实际模型,
-     * 不可得时回退 app.chat.model-label 配置, 避免 chat_log.model_name 与实际模型漂移。
-     *
-     * @return 模型名标签
-     */
-    private String resolveModelLabel() {
-        ChatModel chatModel = chatModelProvider.getIfAvailable();
-        if (chatModel != null && chatModel.getDefaultOptions() != null
-                && chatModel.getDefaultOptions().getModel() != null
-                && !chatModel.getDefaultOptions().getModel().isBlank()) {
-            return chatModel.getDefaultOptions().getModel();
-        }
-        return appProperties.getChat().getModelLabel();
+                sources, chatClientProvider.modelLabel(), durationMs, rw, mode, composition, totalTokens));
     }
 }

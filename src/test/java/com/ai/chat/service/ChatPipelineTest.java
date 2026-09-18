@@ -19,6 +19,7 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -27,6 +28,8 @@ import org.springframework.ai.document.Document;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -99,7 +102,8 @@ class ChatPipelineTest {
                 new QueryRewriter.RewriteResult(QUESTION, false),
                 new ChatPreparationService.RagContext(List.of(), RagMode.KB, RetrievalOutcome.none()),
                 List.of(), null, true, QUESTION,
-                new SemanticAnswerCache.CachedAnswer("缓存答案", List.of("员工手册")));
+                new SemanticAnswerCache.CachedAnswer("缓存答案", List.of("员工手册")),
+                new AtomicInteger());
     }
 
     private ChatPreparationService.PreparedChat missPrep() {
@@ -108,7 +112,7 @@ class ChatPipelineTest {
                 new ChatPreparationService.RagContext(
                         List.of(new Document("调休相关内容")), RagMode.KB, RetrievalOutcome.none()),
                 List.of(new com.ai.chat.dto.SourceVO("员工手册.md", 4L, 0, "片段", 0.6)),
-                assembled, true, QUESTION, null);
+                assembled, true, QUESTION, null, new AtomicInteger());
     }
 
     private ChatClient.ChatClientRequestSpec spec;
@@ -176,6 +180,25 @@ class ChatPipelineTest {
 
         assertEquals("生成回答", r.content());
         verify(completion).complete(any(), eq(QUESTION), any(), eq("生成回答"), eq(100), anyLong());
+    }
+
+    /**
+     * 工具调用计数器必须经 toolContext 透传给 ToolCallLogAspect:
+     * 切面自增 → 收尾阶段据此禁止把"含业务库实时数据的回答"写进跨用户共享的语义缓存。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void syncPassesToolCallCounterThroughToolContext() {
+        when(preparation.prepare(any(), eq(QUESTION))).thenReturn(missPrep());
+        givenModelAnswers("生成回答");
+
+        service.chat(SID, QUESTION, UID);
+
+        ArgumentCaptor<Map<String, Object>> context = ArgumentCaptor.forClass(Map.class);
+        verify(spec).toolContext(context.capture());
+        assertTrue(context.getValue().get("toolCalls") instanceof AtomicInteger,
+                "toolContext 必须携带本轮工具调用计数器");
+        assertEquals(SID, context.getValue().get("sessionId"));
     }
 
     @Test

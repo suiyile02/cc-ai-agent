@@ -92,15 +92,15 @@
 - 修复过程中误报说明: 首两轮验证 keywordHits=0 为验证脚本与后台重建/异步审计落库的时序竞争假象,
   以等待重建完成后的决定性实验为准。
 
-### P3-3 语义缓存（✅ 已实施 2026-09-16）
-- 实现: `rag/service/SemanticAnswerCache`——键=知识库版本号+归一化问题 SHA-256(精确匹配, 不做向量相似度避免错配);
-  仅缓存"未改写的独立问题 + KB 命中"的回答; 文档上传/删除/重处理 → 版本号自增联动失效;
-  Redis 异常降级为未命中。配置 `app.semantic-cache.*`(enabled/ttl-hours 24h/miss-ttl-minutes 30m)。
+### P3-3 语义缓存（✅ 已实施 2026-09-16; 失效维度补全 2026-09-19）
+- 实现: `rag/service/SemanticAnswerCache`——键=知识库版本号+对话模型标识+归一化问题 SHA-256(精确匹配, 不做向量相似度避免错配);
+  仅缓存"未改写的独立问题 + KB 命中"的回答, 且**本轮调用过工具的轮次不写缓存**(条目跨用户共享, 见 2026-09-19 记录);
+  文档上传/删除/重处理 → 版本号自增联动失效; Redis 异常降级为未命中。配置 `app.semantic-cache.*`(enabled/ttl-hours 24h/miss-ttl-minutes 30m)。
 - **穿透防护(2026-09-16 增补)**: 检索真实执行且零命中(非超时降级)的问题写入短 TTL 负缓存
-  `rag:miss:v{版本}:{摘要}`, 短时间重复提问直接返回固定"未找到"文案, 不再打检索+模型;
+  `rag:miss:v{版本}:m{模型}:{摘要}`, 短时间重复提问直接返回固定"未找到"文案, 不再打检索+模型;
   `RetrievalOutcome` 新增 `degraded` 标记区分"超时降级"与"真零命中", 降级结果不写负缓存。
-- 验收实测: 二次提问 397ms→33ms(回答一致); 上传文档后 kbVersion 自增, 同问题未命中重新生成(6135ms);
-  Redis 键 `rag:answer:v{版本}:{摘要}`、`rag:miss:v{版本}:{摘要}` 与 `rag:kb:version` 落地。
+- 验收实测(2026-09-16, 当时的键格式 `rag:answer:v{版本}:{摘要}`/`rag:miss:v{版本}:{摘要}`): 二次提问 397ms→33ms(回答一致);
+  上传文档后 kbVersion 自增, 同问题未命中重新生成(6135ms); 版本键 `rag:kb:version` 落地。
 - 相同/归一化问题的答案缓存（TTL + 失效策略）；命中省一次完整 LLM 调用。
 - **风险**：制度类内容更新后答案过期，需与知识库版本联动失效。
 
@@ -144,6 +144,34 @@
 
 注: 修复 @EnableScheduling 引入的 Executor 装配歧义(WebAuthConfig 显式 @Qualifier("taskScheduler"))。
 
+
+---
+
+## 已完成记录（2026-09-19, 语义缓存失效维度补全: 模型标识 + 工具轮次闸门)
+
+**问题**: 缓存键只有 `知识库版本 + 问题 SHA-256`, 两处口径不足——
+① 切换对话模型后旧模型的回答在 TTL(24h) 内仍被命中(批次 B 记录的遗留项);
+② 缓存条目跨用户共享, 而"本轮调用过工具"的回答含实时业务数据/个性化内容(订单、员工信息),
+   写入共享键会把 A 用户的数据回答给 B 用户, 且同一个 KB 问题被工具介入过一次后长期污染。
+
+**变更**:
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| 模型名单一事实来源 | `ChatClientProvider.modelLabel()` 统一解析(ChatModel 默认选项 → 回退 `app.chat.model-label` → `unknown`); `ChatCompletionService` 删除自建的 `resolveModelLabel()`(及 `ObjectProvider<ChatModel>`/`AppProperties` 依赖), 对话日志 `chat_log.model_name` 与缓存键同源 | 单测 `ChatCompletionServiceTest`(mock `ChatClientProvider`) + `SemanticAnswerCacheTest` 两用例 |
+| 键补模型维度 | `SemanticAnswerCache` 键由 `rag:answer:v{版本}:{摘要}` → **`rag:answer:v{版本}:m{模型}:{摘要}`**(负缓存 `rag:miss:` 同步); 模型名经 `[^A-Za-z0-9._-]→_` 清洗, 防止键分隔符被模型名破坏 | 单测 `answerKeyIncludesModelAndModelSwitchInvalidates`(精确断言键串; 换 `qwen-new` 后不命中) + `modelTagSanitizesKeySeparators`(`gpt 4:o/lab`→`mgpt_4_o_lab`) |
+| 工具轮次闸门 | `PreparedChat` 新增 `AtomicInteger toolCalls`, 经 `ChatService.buildSpec` 的 `toolContext` 透传, `ToolCallLogAspect` 每次工具调用(含失败)自增; `ChatCompletionService.complete()` 在写正/负缓存前先查计数, >0 则跳过并打 INFO | 单测 `ToolCallLogAspectTest` 4 例(计数自增/失败仍计数/无 toolContext 容忍/多次累加) + `ChatCompletionServiceTest.toolCallTurnDoesNotWrite{Positive,Negative}Cache` + `ChatPipelineTest.syncPassesToolCallCounterThroughToolContext` |
+
+**未改动**: `ChatPreparationService.cacheEligible()` 判断口径未放宽(仍是 enabled && 未改写 && 非 AGENT && route==KB), 工具闸门写在收尾侧;
+`SemanticCacheAdmin`/`DELETE /api/system/semantic-cache` 契约未变; 会话类型维度经论证**未**加入键
+(KB 路由下 RAG/HYBRID 会话的提示词与检索一致, 分区只降命中率不增正确性)。
+**调用方**: `ChatService.chat/chatStream` → `buildSpec(..., prep.toolCalls())` → `ToolCallLogAspect`; `SemanticAnswerCache` 构造新增第 4 参 `ChatClientProvider`(仅 `ChatPreparationService`/`ChatCompletionService` 使用, 无其它实例化点)。
+
+**副作用**: 键格式变更使**存量 Redis 条目自然失效**(旧 `rag:answer:v{n}:{sha}` 不再被读, 随 TTL 淘汰), 无需手工清空。
+
+**回归**: 单测 **147/147** 通过(含 ArchUnit 7 条规则, 新增 `rag → config` 依赖未引入环);
+应用启动成功(`Started AiAgentApplication in 8.011 seconds`, 日志 0 ERROR)→ 新 Bean 图无循环依赖。
+**待补**: 运行时端到端证据(同问两次命中 + 工具轮次不写缓存)需模型可用与带凭据请求, 本轮未执行。
 
 ---
 
@@ -292,8 +320,8 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
 3. **审计可读性**: 文档化不变式——`rag_mode=KB 且 retrieval_executed=false` 只可能是语义缓存命中,
    用于在日志中区分"缓存命中"与"检索了但没命中知识块"。
 
-**遗留(见批次 C/D)**: 语义缓存键未包含对话模型标识(切换模型后旧回答在 TTL 内仍可命中),
-建议与 B1 配额一并处理。
+**遗留(见批次 C/D)**: ~~语义缓存键未包含对话模型标识(切换模型后旧回答在 TTL 内仍可命中)~~
+→ **已闭环(2026-09-19, 见"语义缓存失效维度补全")**; 配额部分仍待与 B1 一并处理。
 
 
 ---
