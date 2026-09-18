@@ -91,11 +91,11 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `POST /api/ai/rag/search` | RAG 检索调试（topK/阈值即时调参看命中） |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + KB 路由"参与，键=知识库版本号+问题 SHA-256；正缓存命中则跳过检索与装配直接返回；负缓存命中则直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + KB 路由"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过检索与装配直接返回；负缓存命中则直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
 
 ### 3.3 Agent 工具（需求第 4 章）
 - `BusinessTools`：`queryEmployee(姓名)`、`queryOrder(订单号)`、`getCurrentTime()`（`@Tool`/`@ToolParam` 描述触发条件与参数）
-- `ToolCallLogAspect`（AOP）自动记录每次工具调用的入参/出参/耗时/状态到 `tool_call_log`；会话与用户经 Spring AI `toolContext` 透传进切面（session_id/user_id 已完整落库）
+- `ToolCallLogAspect`（AOP）自动记录每次工具调用的入参/出参/耗时/状态到 `tool_call_log`；会话与用户经 Spring AI `toolContext` 透传进切面（session_id/user_id 已完整落库），同一 `toolContext` 还携带本轮工具调用计数（`AtomicInteger`），供收尾阶段判断"该轮答案含实时/个性化数据"并跳过语义缓存写入
 
 ### 3.4 会话管理（需求第 5 章）
 | 方法/路径 | 说明 |
@@ -115,7 +115,7 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `GET /api/system/tool-call-logs` | 工具调用日志分页（toolName/status/时间过滤） |
 | `GET /api/system/rag-decisions` | RAG 意图路由决策日志分页（sessionId/userId/ragMode/时间过滤：KB/GENERAL、是否检索、多路命中数、Top-K/阈值/重排模式、耗时） |
 | `GET /api/system/context-logs` | 上下文装配日志分页（各段 token 占用/是否截断/改写结果/耗时） |
-| `DELETE /api/system/semantic-cache` | 清空语义缓存（管理员），返回失效后的知识库版本号；文档变更已自动失效，此接口用于“回答质量异常 / 切换对话模型”的人工强制失效 |
+| `DELETE /api/system/semantic-cache` | 清空语义缓存（管理员），返回失效后的知识库版本号；文档变更已自动失效，切换对话模型也已按键隔离（无需手工清空），此接口用于“回答质量异常”的人工强制失效 |
 
 ### 3.6 异常与降级（需求第 8 章）
 - `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
@@ -210,7 +210,7 @@ docker-compose.yml          Qdrant+MySQL
 - **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 122 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
+- **测试用例**：单元测试 147 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 

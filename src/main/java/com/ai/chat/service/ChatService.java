@@ -24,6 +24,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 智能对话业务(需求第 3 章)——对话编排门面。
@@ -69,7 +70,7 @@ public class ChatService {
                 return new ChatResponse(prep.cachedAnswer().content());
             }
             ChatClient.ChatClientRequestSpec spec =
-                    buildSpec(requireChatClient(), session, prep.assembled(), false);
+                    buildSpec(requireChatClient(), session, prep.assembled(), false, prep.toolCalls());
             org.springframework.ai.chat.model.ChatResponse chatResponse;
             try {
                 chatResponse = spec.call().chatResponse();
@@ -142,7 +143,7 @@ public class ChatService {
     private Flux<ChatStreamEvent> streamAnswer(ChatSession session, String userMessage,
             PreparedChat prep, long start) {
         ChatClient.ChatClientRequestSpec spec =
-                buildSpec(requireChatClient(), session, prep.assembled(), true);
+                buildSpec(requireChatClient(), session, prep.assembled(), true, prep.toolCalls());
         StringBuilder collected = new StringBuilder();
         int[] usageHolder = {0};
         long idleMs = appProperties.getChat().getStreamIdleTimeoutMs();
@@ -236,10 +237,13 @@ public class ChatService {
      * @param session   会话
      * @param assembled 上下文装配结果
      * @param streaming 是否流式调用(仅流式请求携带 stream_options, 避免同步请求被端点拒绝)
+     * @param toolCalls 本轮工具调用计数容器(经 toolContext 透传给 ToolCallLogAspect 自增,
+     *                  收尾阶段据此判断是否禁止写语义缓存)
      * @return 可执行的请求规格
      */
     private ChatClient.ChatClientRequestSpec buildSpec(ChatClient client,
-            ChatSession session, com.ai.context.AssembledPrompt assembled, boolean streaming) {
+            ChatSession session, com.ai.context.AssembledPrompt assembled, boolean streaming,
+            AtomicInteger toolCalls) {
         ChatClient.ChatClientRequestSpec spec = client.prompt()
                 .system(assembled.system())
                 .messages(assembled.messages())
@@ -261,10 +265,12 @@ public class ChatService {
             spec.options(options);
         }
         if (needTools(session)) {
-            // 透传会话与用户到工具上下文: ToolCallLogAspect 据此回填 tool_call_log 的 session_id/user_id
+            // 透传会话与用户到工具上下文: ToolCallLogAspect 据此回填 tool_call_log 的 session_id/user_id;
+            // toolCalls 计数器同经切面自增, 收尾阶段据此判定"回答含实时业务数据"→禁止写语义缓存
             spec.tools(businessTools)
                     .toolContext(Map.of("sessionId", session.getSessionId(),
-                            "userId", session.getUserId()));
+                            "userId", session.getUserId(),
+                            "toolCalls", toolCalls));
         }
         return spec;
     }

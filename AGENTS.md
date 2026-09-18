@@ -186,8 +186,16 @@ com.ai
 - 审计约定(用于区分"缓存命中"与"检索了但没命中知识块"):
   `rag_decision_log(rag_mode=KB, retrieval_executed=false)` **只可能是缓存命中**,
   且该轮**不会**产生 `context_log`(未装配上下文); 未命中的 KB 轮次两者都有。
-- 缓存键 = 知识库版本号 + 归一化问题 SHA-256; 文档上传/删除/重处理自动版本自增失效。
-  切换对话模型不会自动失效(键未含模型标识)——手工清空见下。
+- 缓存键 = 知识库版本号 + 对话模型标识 + 归一化问题 SHA-256, 形如
+  `rag:answer:v{版本}:m{模型}:{摘要}`(负缓存 `rag:miss:` 同命名空间)。两个失效维度:
+  文档上传/删除/重处理 → 版本自增失效; **切换对话模型** → `m{模型}` 段天然形成新命名空间
+  (旧模型的回答不再被命中, 随 TTL 淘汰), 模型名由 `ChatClientProvider.modelLabel()` 单点解析
+  (与 `chat_log.model_name` 同一口径, 禁止在别处再解析一遍)。
+- **缓存条目是跨用户共享的**(公司知识库同一问题答案一致), 因此写入侧必须排除一切含个性化/
+  实时数据的回答: ① 经过改写的提问(`cacheEligible` 已排除); ② **本轮调用过工具**的轮次——
+  答案可能含员工电话/订单状态, 计数经 toolContext 的 `toolCalls`(AtomicInteger) 由
+  `ToolCallLogAspect` 自增, `ChatCompletionService.complete` 据此跳过正/负缓存写入并打 INFO 日志。
+  新增工具或让工具在 KB 轮次参与作答时, **不要**放宽这条闸门。
 - 运维清空: `DELETE /api/system/semantic-cache`(`@RequireAdmin`)→ 返回失效后的版本号。
   契约 `SemanticCacheAdmin`, 实现在 `SemanticAnswerCache`。
 

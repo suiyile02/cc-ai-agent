@@ -22,6 +22,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 对话前置阶段(同步/流式共用)：改写 → 语义缓存查询 → 意图路由/混合检索 → 决策审计 → 装配。
@@ -59,11 +60,17 @@ public class ChatPreparationService {
         }
     }
 
-    /** 前置阶段结果(语义缓存命中时 assembled 为 null, cachedAnswer 非空) */
+    /**
+     * 前置阶段结果(语义缓存命中时 assembled 为 null, cachedAnswer 非空)。
+     *
+     * @param toolCalls 本轮工具调用计数容器(经 toolContext 透传给 ToolCallLogAspect 自增);
+     *                  收尾阶段据此判断"回答是否含实时业务数据", 非零则禁止写语义缓存
+     */
     public record PreparedChat(QueryRewriter.RewriteResult rw, RagContext rag,
                                List<SourceVO> sources, AssembledPrompt assembled,
                                boolean cacheEligible, String retrievalQuery,
-                               SemanticAnswerCache.CachedAnswer cachedAnswer) {
+                               SemanticAnswerCache.CachedAnswer cachedAnswer,
+                               AtomicInteger toolCalls) {
     }
 
     /**
@@ -75,6 +82,8 @@ public class ChatPreparationService {
      */
     public PreparedChat prepare(ChatSession session, String userMessage) {
         long start = System.currentTimeMillis();
+        // 本轮工具调用计数(与"一次问答"同生命周期, 由 ChatService 注入 toolContext)
+        AtomicInteger toolCalls = new AtomicInteger();
         // 查询改写
         QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
                 session.getSessionId(), session.getSessionType(), userMessage);
@@ -125,7 +134,8 @@ public class ChatPreparationService {
                     session.getSessionId(), rewriteMs, cacheMs,
                     System.currentTimeMillis() - start - rewriteMs, rag.hits().size());
         }
-        return new PreparedChat(rw, rag, sources, assembled, cacheEligible, retrievalQuery, cached);
+        return new PreparedChat(rw, rag, sources, assembled, cacheEligible, retrievalQuery, cached,
+                toolCalls);
     }
 
     /**

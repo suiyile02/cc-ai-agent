@@ -49,7 +49,7 @@ spring:
       # 应用层 stream-idle-timeout-ms(20s)会先触发止损, 此值仅作二次保险(同步调用/保护被关闭时)
       timeout: 120s
       chat:
-        model: ${AI_CHAT_MODEL:qwen3.7-flash}
+        model: ${AI_CHAT_MODEL:qwen3.8-max}
         temperature: 0.3
       embedding:
         model: ${AI_EMBEDDING_MODEL:qwen3.7-text-embedding}
@@ -93,7 +93,7 @@ app:
   storage:
     path: ./data/files                    # 上传文件本地存储根目录
   chat:
-    model-label: qwen3.7-flash   # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名(见 ChatService.resolveModelLabel)
+    model-label: qwen3.8-max   # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名(见 ChatClientProvider.modelLabel), 对话日志与语义缓存键共用
     disable-thinking: true       # 关闭主对话思维链: 修复 qwen3 长思考整段静默 >60s 撞 okhttp 超时被重置; 同时大幅提速
     stream-include-usage: true   # 流式请求索取 usage(否则 chat_log.total_tokens 恒为空); 网关不认该字段时置 false
     stream-idle-timeout-ms: 20000  # 流式静默超时: 模型 20s 无增量即主动终止降级(早于 okhttp 60s read timeout)

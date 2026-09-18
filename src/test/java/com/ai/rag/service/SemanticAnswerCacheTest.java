@@ -1,6 +1,7 @@
 package com.ai.rag.service;
 
 import com.ai.config.AppProperties;
+import com.ai.config.ChatClientProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -32,6 +34,7 @@ class SemanticAnswerCacheTest {
     private StringRedisTemplate redis;
     private ValueOperations<String, String> valueOps;
     private AppProperties appProperties;
+    private ChatClientProvider chatClientProvider;
     private SemanticAnswerCache cache;
 
     @BeforeEach
@@ -41,7 +44,9 @@ class SemanticAnswerCacheTest {
         valueOps = mock(ValueOperations.class);
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
         appProperties = new AppProperties();
-        cache = new SemanticAnswerCache(redis, new ObjectMapper(), appProperties);
+        chatClientProvider = mock(ChatClientProvider.class);
+        lenient().when(chatClientProvider.modelLabel()).thenReturn("qwen-test");
+        cache = new SemanticAnswerCache(redis, new ObjectMapper(), appProperties, chatClientProvider);
     }
 
     private void givenVersion(String version) {
@@ -87,6 +92,39 @@ class SemanticAnswerCacheTest {
         when(valueOps.get(contains("v3:"))).thenReturn("{\"content\":\"旧答案\",\"sources\":[]}");
 
         assertNull(cache.get("年假有几天"));
+    }
+
+    /**
+     * 键带对话模型维度: 写入的键形如 {@code rag:answer:v3:m{模型}:{摘要}}, 且切换模型后
+     * 旧模型产出的回答不再被命中(答案风格/质量随模型变化, 与知识库版本无关, 只能靠键隔离)。
+     */
+    @Test
+    void answerKeyIncludesModelAndModelSwitchInvalidates() throws Exception {
+        givenVersion("3");
+        cache.put("年假有几天", "10 天", List.of("考勤与假期制度"));
+        verify(valueOps).set(eq("rag:answer:v3:mqwen-test:"
+                + SemanticAnswerCache.digest(SemanticAnswerCache.normalize("年假有几天"))),
+                anyString(), any(java.time.Duration.class));
+
+        // 同一问题在旧模型(qwen-test)下的缓存, 换模型后读不到
+        String json = new ObjectMapper().writeValueAsString(
+                new SemanticAnswerCache.CachedAnswer("旧模型答案", List.of()));
+        when(valueOps.get(contains(":mqwen-test:"))).thenReturn(json);
+        when(chatClientProvider.modelLabel()).thenReturn("qwen-new");
+
+        assertNull(cache.get("年假有几天"), "切换模型后不应命中旧模型的回答");
+        verify(valueOps).get(contains(":mqwen-new:"));
+    }
+
+    /** 模型名中的非法键字符被替换, 保证 Redis 键可 grep 且不被分隔符破坏 */
+    @Test
+    void modelTagSanitizesKeySeparators() {
+        givenVersion("1");
+        when(chatClientProvider.modelLabel()).thenReturn("gpt 4:o/lab");
+        cache.put("任意", "答案", List.of());
+
+        verify(valueOps).set(startsWith("rag:answer:v1:mgpt_4_o_lab:"), anyString(),
+                any(java.time.Duration.class));
     }
 
     @Test
