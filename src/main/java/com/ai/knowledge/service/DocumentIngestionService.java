@@ -77,7 +77,13 @@ public class DocumentIngestionService {
         } catch (Exception e) {
             log.error("文档 [{}] 入库失败", doc.getFileName(), e);
             doc.setStatus(3); // 失败
-            doc.setErrorMessage(Strings.truncate(e.getMessage(), 500));
+            // 友好化失败原因(不向记录写入原始英文异常/堆栈):
+            // 空文件已在上传入口拦截(FILE_EMPTY), 此处多为"非空但解析不出有效文本"
+            String message = e.getMessage() == null ? "入库失败"
+                    : (e.getMessage().contains("未能从文档中解析出有效文本")
+                            ? "文件内容为空或无法解析出有效文本(可能为纯图片/扫描件)"
+                            : Strings.truncate(e.getMessage(), 500));
+            doc.setErrorMessage(message);
             documentMapper.updateById(doc);
         }
     }

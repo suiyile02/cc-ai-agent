@@ -258,6 +258,9 @@ check('缓存命中在决策日志留痕(KB 且未检索)', st == 200 and len(hi
       f'KB未检索行={len(hit_rows)} (最新: finalHits={hit_rows[0]["finalHits"] if hit_rows else "-"})')
 
 print('========== 7. 知识库管理 ==========')
+# 空文件上传应被友好拒绝(1005), 不产生文档记录
+st, r = upload(E2E_TOKEN, '空文件测试.txt', '')
+check('空文件上传被拒(1005)', st == 400 and r.get('code') == 1005, f'http={st} code={r.get("code")}')
 # 清理历史运行的残留文档(同名项目管理规范), 保证基线干净
 lst_st, lst = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=50&fileName=' + quote('项目管理规范'), token=ADMIN_TOKEN)
 for v in ((lst.get('data') or {}).get('records') or []):

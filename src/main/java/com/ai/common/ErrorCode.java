@@ -15,6 +15,7 @@ public enum ErrorCode {
     FILE_TYPE_NOT_SUPPORTED(1002, "不支持的文件格式，仅支持 PDF/DOCX/TXT/MD", HttpStatus.BAD_REQUEST),
     FILE_TOO_LARGE(1003, "文件大小超过限制（单文件最大 50MB）", HttpStatus.PAYLOAD_TOO_LARGE),
     FILE_SAVE_FAILED(1004, "文件保存失败", HttpStatus.INTERNAL_SERVER_ERROR),
+    FILE_EMPTY(1005, "文件内容为空，无法上传", HttpStatus.BAD_REQUEST),
 
     // 知识库相关
     DOCUMENT_NOT_FOUND(2001, "文档不存在", HttpStatus.NOT_FOUND),

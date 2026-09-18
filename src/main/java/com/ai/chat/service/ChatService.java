@@ -115,6 +115,7 @@ public class ChatService {
                     return Flux.just(new ChatStreamEvent(ChatStreamEvent.EventType.CONTENT,
                             prep.cachedAnswer().content()));
                 }
+                // 正常流程: 调用模型
                 return streamAnswer(session, userMessage, prep, start);
             }).onErrorResume(e -> {
                 log.error("流式对话失败: session={}", sessionId, e);
