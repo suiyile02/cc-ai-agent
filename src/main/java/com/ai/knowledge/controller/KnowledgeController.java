@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 /**
  * 知识库管理接口(需求第 2 章)：上传 / 列表 / 删除 / 重新处理。
  * Controller 只做请求映射与参数绑定，业务逻辑在 {@link KnowledgeDocumentService}。
@@ -39,6 +41,20 @@ public class KnowledgeController {
     public Result<KnowledgeUploadVO> upload(@RequestParam("file") MultipartFile file) {
         return Result.ok("文档已提交处理",
                 documentService.upload(file, UserContext.requireUserId()));
+    }
+
+    /**
+     * 批量上传文档(2.1 增强)：一次提交多个文件, 逐文件独立校验与入库,
+     * 单个失败不影响其它(响应含每文件成功/失败原因)。
+     *
+     * @param files 多文件(multipart 字段名 files, 支持多个同名字段)
+     * @return 统一响应, data 为逐文件结果列表
+     */
+    @PostMapping("/upload/batch")
+    public Result<List<com.ai.knowledge.dto.BatchUploadResultVO>> uploadBatch(
+            @RequestParam("files") MultipartFile[] files) {
+        return Result.ok("批量上传完成",
+                documentService.uploadBatch(files, UserContext.requireUserId()));
     }
 
     /**

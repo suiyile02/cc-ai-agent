@@ -129,6 +129,7 @@ com.ai
 ### 向量化与 RAG 数据规范
 
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- **上传入口校验顺序(禁止跳过)**: 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: 意图路由(KB/GENERAL) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`) -> Top-K 注入。
 - **检索整段受 `app.rag.retrieve-timeout-ms`(默认 10s)保护**: 嵌入与向量库是外部网络调用,

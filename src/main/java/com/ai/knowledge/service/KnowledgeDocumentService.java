@@ -58,15 +58,19 @@ public class KnowledgeDocumentService {
     private final KeywordIndex keywordIndex;
 
     /**
-     * 上传文档：校验格式/大小 → 保存文件 → 建记录(待处理) → 触发异步入库。
+     * 上传文档：校验格式/大小/非空 → 保存文件 → 建记录(待处理) → 触发异步入库。
      *
      * @param file   multipart 文件
      * @param userId 上传人 ID(登录态)
      * @return 上传结果(docId/fileName/status=0)
-     * @throws BusinessException 文件名/格式/大小不合法
+     * @throws BusinessException 文件为空/文件名/格式/大小不合法
      */
     @Transactional
     public KnowledgeUploadVO upload(MultipartFile file, Long userId) {
+        // 判空: 0 字节文件(空文档)直接拒绝, 避免进入解析管线后报"解析不出有效文本"的原始错误
+        if (file == null || file.isEmpty()) {
+            throw new BusinessException(ErrorCode.FILE_EMPTY);
+        }
         String originalName = file.getOriginalFilename();
         if (originalName == null || originalName.isBlank()) {
             throw new BusinessException(ErrorCode.FILE_NAME_EMPTY);
@@ -102,6 +106,43 @@ public class KnowledgeDocumentService {
         semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
         ingestAfterCommit(doc.getId());
         return new KnowledgeUploadVO(doc.getId(), doc.getFileName(), doc.getStatus());
+    }
+
+    /**
+     * 批量上传文档：逐文件走单文件校验与入库, **单个文件失败不影响其它文件**。
+     * 每个文件的结果独立返回(成功 docId / 失败原因), 便于前端逐条提示。
+     *
+     * @param files  多文件(multipart 字段名 files)
+     * @param userId 上传人 ID(登录态)
+     * @return 逐文件上传结果列表(顺序与入参一致)
+     * @throws BusinessException 未选择任何文件
+     */
+    public List<com.ai.knowledge.dto.BatchUploadResultVO> uploadBatch(
+            MultipartFile[] files, Long userId) {
+        if (files == null || files.length == 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "未选择任何文件");
+        }
+        List<com.ai.knowledge.dto.BatchUploadResultVO> results = new java.util.ArrayList<>(files.length);
+        for (MultipartFile file : files) {
+            String displayName = file == null || file.getOriginalFilename() == null
+                    || file.getOriginalFilename().isBlank() ? "未命名文件" : file.getOriginalFilename();
+            try {
+                KnowledgeUploadVO vo = upload(file, userId);
+                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                        displayName, true, vo.docId(), vo.status(), null));
+            } catch (BusinessException e) {
+                // 业务校验失败(空文件/格式/大小等): 记录原因, 继续处理下一文件
+                log.warn("批量上传跳过文件 {}: {}", displayName, e.getMessage());
+                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                        displayName, false, null, null, e.getMessage()));
+            } catch (Exception e) {
+                // 未预期异常: 不向上抛(避免整批失败), 记录通用提示; 完整堆栈只进日志
+                log.error("批量上传单文件失败(跳过): {}", displayName, e);
+                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                        displayName, false, null, null, "系统错误，请稍后重试"));
+            }
+        }
+        return results;
     }
 
     /**

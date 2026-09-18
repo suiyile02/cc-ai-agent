@@ -75,7 +75,8 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ### 3.1 知识库管理（需求第 2 章）
 | 方法/路径 | 说明 |
 |---|---|
-| `POST /api/knowledge/upload`（multipart: file） | 上传文档（PDF/DOCX/TXT/MD ≤50MB），异步入库，上传人=登录用户 |
+| `POST /api/knowledge/upload`（multipart: file） | 上传文档（PDF/DOCX/TXT/MD ≤50MB，**空文件拒绝 1005**），异步入库，上传人=登录用户 |
+| `POST /api/knowledge/upload/batch`（multipart: files 多字段） | **批量上传**：逐文件独立校验与入库，单个失败不影响其它，返回每文件成功/失败原因 |
 | `GET /api/knowledge/documents` | 分页列表（fileName/status/startTime/endTime 过滤） |
 | `DELETE /api/knowledge/documents/{id}` | 删除：按 doc_id 清理向量 → 删除记录 → 删除本地文件 |
 | `POST /api/knowledge/documents/{id}/reprocess` | 重新入库（失败重试） |

@@ -75,11 +75,13 @@ public class ChatPreparationService {
      */
     public PreparedChat prepare(ChatSession session, String userMessage) {
         long start = System.currentTimeMillis();
+        // 查询改写
         QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
                 session.getSessionId(), session.getSessionType(), userMessage);
         String retrievalQuery = rw.query() == null || rw.query().isBlank() ? userMessage : rw.query();
         long rewriteMs = System.currentTimeMillis() - start;
 
+        // 判断查询的问题是否有缓存
         boolean cacheEligible = cacheEligible(session, rw, retrievalQuery);
         long cacheStart = System.currentTimeMillis();
         SemanticAnswerCache.CachedAnswer cached =
@@ -112,9 +114,11 @@ public class ChatPreparationService {
                     session.getSessionId(), userMessage, rewriteMs, cacheMs,
                     System.currentTimeMillis() - start);
         } else {
+            // 意图路由判断是否需要Rag检索 + （t/f）RAG 检索
             rag = resolveRagContext(session, retrievalQuery);
             publishDecision(session, userMessage, rag, System.currentTimeMillis() - start - rewriteMs);
             sources = ragRetriever.toSources(rag.hits());
+            // 装配提示词并进行 token计算
             assembled = contextAssembler.assemble(
                     session, userMessage, rag.hits(), rag.mode(), rw.rewritten());
             log.info("对话前置阶段完成: session={}, 改写 {}ms, 缓存查询 {}ms, 路由+检索+装配 {}ms, 命中 {} 段",
