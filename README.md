@@ -18,9 +18,9 @@
 
 > 架构采用**模块优先**组织：每个业务模块自持 `controller/service/entity/mapper/dto` 子包，模块根包只放对外契约；全局切面统一在 `aspect` 包，业务无关工具在 `common`。完整规范与强制规则见 `AGENTS.md`「项目架构规范」，并由 `LayeredArchitectureTest`(ArchUnit) 自动守护。
 
-## 2. 快速开始（依赖 MySQL + Qdrant）
+## 2. 快速开始（依赖 MySQL + Qdrant + Redis）
 
-前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
+前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）、Redis（**compose 未纳管，需自行启动**，默认 `localhost:6379`，可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖；用于登录限流/会话缓存/语义缓存/意图缓存/令牌黑名单，全部为"异常即降级"设计，不起也能跑通登录与对话，只是失去缓存与限流）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
 
 ```bash
 # Windows PowerShell
@@ -120,6 +120,7 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ### 3.6 异常与降级（需求第 8 章）
 - `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
 - 降级策略：模型不可用 → `AI_NOT_CONFIGURED` 友好提示；向量库不可用 → RAG 自动降级为不注入上下文继续对话；入库失败 → 仅标记 `status=3`，不影响在线对话；删除失败 → 记录日志继续。
+- **Redis 不可用 → 一律降级，绝不影响可用性**：登录限流读写两侧捕获异常按"未锁定"放行（否则基础设施故障会变成登录接口 500/5001）、会话缓存回退 MySQL、语义/意图缓存按未命中、令牌黑名单按 `app.auth.blacklist-fail-open`（默认放行）。代价与开关口径见 `AGENTS.md`「用户与鉴权」。
 
 ## 4. 快速验证示例（curl）
 
@@ -210,7 +211,7 @@ docker-compose.yml          Qdrant+MySQL
 - **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 147 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
+- **测试用例**：单元测试 155 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 
