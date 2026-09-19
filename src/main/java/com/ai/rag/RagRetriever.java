@@ -1,6 +1,6 @@
 package com.ai.rag;
 
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 import org.springframework.ai.document.Document;
 
 import java.util.List;

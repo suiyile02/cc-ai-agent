@@ -1,6 +1,6 @@
 package com.ai.chat.service;
 
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 import com.ai.chat.event.ChatDecisionEvent;
 import com.ai.common.Strings;
 import com.ai.config.AppProperties;
@@ -13,8 +13,7 @@ import com.ai.rag.RagRetriever;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
-import com.ai.session.entity.ChatSession.SessionType;
-import com.ai.system.entity.RagDecisionLog;
+import com.ai.session.SessionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -202,20 +201,13 @@ public class ChatPreparationService {
     private void publishDecision(ChatSession session, String userMessage, RagContext rag, long costMs) {
         var outcome = rag.outcome() == null
                 ? RetrievalOutcome.none() : rag.outcome();
-        RagDecisionLog entry = new RagDecisionLog();
-        entry.setSessionId(session.getSessionId());
-        entry.setUserId(session.getUserId());
-        entry.setUserMessage(Strings.truncate(userMessage, 500));
-        entry.setRagMode(rag.mode().name());
-        entry.setSessionType(session.getSessionType().name());
-        entry.setRetrievalExecuted(rag.mode() == RagMode.KB && outcome.executed());
-        entry.setSemanticHits(outcome.semanticCount());
-        entry.setKeywordHits(outcome.keywordCount());
-        entry.setFinalHits(rag.hits().size());
-        entry.setTopK(appProperties.getRag().getTopK());
-        entry.setSimilarityThreshold(appProperties.getRag().getSimilarityThreshold());
-        entry.setRerankMode(appProperties.getRag().getRerankMode());
-        entry.setDurationMs((int) costMs);
-        eventPublisher.publishEvent(new ChatDecisionEvent(entry));
+        eventPublisher.publishEvent(new ChatDecisionEvent(
+                session.getSessionId(), session.getUserId(),
+                Strings.truncate(userMessage, 500),
+                rag.mode().name(), session.getSessionType().name(),
+                rag.mode() == RagMode.KB && outcome.executed(),
+                outcome.semanticCount(), outcome.keywordCount(), rag.hits().size(),
+                appProperties.getRag().getTopK(), appProperties.getRag().getSimilarityThreshold(),
+                appProperties.getRag().getRerankMode(), costMs));
     }
 }

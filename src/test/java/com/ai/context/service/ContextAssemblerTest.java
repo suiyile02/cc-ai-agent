@@ -6,6 +6,7 @@ import com.ai.context.HistoryContext;
 import com.ai.common.HeuristicTokenCounter;
 import com.ai.prompt.PromptService;
 import com.ai.config.AppProperties;
+import com.ai.session.SessionType;
 import com.ai.session.entity.ChatSession;
 import com.ai.rag.RagMode;
 import com.ai.rag.service.RagRetrievalService;
@@ -52,7 +53,7 @@ class ContextAssemblerTest {
     private ChatSession session() {
         ChatSession s = new ChatSession();
         s.setSessionId("sess-1");
-        s.setSessionType(ChatSession.SessionType.HYBRID);
+        s.setSessionType(SessionType.HYBRID);
         return s;
     }
 

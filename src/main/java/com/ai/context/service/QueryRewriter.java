@@ -4,7 +4,7 @@ import com.ai.common.Timeouts;
 import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.rag.Query;

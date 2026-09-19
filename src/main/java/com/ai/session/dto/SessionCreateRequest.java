@@ -1,6 +1,6 @@
 package com.ai.session.dto;
 
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import jakarta.validation.constraints.Size;
 
 /**

@@ -1,5 +1,6 @@
 package com.ai.session.entity;
 
+import com.ai.session.SessionType;
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
@@ -18,16 +19,6 @@ import java.time.LocalDateTime;
 @Setter
 @TableName("chat_session")
 public class ChatSession {
-
-    /** 会话类型(以字符串 name 持久化到 session_type 列) */
-    public enum SessionType {
-        /** 仅知识库问答(RAG) */
-        RAG,
-        /** 仅工具 Agent(不检索知识库) */
-        AGENT,
-        /** RAG + 工具 */
-        HYBRID
-    }
 
     /** 主键 */
     @TableId(type = IdType.AUTO)

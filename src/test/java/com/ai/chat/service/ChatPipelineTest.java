@@ -12,7 +12,7 @@ import com.ai.rag.RagMode;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import com.ai.session.service.ChatSessionService;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
@@ -111,7 +111,7 @@ class ChatPipelineTest {
                 new QueryRewriter.RewriteResult(QUESTION, false),
                 new ChatPreparationService.RagContext(
                         List.of(new Document("调休相关内容")), RagMode.KB, RetrievalOutcome.none()),
-                List.of(new com.ai.chat.dto.SourceVO("员工手册.md", 4L, 0, "片段", 0.6)),
+                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6)),
                 assembled, true, QUESTION, null, new AtomicInteger());
     }
 
