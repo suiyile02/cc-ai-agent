@@ -33,13 +33,18 @@ class RagRetrievalTimeoutTest {
         return p;
     }
 
-    /** 构造被测服务(向量库由 ObjectProvider 提供, 关键词索引为空实现) */
+    /** 构造被测服务(向量库由 ObjectProvider 提供, 关键词索引为空实现, 重排用默认 score 策略) */
     @SuppressWarnings("unchecked")
     private RagRetrievalService service(VectorStore store, AppProperties props) {
         ObjectProvider<VectorStore> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(store);
-        return new RagRetrievalService(provider, props, mock(KeywordIndex.class),
-                mock(ChatClientProvider.class), new HeuristicTokenCounter());
+        ScoreFusionReranker score = new ScoreFusionReranker();
+        HybridRecaller recaller = new HybridRecaller(provider, mock(KeywordIndex.class), props);
+        RerankStrategyFactory rerankers = new RerankStrategyFactory(
+                List.of(score, new LlmReranker(mock(ChatClientProvider.class), score), new RrfOrderReranker()),
+                props);
+        return new RagRetrievalService(props, recaller, rerankers,
+                new RagContextRenderer(props, new HeuristicTokenCounter()));
     }
 
     @Test
