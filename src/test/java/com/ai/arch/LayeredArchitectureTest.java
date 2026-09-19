@@ -19,7 +19,11 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
  *   <li>entity 为纯数据载体, 不得依赖 service/controller/aspect; </li>
  *   <li>service 禁止依赖 controller; </li>
  *   <li>Controller 禁止直连 Mapper(必须经 Service); </li>
- *   <li>Controller 只能位于各模块的 controller 子包。</li>
+ *   <li>Controller 只能位于各模块的 controller 子包; </li>
+ *   <li>chat 是顶层编排模块: 除自身与 system(消费审计事件)外, 任何模块不得依赖它; </li>
+ *   <li>模块的 dto 子包是内部细节, 不得被其它模块引用(跨模块契约一律放模块根包); </li>
+ *   <li>entity 包内不得定义枚举(被共享的领域枚举属模块根包); </li>
+ *   <li>审计表实体 system.entity 只有 system 与写入切面 aspect 可以触碰。</li>
  * </ul>
  */
 @AnalyzeClasses(packages = "com.ai", importOptions = ImportOption.DoNotIncludeTests.class)
@@ -85,4 +89,31 @@ class LayeredArchitectureTest {
                             "com.ai.chat.service..", "com.ai.knowledge.service..",
                             "com.ai.user.service..", "com.ai.user.security..",
                             "com.ai.session.service..", "com.ai.system.service..");
+
+    /**
+     * chat 是顶层编排模块, 只允许被自身与 system(消费其审计事件)依赖。
+     * 反向依赖(rag→chat 曾发生)会让下层能力模块绑死编排层, 无法独立复用与测试。
+     */
+    @ArchTest
+    static final ArchRule chatShouldNotBeDependedOnFromBelow =
+            noClasses().that().resideOutsideOfPackages("com.ai.chat..", "com.ai.system..")
+                    .should().dependOnClassesThat().resideInAPackage("com.ai.chat..");
+
+    /** 模块的 dto 是内部细节: 跨模块传递的类型必须放模块根包(对外契约位) */
+    @ArchTest
+    static final ArchRule dtosShouldStayInsideTheirModule =
+            noClasses().that().resideOutsideOfPackage("com.ai.chat..")
+                    .should().dependOnClassesThat().resideInAPackage("com.ai.chat.dto..");
+
+    /** 领域枚举不得寄生在 ORM 实体包内(否则共享它概念的人被迫依赖实体与持久化框架) */
+    @ArchTest
+    static final ArchRule enumsShouldNotLiveInEntityPackages =
+            noClasses().that().resideInAnyPackage("..entity..", "..entity")
+                    .should().beEnums();
+
+    /** 审计表实体只有 system 模块与写日志的 aspect 可以触碰 */
+    @ArchTest
+    static final ArchRule auditEntitiesShouldStayInSystem =
+            noClasses().that().resideOutsideOfPackages("com.ai.system..", "com.ai.aspect..")
+                    .should().dependOnClassesThat().resideInAPackage("com.ai.system.entity..");
 }
