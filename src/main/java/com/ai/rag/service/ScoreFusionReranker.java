@@ -18,6 +18,7 @@ class ScoreFusionReranker implements RerankStrategy {
     private static final double SEMANTIC_WEIGHT = 0.6;
     private static final double KEYWORD_WEIGHT = 1 - SEMANTIC_WEIGHT;
 
+    /** 对应配置值 {@code rerank-mode=score}。 */
     @Override
     public String mode() {
         return "score";

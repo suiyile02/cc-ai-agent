@@ -16,22 +16,12 @@ import java.security.MessageDigest;
 import java.time.Duration;
 
 /**
- * 意图路由结果缓存装饰器：把"问题 → 路由结果(TOOL/KB/GENERAL)"缓存在 Redis,
- * 相同/近似(归一化后一致)问题直接命中, 免去每轮关键词匹配与后续语义层的计算。
+ * 意图路由结果缓存装饰器：把"问题 → 路由结果(TOOL/KB/GENERAL)"缓存进 Redis，
+ * 归一化后相同的问题直接复用结论。包在真实路由（{@link KeywordIntentRouter}）外层，
+ * 消费者注入 {@link IntentRouter} 即拿到带缓存版本，故声明 {@code @Primary}。
  *
- * <p>装饰器模式：包在真实路由({@link KeywordIntentRouter}, 后续可换 {@code CompositeIntentRouter})
- * 外层, 路由消费者只需注入 {@link IntentRouter} 即拿到带缓存版本。声明 {@code @Primary} 使
- * {@code IntentRouter} 注入歧义消解为该实现。
- *
- * <p>一致性/时效性设计:
- * <ul>
- *   <li>键 = {@code rag:intent:v{version}:{sha256(归一化问题)}}, 版本号存 Redis
- *       ({@code rag:intent:version}); 调 {@link #evictAll()} 自增版本即整体失效(旧键 TTL 自然清理);</li>
- *   <li>TTL 默认 60 分钟——路由结果是"问题属于哪类"的宽松判断, 短时陈旧可容忍,
- *       改词表后可手动清空立即生效, 不必等 TTL;</li>
- *   <li>Redis 异常一律按未命中处理并走真实路由, 绝不影响对话主流程; 异常日志一律 WARN
- *       (禁止 DEBUG, 生产级别是 info)并经 {@link WarnThrottle} 节流。</li>
- * </ul>
+ * <p>键 = {@code rag:intent:v{version}:{sha256(归一化问题)}}，TTL 默认 60 分钟兜底旧词表；
+ * 改词表后调 {@link #evictAll()} 版本自增立即失效。Redis 异常一律按未命中走真实路由（WARN 节流）。
  */
 @Slf4j
 @Component

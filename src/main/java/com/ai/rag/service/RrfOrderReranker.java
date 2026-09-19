@@ -28,6 +28,7 @@ class RrfOrderReranker implements RerankStrategy {
                 .toList();
     }
 
+    /** 对应配置值 {@code rerank-mode=none}。 */
     @Override
     public String mode() {
         return "none";

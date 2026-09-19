@@ -25,6 +25,7 @@ public class JtokTokenCounter implements TokenCounter {
 
     private final Encoding encoding;
 
+    /** 默认构造器：使用 CL100K_BASE 编码（对 qwen 系为偏保守的近似）。 */
     public JtokTokenCounter() {
         this(Encodings.newDefaultEncodingRegistry().getEncoding(EncodingType.CL100K_BASE));
     }

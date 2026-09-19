@@ -10,26 +10,15 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 
 /**
- * 登录失败限流器(Redis 实现, 默认)：计数与锁定状态存 Redis,
- * 多实例部署下全局统一(进程内实现的各实例计数独立, 爆破者可换实例绕过)。
+ * 登录失败限流器（Redis 实现，默认）：计数与锁定态存 Redis，多实例共享同一份计数
+ * （进程内实现各实例独立，爆破者换实例即可绕过）。
  *
- * <p>键设计:
- * <ul>
- *   <li>{@code login:fail:u:<username>} / {@code login:fail:ip:<ip>} —— 失败计数, TTL=失败窗口(10 分钟);</li>
- *   <li>{@code login:lock:u:<username>} / {@code login:lock:ip:<ip>} —— 锁定标记, TTL=锁定时长(5 分钟)。</li>
- * </ul>
- * 计数达阈值写入锁定键并清零计数; 登录成功删除两维度全部键。
+ * <p>键：{@code login:fail:{u|ip}:<标识>}（TTL=窗口 10min）、{@code login:lock:{u|ip}:<标识>}（TTL=锁定 5min）；
+ * 计数达阈值写锁定键并清计数，登录成功删两维度全部键。
  *
- * <p>降级口径(读写一致): Redis 不可用时**一律放行**——写侧 {@link #recordFailure(String, String)}
- * 与读侧 {@link #isLocked(String, String)}/{@link #remainingLockMs(String, String)}
- * 均捕获异常并打 WARN, 绝不把限流故障变成登录 500(Redis 连接异常若不在此吸收,
- * 会冒到 {@code GlobalExceptionHandler} 兜底 → 5001/HTTP 500, 即"Redis 挂 ⇒ 登录全挂")。
- * 代价是 Redis 故障期间限流暂停(无防护窗口), 由 WARN 日志暴露给运维;
- * 与令牌黑名单的 {@code app.auth.blacklist-fail-open} 相比, 此处不设为可拒绝——
- * 拒绝会把基础设施故障放大成整站无法登录。
- *
- * <p>告警限频：异常一律 WARN(禁止 DEBUG)并经 {@link WarnThrottle} 折成 60 秒一条——
- * 一次失败登录会触发多处降级, 不节流会把日志打爆。
+ * <p>降级口径：读写两侧一律 catch 后**放行**并 WARN 节流。异常若外溢会被全局兜底成 500，
+ * 即"Redis 挂 ⇒ 整站无法登录"；也不提供 fail-closed 开关（同样放大故障）。
+ * 取舍与告警约定见 {@code docs/flow-map.md} §18 与 AGENTS.md「Redis 使用与降级约定」。
  */
 @Slf4j
 @Component
@@ -64,12 +53,24 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
         }
     }
 
+    /**
+     * 记录一次失败（用户名与 IP 两个维度各计一次）。
+     *
+     * @param username 登录名
+     * @param ip       来源 IP
+     */
     @Override
     public void recordFailure(String username, String ip) {
         fail("u", username);
         fail("ip", ip);
     }
 
+    /**
+     * 登录成功：清除两个维度的计数与锁定标记。
+     *
+     * @param username 登录名
+     * @param ip       来源 IP
+     */
     @Override
     public void recordSuccess(String username, String ip) {
         del("u", username);
@@ -93,6 +94,12 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
         }
     }
 
+    /**
+     * 单维度失败计数：首次设窗口 TTL，达阈值写锁定键并清计数。
+     *
+     * @param dim      维度标记（{@code u} 用户名 / {@code ip} 来源 IP）
+     * @param identity 该维度的标识值（可空，空归入 unknown 桶）
+     */
     private void fail(String dim, String identity) {
         String counter = "login:fail:" + dim + ":" + identity;
         try {
@@ -105,11 +112,16 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
                 redis.delete(counter);
             }
         } catch (Exception e) {
-            // Redis 不可用时降级放行(不阻塞登录主流程), 由告警暴露
             degraded.warn("登录限流计数失败(已降级: 本次失败未被计数): {}", e.getMessage());
         }
     }
 
+    /**
+     * 删除单维度的计数键与锁定键。
+     *
+     * @param dim      维度标记（{@code u}/{@code ip}）
+     * @param identity 该维度的标识值
+     */
     private void del(String dim, String identity) {
         try {
             redis.delete("login:fail:" + dim + ":" + identity);
@@ -119,11 +131,13 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
         }
     }
 
+    /** 键剩余 TTL 毫秒（Redis 无此键或无 TTL 时返回 0） */
     private long ttl(String key) {
         Long ttl = redis.getExpire(key);
         return ttl == null || ttl < 0 ? 0 : ttl * 1000L;
     }
 
+    /** 锁定键名（标识为 null 时归入 unknown 桶，避免键名出现 "null" 歧义） */
     private String lockKey(String dim, String identity) {
         return "login:lock:" + dim + ":" + (identity == null ? "unknown" : identity);
     }

@@ -16,30 +16,15 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * 语义缓存(P3-3)：以"归一化问题"为键缓存知识库问答的回答, 命中则跳过检索与模型调用。
+ * 语义缓存（P3-3）：以"归一化问题"为键缓存知识库问答的回答，命中即跳过检索与上下文装配。
  *
- * <p>设计要点:
- * <ul>
- *   <li>仅缓存"独立完整"的问题——经过多轮改写(含指代)的问题依赖会话上下文, 不入缓存;</li>
- *   <li>键 = 知识库版本号 + 对话模型标识 + 归一化问题的 SHA-256。知识库文档上传/删除/重处理会使
- *       版本号自增, 旧缓存随 TTL 自然淘汰, 实现知识库变更联动失效; 模型标识使切换对话模型后
- *       旧模型产出的回答不再被命中(回答风格/质量随模型变化, 与知识库无关, 只能靠键隔离);</li>
- *   <li>精确匹配(归一化后完全一致), 不做向量相似度匹配——相似度匹配存在"相近问题错配答案"的正确性风险;</li>
- *   <li>负缓存(穿透防护): 检索已执行且零命中(非超时降级)的问题写入短 TTL 的"无答案"标记,
- *       短时间内的重复提问直接返回固定"未找到"文案, 不再反复打检索+模型调用;
- *       降级导致的零命中不写负缓存, 避免把瞬时故障误判为无答案;</li>
- *   <li>缓存条目是<b>跨用户共享</b>的(公司知识库的同一问题对所有人答案一致), 因此写入侧必须排除
- *       任何含个性化内容的回答——本轮发生过工具调用的回答由收尾阶段拦截不写
- *       (工具调用计数经 toolContext 透传, 见 ChatService/ChatCompletionService),
- *       依赖会话历史的改写问题由前置阶段的 cacheEligible 排除;</li>
- *   <li>Redis 异常一律降级为未命中, 绝不影响对话主流程; 但降级必须<b>看得见</b>——各 catch 一律
- *       WARN(禁止 DEBUG, 生产级别是 info)并经 {@link WarnThrottle} 折成 60 秒一条,
- *       既不会静默也不会刷屏。</li>
- * </ul>
+ * <p>键 = {@code rag:answer:v{知识库版本}:m{对话模型}:{问题SHA-256}}（负缓存 {@code rag:miss:} 同命名空间）。
+ * 两个失效维度：文档变更→版本自增；切换对话模型→{@code m} 段换命名空间。只做归一化后的精确匹配，
+ * 不做相似度匹配——相近问题错配答案是正确性风险。
  *
- * <p>命中与未命中在审计上可区分: 命中时跳过检索与上下文装配, 因此会留下一条
- * {@code rag_decision_log(rag_mode=KB, retrieval_executed=false)} 但<b>没有</b>对应的
- * {@code context_log} 记录; 未命中(KB)则两者都有。
+ * <p>条目跨用户共享，因此写入侧必须排除含个性化/实时数据的回答（改写问题由前置的 cacheEligible 拦、
+ * 工具轮次由收尾的 toolCalls 计数拦）；Redis 异常一律按未命中降级。
+ * 不变式与降级口径见 {@code docs/flow-map.md} §13/§18 与 AGENTS.md「语义缓存与审计不变式」。
  */
 @Slf4j
 @Component
@@ -181,6 +166,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
         }
     }
 
+    /** 语义缓存总开关（{@code app.semantic-cache.enabled}）；关闭时全部方法零副作用。 */
     private boolean enabled() {
         return appProperties.getSemanticCache().isEnabled();
     }

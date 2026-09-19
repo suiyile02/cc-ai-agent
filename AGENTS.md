@@ -60,7 +60,13 @@ com.ai
 2. **实体/Mapper/DTO 跟模块走**: 表与实体属于唯一模块, 放 `<module>.entity`/`<module>.mapper`, 不再使用全局 `com.ai.entity`/`com.ai.mapper`。
 3. **切面统一管理**: 所有 `@Aspect` 类放 `com.ai.aspect`, 模块内禁止私切身面; 切面只做横切判定(授权/审计), 数据逻辑留在 Service。
 4. **common 业务无关**: 禁止依赖任何业务模块; entity 禁止依赖 service/controller/aspect; service 禁止依赖 controller; Controller 禁止直连 Mapper。
-5. **跨模块调用**: 优先走模块根契约接口或对方 `service` 允许跨模块引用 entity/mapper(现状), 禁止引用其它模块的 `controller`。
+5. **跨模块调用**: 只能引用对方**模块根包**的契约类型(接口/枚举/值对象)。默认**禁止**引用其它模块的
+   `entity`/`mapper`/`dto`: 需要跨模块传递的类型应由生产方放到自己的模块根包, 或由消费方定义值对象
+   (例: `ChatDecisionEvent` 携带算好的值, 不直接传 `system.entity.RagDecisionLog`)。
+   已知妥协: `session.entity.ChatSession` 被 chat/context/prompt 当作会话身份载体直接引用(共 9 处),
+   新增这类引用必须先评估能否改为在 `session` 根包提供契约视图, 不得默默扩散。
+   已由 `LayeredArchitectureTest` 强制的部分: 非 chat/system 不得依赖 chat; 外部不得依赖 `chat.dto`;
+   entity 包内不得定义枚举; `system.entity` 只允许 system 与 aspect。
 6. **架构守护**: `LayeredArchitectureTest`(ArchUnit) 固化以上规则, 违反即测试失败; 修改包结构必须同步更新该测试与本文档。
 7. **流程与方法的现场文档**: `docs/flow-map.md`(全部执行路径流程图 + 降级总表 + 键空间) 与
    `docs/method-map.md`(逐类逐方法的作用与调用方 + 状态标注汇总) 是改代码前的定位入口。
@@ -90,12 +96,39 @@ com.ai
 
 - **存量代码:** 除非任务需要，不做大规模重构。
 - **清理:** 替换旧实现后立即删除废弃类/import。
-- **风格:** 统一 Lombok + 构造器注入 (`@RequiredArgsConstructor`)，禁止字段注入；**每个方法都要写注释说明作用与参数内容(含 @param/@return/@throws)**。
+- **风格:** 统一 Lombok + 构造器注入 (`@RequiredArgsConstructor`)，禁止字段注入；注释密度与内容边界见下方「### 5. 注释与类型选型」。
 
 ### 4. 目标驱动 (Goal-Driven Execution)
 
 - **RAG 验证:** 目标应是"针对查询 X 召回 Top-K 相关文档且分数达标"，而非空谈"实现 RAG"。
 - **验证:** 优先补单元测试/冒烟脚本验证检索与落库结果。
+
+### 5. 注释与类型选型 (强制)
+
+**注释密度**：类摘要 ≤8 行，只写"是什么 + 必须知道的不变式"。方法的**设计论证、事故复盘、
+方案对比**不得写在 javadoc 里——写进 `docs/flow-map.md`(流程/降级) 或
+`docs/optimization-roadmap.md`(取舍/演进)，代码里只留一行指针。判据：注释比方法体长即可疑。
+
+**禁止**：同一成员上堆叠两段 javadoc（状态标注须并入摘要段）；`@param x 参数 x` 式同义反复；
+把已在文档里的背景整段抄进代码。
+
+**覆盖范围**：所有类必须有类级 javadoc；`public`/`protected` 方法必须有摘要并按需给
+`@param`/`@return`/`@throws`；包私有与 private 方法只需一行摘要（说清它保证什么），
+无参数语义可省略标签。**豁免**（写了只是噪音，允许不写）：私有防实例化构造器
+`private X() {}`、`main` 启动入口、Lombok/record 生成的访问器、`@Override` 且语义已由接口说明的方法。
+状态标注统一用 `【未被引用】/【仅测试引用】/【已被替代】` 前缀，写在同一段 javadoc 内。
+
+**record 与 Lombok 类的选型判据**：
+
+| 情形 | 选择 | 理由 |
+|---|---|---|
+| 映射数据库表的实体 | Lombok 类（`@TableName` + `@Getter/@Setter`） | MyBatis-Plus 结果映射需要无参构造与可写字段；实体还要承载状态迁移（如 `status 0→1→2/3`）与审计填充 |
+| 跨边界的**数据快照**：HTTP 出入参、跨模块契约、领域事件、方法的多值返回 | `record` | 构造后不可变：异步审计与并发管线（boundedElastic/虚拟线程）不会读到被中途改写的值；`equals/hashCode/toString` 免样板；缺字段即编译期暴露 |
+| 需要部分更新、字段超过 ~8 个、或被继承 | 普通类 | record 加字段等于改构造器签名（所有构造点编译失败），且不能被继承 |
+
+实体禁止包含业务方法；record 允许**无状态派生**方法（如 `effectiveNickname()`、`withFused()`），
+这不破坏不可变性。对外契约 record 的字段增删属破坏性变更（Jackson 按构造器绑定），必须同步调用方与文档。
+现有分布：42 个 record 全部是 DTO/契约/事件/复合返回值，11 个 `@TableName` 实体全部是 Lombok 类——不要反过来。
 
 ---
 
@@ -302,7 +335,9 @@ com.ai
 
 - 所有 Controller 返回 `Result<T>` 或 `Result<PageResult<T>>`，禁止直接返回 Entity。
 - `Result` 结构: `{code, message, data, timestamp}`；`PageResult`: `{records,total,page,size,totalPages}`。
-- 错误码集中定义在 `ErrorCode`(1001~5002, 用户相关 6001~6005)，业务异常抛 `BusinessException(ErrorCode, message)`，由 `GlobalExceptionHandler` 统一兜底，禁止向客户端泄漏堆栈。
+- 错误码集中定义在 `ErrorCode`（按枚举实测）：文件与上传 1001~1005、文档 2001~2002、会话与检索 3001~3002、
+  参数 4001、系统与 AI 5001~5004（含 5002 授权/越权）、用户与登录 6001~6006、并发限制 6010（6007~6009 预留）。
+  业务异常抛 `BusinessException(ErrorCode, message)`，由 `GlobalExceptionHandler` 统一兜底，禁止向客户端泄漏堆栈。
 
 ### Spring AI & RAG 提示词
 
