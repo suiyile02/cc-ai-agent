@@ -140,15 +140,23 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
         return attempts.size();
     }
 
+    /** 该键是否处于锁定期 */
     private boolean locked(String key, long now) {
         return remaining(key, now) > 0;
     }
 
+    /** 该键剩余锁定毫秒数（无记录或未锁定为 0） */
     private long remaining(String key, long now) {
         Attempt a = attempts.get(key);
         return a == null ? 0 : Math.max(0, a.lockedUntilMs - now);
     }
 
+    /**
+     * 单维度失败累计：窗口过期则重开计数，达阈值转锁定并清零计数（解锁后重新累计）。
+     *
+     * @param key 维度键（用户名原值或 {@link #ipKey(String)}）
+     * @param now 当前毫秒时间戳
+     */
     private void fail(String key, long now) {
         attempts.compute(key, (k, a) -> {
             if (a == null || now - a.windowStartMs > WINDOW_MS) {
@@ -157,12 +165,13 @@ public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
             a.failures++;
             if (a.failures >= MAX_FAILURES) {
                 a.lockedUntilMs = now + LOCK_MS;
-                a.failures = 0; // 锁定后重置计数, 解锁后重新累计
+                a.failures = 0;
             }
             return a;
         });
     }
 
+    /** IP 维度键（null 归入 unknown 桶，与用户名维度区隔，防键相撞） */
     private static String ipKey(String ip) {
         return "ip:" + (ip == null ? "unknown" : ip);
     }

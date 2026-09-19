@@ -33,28 +33,6 @@ public class RagRetrievalService implements RagRetriever {
     private final RagContextRenderer renderer;
 
     /**
-     * 检索能力是否可用（向量库或关键词索引任一存在）。
-     *
-     * @return true=可检索
-     */
-    @Override
-    public boolean available() {
-        return recaller.available();
-    }
-
-    /**
-     * 按配置的默认 Top-K / 阈值检索。
-     *
-     * @param query 检索问题
-     * @return 重排后的命中文档（可能为空）
-     */
-    @Override
-    public List<Document> retrieve(String query) {
-        return retrieve(query, appProperties.getRag().getTopK(),
-                appProperties.getRag().getSimilarityThreshold());
-    }
-
-    /**
      * 按指定 Top-K / 阈值检索（检索调试接口使用）。
      *
      * @param query     检索问题
@@ -132,17 +110,6 @@ public class RagRetrievalService implements RagRetriever {
                 .limit(topK)
                 .map(RetrievalCandidate::toDocument)
                 .toList();
-    }
-
-    /**
-     * 组装注入 LLM 的上下文文本（不限 Token，仅受字符上限约束）。
-     *
-     * @param hits 最终命中文档
-     * @return 上下文串；无命中返回空串
-     */
-    @Override
-    public String buildContext(List<Document> hits) {
-        return buildContext(hits, 0);
     }
 
     /**

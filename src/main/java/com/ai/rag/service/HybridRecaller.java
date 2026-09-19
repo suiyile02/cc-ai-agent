@@ -43,15 +43,6 @@ class HybridRecaller {
     private final AppProperties appProperties;
 
     /**
-     * 是否具备任一路检索能力（向量库存在或关键词索引非空）。
-     *
-     * @return true=可检索
-     */
-    boolean available() {
-        return vectorStoreProvider.getIfAvailable() != null || !keywordIndex.isEmpty();
-    }
-
-    /**
      * 执行两路召回。是否启用关键词路由 {@code app.rag.hybrid-enabled} 决定；
      * 关键词召回宽度取 {@code max(topK*2, 10)}，把收敛交给后续重排。
      *

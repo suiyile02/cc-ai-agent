@@ -438,27 +438,34 @@ SSE 契约：只有 `event: content` 与结尾 `data:[DONE]`。阶段提示、�
 
 ```mermaid
 flowchart TD
-    R0["retrieveOutcome(query, topK, threshold)"] --> R1{"hybrid-enabled?"}
-    R1 -->|否| R2["仅语义向量路"]
-    R1 -->|是| R3["Timeouts.call(doRetrieve, app.rag.retrieve-timeout-ms=10s)"]
-    R3 --> R4["searchVector: VectorStore.similaritySearch（嵌入 + Qdrant，阈值过滤）"]
-    R3 --> R5["searchKeyword: KeywordIndex.search BM25<br/>轻量分词=英文词元 + 中文连续二元组"]
-    R4 --> R6["RRF 融合 k=60：1/(60+rank) 累加，两路都命中者上浮"]
+    R0["RagRetrievalService.retrieveOutcome(query, topK, threshold)"] --> R3["Timeouts.call(doRetrieve, app.rag.retrieve-timeout-ms=10s)"]
+    R3 --> R1{"向量库 / 关键词索引 至少一路可用?"}
+    R1 -->|否| R2["none()：本轮未执行检索"]
+    R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant，阈值过滤）"]
+    R1 -->|是| R5["HybridRecaller.keywordHits（仅 hybrid-enabled 且索引非空）<br/>KeywordIndex.search BM25；宽度 max(topK*2,10)"]
+    R4 --> R6["RrfFuser.fuse：按 doc_id:chunk_index 去重 → RRF(k=60) 名次融合"]
     R5 --> R6
-    R6 --> R7{"rerank-mode"}
-    R7 -->|score 默认| R8["分数融合：语义相似度 ×0.6 + BM25 归一化 ×0.4"]
-    R7 -->|llm| R9["大模型重排候选 ⚠ 失败回退 score"]
-    R7 -->|none| R10["仅按 RRF 顺序"]
-    R8 --> R11["toFinal：统一挂最终 score 与元数据"]
-    R10 --> R11
-    R9 --> R11
-    R11 --> R12["RetrievalOutcome(documents, semanticHits, keywordHits, ...)"]
-    R3 -->|"超时/异常 ⚠"| R13["executedEmpty()：记为『已执行、零命中』<br/>★ 保持审计不变式：KB+未执行=false 只可能是缓存命中"]
-    R13 --> R14["降级为不注入上下文继续对话"]
-    R12 --> R15{"documents 为空 且 真实执行?"}
-    R15 -->|是| R16["可写语义负缓存 putMiss（degraded 时不写）"]
-    R15 -->|否| R17["buildContext(hits, ragTokenBudget) 按相关度累加，受 Token 与字符上限双约束"]
+    R6 --> R7{"RerankStrategyFactory.current() ← rerank-mode"}
+    R7 -->|score 默认| R8["ScoreFusionReranker：语义 ×0.6 + BM25 归一 ×0.4；单路命中直取该路分"]
+    R7 -->|llm| R9["LlmReranker：模型排 ≤10 条候选<br/>⚠ 模型不可用/输出不可解析/异常 → 回退 ScoreFusionReranker"]
+    R7 -->|none| R10["RrfOrderReranker：保持 RRF 顺序，赋相对顺位分（首位 1.0）"]
+    R7 -->|"未知值 ⚠"| R11["WARN 后按 score 处理"]
+    R8 --> R12["RetrievalCandidate.toDocument：挂 score 与 metadata.rerank_score"]
+    R9 --> R12
+    R10 --> R12
+    R11 --> R8
+    R12 --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
+    R3 -->|"超时/异常 ⚠"| R14["executedEmpty()：记为『已执行、零命中』<br/>★ 保持审计不变式：KB+未执行=false 只可能是缓存命中"]
+    R14 --> R15["降级为不注入上下文继续对话"]
+    R13 --> R16{"hits 为空 且 真实执行?"}
+    R16 -->|是| R17["收尾侧可写语义负缓存 putMiss（degraded 时不写）"]
+    R16 -->|否| R18["RagContextRenderer.render(hits, ragTokenBudget)<br/>Token 预算 + 字符上限双重约束 + 资料区起止标记（注入防护 P2-2）"]
 ```
+
+**职责边界（2026-09 拆分）**：`RagRetrievalService` 只做编排与限时降级（176 行，原 564 行）；
+召回在 `HybridRecaller`、融合在 `RrfFuser`、重排在 `RerankStrategy` 的三个实现、渲染在
+`RagContextRenderer`，元数据口径集中在 `DocumentMeta`。接入真实重排模型（roadmap D3）＝新增一个
+`RerankStrategy` 实现，`RerankStrategyFactory` 按 `mode()` 自动收录，编排层零改动。
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
 
@@ -546,7 +553,7 @@ sequenceDiagram
 flowchart TD
     E1["ChatPreparationService.publishDecision"] --> Q1["ChatDecisionEvent"]
     E2["ChatCompletionService.publishCompleted"] --> Q2["ChatCompletedEvent"]
-    Q1 --> L1["ChatAuditListener.onDecision @Async(auditExecutor)"]
+    Q1 --> L1["ChatAuditListener.onDecision @Async(auditExecutor)<br/>toEntity(): 值对象 → RagDecisionLog(实体只出现在 system)"]
     Q2 --> L2["ChatAuditListener.onChatCompleted @Async(auditExecutor)"]
     L1 --> T1[("rag_decision_log：rag_mode / retrieval_executed /<br/>semantic·keyword·final 命中数 / topK / threshold / rerank / costMs")]
     L2 --> T2[("chat_log：question/answer/sources JSON/model/total_tokens/cost_ms")]
@@ -728,7 +735,7 @@ flowchart LR
 |---|---|---|---|
 | 1 | 上传与批量上传端点**只有 JWT**，`KnowledgeController` 上无任何 `@Require*` | 知识库是全公司共享语料，任何登录用户都能写入并消耗 Embedding 成本；`AGENTS.md` 只说"删除/重处理已挂 @RequireAdmin"（确实如此），未覆盖上传 | 若产品定位是"仅管理员维护语料"，给 `upload`/`uploadBatch` 加 `@RequireAdmin`；否则至少落地 roadmap A3 上传配额 |
 | 2 | `@RequireAdmin` 挂在 **Service 方法**（`KnowledgeDocumentService:183,204`），其它管理动作挂在 Controller（`SystemController:153,165`） | 风格不一致（切面对两者都生效，功能无差异），但从 Controller 看不出鉴权 | 统一到 Controller 层，或在 `AGENTS.md` 明确"允许挂 Service" |
-| 3 | `AGENTS.md` 错误码行写"1001~5002, 用户相关 6001~6005" | 实际已有 1005 / 5004 / 6006 / 6010 | 校准该行 |
+| 3 | ~~`AGENTS.md` 错误码行写"1001~5002, 用户相关 6001~6005"~~ | 与实际枚举不符 | **已校准（本批）**：按 `ErrorCode` 枚举实测重写 |
 | 4 | `README` §6 曾写"本期仅后端，前端为下一迭代" | 独立仓库 `ai-agent-web` 已存在（Vue3+Vite+Pinia，无组件库） | 本次已改为实况描述 |
 | 5 | `README` 写 e2e"52 项断言" | 脚本里 `check(` 出现 55 处（含定义），roadmap 09-18 记录为 53 | 未跑 e2e 前不下结论，待实测后统一数字 |
 

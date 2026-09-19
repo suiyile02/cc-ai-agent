@@ -28,6 +28,7 @@ class LlmReranker implements RerankStrategy {
     private final ChatClientProvider chatClientProvider;
     private final ScoreFusionReranker fallback;
 
+    /** 对应配置值 {@code rerank-mode=llm}。 */
     @Override
     public String mode() {
         return "llm";

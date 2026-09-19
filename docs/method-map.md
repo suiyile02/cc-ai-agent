@@ -118,29 +118,32 @@
 ### 模块根（对外契约）
 | 成员 | 作用 |
 |---|---|
-| `RagRetriever`（接口） | `available()` †、`retrieve(query)` †、`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits)` †、`buildContext(hits,tokenBudget)`、`toSources(hits)` |
+| `SourceVO`（record，**自 `chat/dto` 迁入**） | 检索输出的来源表达：`fileName`/`documentId`/`chunkIndex`/`snippet`/`score`；生产方定义、chat 消费 |
+| `RagRetriever`（接口） | 仅保留有调用方的四个方法：`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits,tokenBudget)`、`toSources(hits)`（原 `available()`/单参 `retrieve`/无预算 `buildContext` 无调用方，已删除） |
 | `IntentRouter` | `route(message)` → `RagMode` |
 | `RagMode` | `KB`/`TOOL`/`GENERAL` 三态 |
-| `RetrievalOutcome`（record） | 命中集合 + `semanticHits`/`keywordHits`/`finalHits` + `degraded` 标记；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
+| `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
 | `SemanticCacheAdmin` / `IntentCacheAdmin` | `evictAll()`：跨模块运维清空契约 |
 
-### `RagRetrievalService`（实现 `RagRetriever`）
-| 方法 | 作用 | 调用方 |
-|---|---|---|
-| `retrieveOutcome(query,topK,threshold)` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()` | 前置 |
-| `doRetrieve(...)` | 实际执行体：语义路 + 关键词路 → RRF → 重排 | 内部 |
-| `searchVector(store,query,topK,threshold)` | 向量路（`VectorStore.similaritySearch`，阈值过滤） | 内部 |
-| `searchKeyword(query,topK)` | BM25 路（`KeywordIndex.search`；索引空则跳过） | 内部 |
-| `toDocument(hit)` | 关键词命中 → 与语义命中同构的 `Document`（带 `doc_id/file_name/chunk_index/keyword_score`） | 内部 |
-| `fuse(...)` / `rrf(...)` | RRF(k=60) 融合两路排名并按 `doc_id:chunk_index` 去重 | 内部 |
-| `scoreFusion(ranked)` | `score` 模式重排：语义 0.6 + BM25 归一 0.4 | 内部 |
-| `llmRerank(...)` | `llm` 模式：调模型排序候选，失败回退 score | 内部 |
-| `toFinal(c)` | 候选 → 注入文档（挂最终 score） | 内部 |
-| `similarityOf` / `keywordScoreOf` / `chunkKeyOf` / `fileNameOf` / `docIdOf` / `chunkIndexOf` / `scoreOf` / `snippetOf` | 元数据与分数读取小工具 | 内部 |
-| `buildContext(hits,tokenBudget)` | 按相关度累加拼上下文，受 Token 与字符上限双约束 | 装配器 |
-| `toSources(hits)` | 命中 → `SourceVO`（文件名/片段/分数/docId） | 前置（来源与审计） |
-| `retrieve(query,topK,threshold)` | 兼容入口（检索调试接口） | 门面 `debugRetrieve` |
-| `available()` / 单参 `retrieve` / 无预算 `buildContext` † | 契约保留项，当前无调用方 | — |
+### `RagRetrievalService` + 四个协作类（2026-09 拆分）
+| 类 | 方法 | 作用 | 调用方 |
+|---|---|---|---|
+| `RagRetrievalService` | `retrieveOutcome(query,topK,threshold)` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()` | 前置 |
+| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 组装 `RetrievalOutcome` | 内部 |
+| | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
+| | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
+| | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
+| `HybridRecaller` | `recall(query,topK,threshold)` | 两路召回 + 可用性标记（返回 `Recall`） | 编排 |
+| | `semanticHits(...)` / `keywordHits(...)` | 单路检索，异常只丢那一路（WARN） | 内部 |
+| `RrfFuser`（静态） | `fuse(semantic,keyword)` / `rrfScore(c)` | 按 `doc_id:chunk_index` 去重 + RRF(k=60) 名次融合 | 编排 |
+| `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score` | 融合/重排 |
+| `RerankStrategy`（接口） | `mode()` / `rerank(query,candidates)` | 重排策略契约；D3 接模型时新增实现即可 | 工厂 |
+| `ScoreFusionReranker` | `rerank(...)` | `score` 模式：语义 0.6 + BM25 归一 0.4；单路直取该路分 | 工厂 / LLM 回退 |
+| `LlmReranker` | `rerank(...)` / `buildPrompt` / `parseOrder` | `llm` 模式：模型排 ≤10 条；异常/解析失败回退 score | 工厂 |
+| `RrfOrderReranker` | `rerank(...)` | `none` 模式：保持 RRF 顺序并赋相对顺位分（首位 1.0） | 工厂 |
+| `RerankStrategyFactory` | `current()` | 按 `app.rag.rerank-mode` 取策略；未知值 WARN 回退 score | 编排 |
+| `RagContextRenderer` | `render(hits,tokenBudget)` | Token 预算 + 字符上限双重约束的上下文渲染（含注入防护标记） | 编排 |
+| `DocumentMeta`（静态） | `similarity` / `keywordScore` / `chunkKey` / `fileName` / `docId` / `chunkIndex` / `snippet` / `fromKeywordHit` | 命中分块的元数据读取口径（与入库 `addMetadata` 对齐） | 融合/重排/渲染/编排 |
 
 ### `KeywordIndex`（进程内 BM25）
 | 方法 | 作用 | 调用方 |
@@ -233,9 +236,9 @@
 | `ChatRequest` | `sessionId`+`message`（Bean Validation） |
 | `ChatResponse` | `{content}`（引用来源不再返回） |
 | `ChatStreamEvent` | `EventType.CONTENT`（唯一） + `[DONE]` |
-| `RagDebugRequest` / `RagDebugResponse` † | 调试入参 / 已废弃的嵌套响应 record |
-| `SourceVO` | 来源：文档名、片段、分数、docId |
-| `ChatCompletedEvent` / `ChatDecisionEvent` | 审计事件负载（record，含 composition/usage/modelLabel） |
+| `RagDebugRequest` | 检索调试入参（`topK`/`threshold` 归一化在紧凑构造器里）；原嵌套的 `RagDebugResponse` 无引用点，已删除 |
+| `ChatCompletedEvent` | 问答完成事件负载（record，含 composition/usage/modelLabel） |
+| `ChatDecisionEvent` | 决策事件负载（record，13 个**已计算的值**字段）——不携带 `system.entity` 实体，实体组装在 `ChatAuditListener.toEntity` |
 
 ### `ChatService`（门面）
 | 方法 | 作用 |
@@ -339,6 +342,7 @@
 | `requireActive(sessionId,userId)` | 存在 + 进行中 + 归属校验（对话每轮的入口守卫，§16） | 门面 |
 | `requireOwned(id,userId)` / `toVO(s)` | 归属校验 / 实体转 VO | 内部 |
 | `SessionCacheService.get/put/isNotFound/putNotFound/evict` | `session:meta:*`(10min) + `session:absent:*`(1min)；**全部降级安全 + WARN 节流** | `requireActive`、增删改 |
+| `SessionType`（**模块根枚举，自 `ChatSession` 内嵌移出**） | `RAG`/`AGENT`/`HYBRID`；被 chat/context/prompt/session 共同引用，故不再寄生于实体 |
 | `ChatSession`(entity)/`ChatSessionMapper`、`SessionCreateRequest.effectiveType()`、`SessionVO`/`SessionMessagesVO`/`HistoryMessageVO` | 表 `chat_session` 与 DTO（类型归一化 HYBRID） | — |
 
 ---
@@ -388,8 +392,6 @@ grep -rn "【已被替代】\|【未被引用】\|【仅测试引用】" src/mai
 
 | 位置 | 标注 | 说明 |
 |---|---|---|
-| `rag/RagRetriever.java:22,33,63` + `RagRetrievalService.java:61,73,433` | 【未被引用】 | `available()`、单参 `retrieve`、无预算 `buildContext` 仅实现契约，无调用方 |
-| `chat/dto/RagDebugRequest.java:38` | 【未被引用】 | 嵌套 `RagDebugResponse` record 无引用点，可删 |
 | `context/HistoryContext.java:22` | 【未被引用】 | `empty()` 无调用方（装配层始终走真实历史） |
 | `common/Result.java:38,113` | 【未被引用】 | `ok(String)` 与 `fail(int,String)` 无调用方 |
 | `common/HeuristicTokenCounter.java:13`、`common/TokenCounter.java:44` | 【已被替代】 | 生产默认 `JtokTokenCounter`；保留为备用实现与测试对照 |
