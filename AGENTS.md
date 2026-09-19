@@ -179,6 +179,30 @@ com.ai
 - **流式中断不写语义缓存**: 中断/静默超时走 `ChatCompletionService.completeInterrupted`(只写记忆与
   审计), 禁止走 `complete()`——后者会把"中断提示"当答案缓存, 下次同问直接命中一条 19 字提示。
 
+### Redis 使用与降级约定(强制)
+
+- **现有 5 个使用点**(全部经 `StringRedisTemplate` 直连, 项目**不用** Spring Cache 抽象/spring-session):
+  `RedisLoginAttemptLimiter`(`login:fail:*`/`login:lock:*`) · `SessionCacheService`(`session:meta:*`/`session:absent:*`)
+  · `SemanticAnswerCache`(`rag:answer:*`/`rag:miss:*`/`rag:kb:version`) · `CachingIntentRouter`(`rag:intent:*`)
+  · `TokenBlacklistService`(`jwt:black:*`)。键前缀必须沿用, 便于运维 grep 与按前缀清理。
+- **读写两侧都必须自行 catch 并降级, 绝不允许 Redis 故障冒成业务 500**(`RedisConnectionFailureException`
+  是 `DataAccessException`, 一旦漏出就被 `GlobalExceptionHandler` 兜底成 5001/HTTP 500——登录限流读侧
+  曾犯此错, 有真实探针证据)。新增 Redis 使用点时必须同时覆盖读路径与写路径。
+- **降级必须看得见**: catch 里一律 `log.warn`, **禁止 DEBUG**(生产级别是 info, 等于静默), 且必须经
+  `common/WarnThrottle` 节流(默认 60 秒一条并汇总被抑制条数)——旁路组件故障时每请求触发多处降级,
+  不节流会刷屏。声明为字段初始化器(`WarnThrottle.of(log)`), 不进构造器参数。
+- **启动自检**: `config/RedisReadinessProbe`(ApplicationRunner)探测一次并输出"哪些能力处于降级态"。
+  探针**只打日志、绝不外抛**, 不得影响启动。
+- **生产基线**: `app.auth.blacklist-fail-open` 必须 false(prod yaml 已设), 由 `SecurityConfigValidator`
+  在 prod 启动期强制(配成 true 直接拒绝启动)。登录限流则**刻意** fail-open(不提供拒绝开关)——
+  拒绝会把基础设施故障放大成整站无法登录。
+- **不用 Redis 的地方**(刻意保持进程内, 勿"顺手分布式化"): `Timeouts` 的并发 `Semaphore`(保护的是本进程
+  连接/线程预算)、`PromptService` 模板缓存(classpath 静态)、`ChatClientProvider` 惰性构建(一次性)、
+  `KeywordIndex` 读写锁(本地结构; 需要跨实例一致时走"变更广播"而非把索引搬进 Redis)、
+  MyBatis 二级缓存(制度文档更新场景脏读风险高)。
+- 配置项在 `application.yaml` 的 `app.auth.*` 显式声明(`rate-limit-backend`/`blacklist-fail-open`);
+  连接参数 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`。**Redis 不在 docker-compose 内**, 需自行启动。
+
 ### 语义缓存与审计不变式
 
 - 缓存命中时**跳过检索与上下文装配**: 同步接口整段返回, 流式只发 **1 个** content 事件

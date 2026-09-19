@@ -147,6 +147,34 @@
 
 ---
 
+## 已完成记录（2026-09-19, 降级可观测性: WARN 提级+节流 / Redis 启动自检 / prod 黑名单 fail-closed)
+
+**问题**: Redis 的 5 个使用点(SemanticAnswerCache/SessionCacheService/CachingIntentRouter/
+TokenBlacklistService/RedisLoginAttemptLimiter)都有 catch, 但**降级发生了没人知道**——
+7 处降级日志是 `log.debug`, 而 `application.yaml:165` 默认 `com.ai: info`, 生产等于完全静默;
+运维只能从"缓存突然全不命中"反推。反面问题同时存在: 已 WARN 的那些在 Redis 挂掉时
+**每请求每处一条**(一次对话可触发 5 处), 会把日志打爆。此外 prod 无强制口径:
+`blacklist-fail-open` 连 yaml 里都没声明, 全靠代码默认 true。
+
+**变更**:
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| 节流器 | 新增 `common/WarnThrottle`: CAS 抢占放行权, 默认 60s 窗口一条, 下一条汇总"窗口内已抑制 N 条"; 作为字段初始化器接入(`WarnThrottle.of(log)`), **不改任何构造器签名** | `WarnThrottleTest` 3 例(窗口内一条/跨窗口带抑制计数/16 线程并发只一条) |
+| 18 处降级日志 | 5 个组件的 catch 全部改 `degraded.warn(...)`, 消息统一为"X 失败(已降级: 具体后果)"; 其中 7 处由 DEBUG 提级 | `grep -c 'log.debug("' 五文件` 后仅剩正常痕迹(如"语义缓存已写入"), 降级路径 0 处 DEBUG |
+| 启动自检 | 新增 `config/RedisReadinessProbe`(ApplicationRunner): 探一次 Redis, 可用则打印生效口径, 不可用则逐项列出降级能力; 异常全吸收不外抛 | **运行时实测**: `REDIS_PORT=6399 mvn -o test -Dtest=AiAgentApplicationTests` → `WARN Redis 自检失败(不可用): RedisConnectionFailureException: Unable to connect to Redis —— 以下能力已降级: 登录限流→按未锁定放行(爆破防护暂缺); 语义缓存→按未命中处理(每轮都走检索+模型); 意图路由缓存→按未命中走真实路由; 会话缓存→回退 MySQL 查询; 令牌黑名单→放行(已注销的令牌在过期前仍可用!)`, 且该用例仍 PASS(不影响启动) |
+| prod fail-closed | `application.yaml` 显式声明 `rate-limit-backend: redis` 与 `blacklist-fail-open: true`; `application-prod.yaml` 设 false; `SecurityConfigValidator` 在 prod 下配成 true 直接拒绝启动 | `SecurityConfigValidatorTest` 5 例(prod 合规放行/默认密钥拒/短密钥拒/fail-open 拒/非 prod 放行) |
+
+**未改动**: 任何**业务决策路径**(降级返回什么、放行还是拒绝、TTL、键格式)一律未变——本批只动日志与启动校验;
+`AuthService`/`AuthInterceptor` 未改; `application-dev.yaml` 未改(dev 保持宽松); `docker-compose.yml` 仍未纳管 Redis(按前一批决定), 改在文档登记。
+**调用方**: `WarnThrottle` 被 5 个组件以字段持有; `RedisReadinessProbe` 由 Spring 启动流程调用(无业务调用方);
+`SecurityConfigValidator` 新增规则读取 `AppProperties.Auth.blacklistFailOpen`(`application-prod.yaml` 供给)。
+
+**回归**: 单测 **167/167**(155 + 3 + 4 + 5), BUILD SUCCESS; ArchUnit 7 条通过(`user/session/rag` → `common` 依赖未破坏分层)。
+**未做**: prod 拒绝启动的**真实 boot** 验证(需注入模拟密钥与 prod profile, 命令被安全策略拦截)——该规则仅有单测覆盖。
+
+---
+
 ## 已完成记录（2026-09-19, 登录限流读侧降级 + 进程内条目清理触发点)
 
 **问题**: `RedisLoginAttemptLimiter` 读写降级口径不一致——写侧 `fail()`/`del()` 有 try/catch 放行,
@@ -490,3 +518,74 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
 ### D5 Qdrant 服务端认证（用户部署侧待办）
 - docker-compose 的 qdrant 服务增加 `QDRANT__SERVICE__API_KEY` 环境变量, 应用侧设
   `QDRANT_API_KEY`(yaml 占位已就绪); 生产环境 6333/6334 不对外发布端口。
+
+## 批次 E: 多实例正确性与成本防线（2026-09-19 Redis 盘点新增, 全部待实施）
+
+> 触发条件统一为"**要上多实例**"或"成本/正确性开始咬人"。降级与日志口径已由
+> "降级可观测性"批次固化(见已完成记录), 以下是**功能语义**层面的缺口, 不是日志问题。
+> 每项落地都必须遵守: 读写两侧 catch + `WarnThrottle` WARN, 且 Redis 故障时回退到"当前单实例行为"。
+
+### E1 单用户并发名额多实例统一（触发: 多实例部署; 优先级最高——成本直接被实例数放大）
+- **现状**: `chat/service/ChatConcurrencyGuard` 用 Caffeine `Cache<userId, Semaphore>`(进程内),
+  N 实例下同一用户实际并发 = `3 × N`, B3 建立的保护被稀释。
+- **方案**: Redis 租约式信号量——`concur:{uid}` 有序集, 成员=每次获取的随机句柄, score=过期时间戳;
+  获取脚本: `ZREMRANGEBYSCORE 0 now`(回收僵尸) → `ZCARD` < max 才 `ZADD`; 释放=`ZREM`; 全程一段 Lua 保原子。
+  实例被 kill 未释放的句柄由租约到期自动回收(优于本地 Semaphore 的泄漏风险)。
+- **改动点**: 新增 `chat/service/RedisConcurrencyGuard`(实现现有 `Handle` 契约)、
+  `AppProperties.Concurrency.backend: memory|redis`(默认 memory 灰度)、配置 `lease-ms`(默认 5min, 须 > 最长对话)。
+- **验收**: 双实例同用户并发 4 → 第 4 个 6010; kill 掉持锁实例后 ≤lease 时间内名额自动恢复;
+  Redis 挂 → 回落本地信号量且对话不中断。
+- **工作量**: 半天~1 天。
+
+### E2 冷缓存同问并发穿透（single-flight; 触发: 并发用户数上来或缓存刚被整体失效）
+- **现状**: `ChatPreparationService:94-98` 查缓存未命中即各自检索+生成——知识库失效后的第一波
+  相同问题会重复打 Embedding/Qdrant/模型 N 次(纯浪费 Token, 且是成本审计里最难解释的尖峰)。
+- **方案**: 以正缓存键为锁 `lock:sf:{answerKey}` `SET NX PX 120s`; 抢到者生成后 `put`+`DEL`;
+  未抢到者以 50ms 间隔轮询缓存 ≤3s, 命中即返回, 超时则自行生成(绝不因等锁而失败)。
+- **验收**: 同问题并发 5 → 模型调用 1 次(日志/`chat_log` 计数), 其余 4 个走缓存; Redis 挂 → 5 次照旧。
+- **工作量**: 2~3 小时。
+
+### E3 改写熔断状态共享 + 修数据竞争（先做后半段, 它与 Redis 无关）
+- **现状**: `context/service/QueryRewriter:44` 的 `private int consecutiveFailures` 是**普通 int**,
+  被并发请求线程 `++` → 数据竞争(丢计数, 熔断可能永不触发); 且状态在各 JVM 独立,
+  端点整体劣化时实例 A 已冷却、实例 B 仍每请求白等满 `query-rewrite.timeout-ms`(默认 30s)。
+- **方案**: ① 立即项: 改 `AtomicInteger`(`incrementAndGet`/`set(0)`), 零风险;
+  ② 多实例项: 计数与冷却写 Redis(`breaker:rewrite` INCR + EXPIRE 60s, GET 到即跳过), 异常回退本地。
+- **验收**: 并发失败注入下计数不丢(单测); 双实例冷却一致。
+- **工作量**: ①10 分钟 ②1~2 小时。
+
+### E4 关键词索引跨实例一致（变更广播, 不是外置）
+- **现状**: `rag/service/KeywordIndex` 是进程内 BM25(读写锁保护本地结构)——A 实例入库并注册后
+  B 实例不知道, 同一问题落在不同实例命中不同("新文档时灵时不灵")。
+- **方案**: 入库/删除/重处理成功后 `PUBLISH kw:index:changed {docId,op}`; 各实例订阅
+  (`RedisMessageListenerContainer`)后做**本地**增量注册/移除——读路径零网络开销。
+  保留 `auto-rebuild-index` 作冷启动兜底。**明确不要**把倒排整体搬进 Redis(每次检索多一跳网络, 延迟预算不允许)。
+- **验收**: 双实例下上传文档后, 两实例的 `rag_decision_log.keywordHits` 同时 >0。
+- **工作量**: 半天。
+
+### E5 定时任务与启动重建的跨实例互斥
+- **现状**: `system/service/LogCleanupScheduler:38` 的 cron 在每个实例同时触发(重复 DELETE 争锁、放大 binlog)。
+- **方案**: 任务入口 `SET lock:cron:log-cleanup <token> NX PX 2h`, 抢不到直接 return; 不引 ShedLock(仅一处收益不足)。
+  注: `KeywordIndexRebuilder` **不加此锁**——每实例都必须自建本地索引, 互斥反而漏建。
+- **工作量**: 1 小时。
+
+### E6 用户禁用/改密后的即时吊销（补 A1 待办）
+- **现状**: 黑名单只能拉黑"当前这一枚 jti"; 禁用用户或改密后, 其**其它**已签发令牌仍有效直到自然过期(最长 7 天)。
+- **方案**: 吊销水位线 `user:revoked:{uid}` = 操作时刻秒级时间戳(TTL = `token-expire-hours`),
+  `AuthInterceptor` 解析后比较 `iat < revoked` → 401/6005; 禁用/改密/删除用户时 `SET`。
+  Redis 挂 → 跳过水位线校验(等于现状)并 WARN 节流。
+- **验收**: 禁用用户后其旧 token 立即 401; 水位线删除/过期后不影响新登录。
+- **工作量**: 2 小时。
+
+### E7 文档入库任务持久化（当前**重启即丢任务**, 与 Redis 无关但正相关）
+- **现状**: 入库投递到内存队列(`AsyncConfig:24-36`, 容量 100, `CallerRunsPolicy`),
+  `DocumentIngestionService:56` 置 `status=1` 后异步推进。**进程重启/崩溃 → 队列里的文档永久停在 0/1**
+  (界面一直"处理中"、检索不到、无人重试); 全项目仅 `KeywordIndexRebuilder` 挂了 `ApplicationReadyEvent`。
+- **方案**: ① 最低成本(先做, 不依赖 Redis): 启动时扫 `status IN (0,1)` 的文档重新投递入库;
+  ② 多实例分担: Redis Stream(`XADD ingest:docs` + 消费者组 + `XAUTOCLAIM` 认领超时未确认项, 天然重试),
+  状态机 0→1→2/3 不变。
+- **验收**: 入库中途 kill 应用 → 重启后该文档自动继续并最终 status=2; 双实例下任务不重复消费。
+- **工作量**: ①0.5 小时 ②1 天。
+
+### E8 配额类（沿用既有 B1/A3 方案, 未变）
+- 对话次数+Token 配额(B1)与上传配额(A3)按原方案落地即可; 两者与 E1 共用"Redis 挂 → 放行 + WARN 节流"口径。

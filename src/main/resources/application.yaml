@@ -104,6 +104,11 @@ app:
     # 开发便捷开关(默认关闭!): 允许用 X-User-Id 请求头模拟登录, 存在身份伪造风险,
     # 仅在本地开发时激活 dev profile(--spring.profiles.active=dev)开启
     dev-user-header-enabled: false
+    # 登录失败限流存储后端: redis=多实例统一计数(默认, Redis 不可用时按未锁定放行) | memory=单实例进程内计数
+    rate-limit-backend: redis
+    # 令牌黑名单在 Redis 异常时的口径: true=放行(保可用) | false=拒绝(保安全, 生产必须 false,
+    # 由 SecurityConfigValidator 在 prod 启动期强制)
+    blacklist-fail-open: true
   # ============ 演示数据播种(仅空表生效) ============
   demo:
     seed-enabled: true                        # 生产 profile 已关闭
