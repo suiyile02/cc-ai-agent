@@ -62,6 +62,10 @@ com.ai
 4. **common 业务无关**: 禁止依赖任何业务模块; entity 禁止依赖 service/controller/aspect; service 禁止依赖 controller; Controller 禁止直连 Mapper。
 5. **跨模块调用**: 优先走模块根契约接口或对方 `service` 允许跨模块引用 entity/mapper(现状), 禁止引用其它模块的 `controller`。
 6. **架构守护**: `LayeredArchitectureTest`(ArchUnit) 固化以上规则, 违反即测试失败; 修改包结构必须同步更新该测试与本文档。
+7. **流程与方法的现场文档**: `docs/flow-map.md`(全部执行路径流程图 + 降级总表 + 键空间) 与
+   `docs/method-map.md`(逐类逐方法的作用与调用方 + 状态标注汇总) 是改代码前的定位入口。
+   改动对话管线/检索/鉴权/缓存链路, 或新增类与方法时**必须同步这两份文档**(尤其 §12 的
+   【未被引用】/【仅测试引用】/【已被替代】清单与 §18 降级总表)。
 
 ---
 
