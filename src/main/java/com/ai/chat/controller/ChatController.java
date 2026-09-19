@@ -5,7 +5,7 @@ import com.ai.common.Result;
 import com.ai.chat.dto.ChatRequest;
 import com.ai.chat.dto.ChatResponse;
 import com.ai.chat.dto.RagDebugRequest;
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 import com.ai.user.security.UserContext;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

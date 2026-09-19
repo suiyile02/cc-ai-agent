@@ -11,7 +11,7 @@ import com.ai.rag.RagRetriever;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;

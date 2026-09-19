@@ -1,6 +1,6 @@
 package com.ai.prompt;
 
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import com.ai.rag.RagMode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;

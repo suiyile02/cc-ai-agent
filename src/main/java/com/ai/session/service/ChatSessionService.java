@@ -8,7 +8,7 @@ import com.ai.session.dto.HistoryMessageVO;
 import com.ai.session.dto.SessionMessagesVO;
 import com.ai.session.dto.SessionVO;
 import com.ai.session.entity.ChatSession;
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import com.ai.session.mapper.ChatSessionMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;

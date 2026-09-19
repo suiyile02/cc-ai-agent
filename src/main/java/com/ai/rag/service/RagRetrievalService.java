@@ -7,7 +7,7 @@ import com.ai.config.ChatClientProvider;
 import com.ai.common.Strings;
 import com.ai.common.Timeouts;
 import com.ai.common.TokenCounter;
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;

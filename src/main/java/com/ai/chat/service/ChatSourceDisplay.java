@@ -1,6 +1,6 @@
 package com.ai.chat.service;
 
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 
 import java.util.List;
 

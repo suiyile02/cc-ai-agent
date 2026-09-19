@@ -2,7 +2,7 @@ package com.ai.chat.event;
 
 import com.ai.context.ContextComposition;
 import com.ai.context.service.QueryRewriter;
-import com.ai.chat.dto.SourceVO;
+import com.ai.rag.SourceVO;
 import com.ai.session.entity.ChatSession;
 import com.ai.rag.RagMode;
 

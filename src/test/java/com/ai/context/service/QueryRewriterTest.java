@@ -3,7 +3,7 @@ package com.ai.context.service;
 import com.ai.config.AppProperties;
 import com.ai.context.ConversationMemory;
 import com.ai.config.ChatClientProvider;
-import com.ai.session.entity.ChatSession.SessionType;
+import com.ai.session.SessionType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.UserMessage;

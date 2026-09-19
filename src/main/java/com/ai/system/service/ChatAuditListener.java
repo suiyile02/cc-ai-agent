@@ -5,6 +5,7 @@ import com.ai.chat.event.ChatDecisionEvent;
 import com.ai.context.ContextComposition;
 import com.ai.context.service.QueryRewriter;
 import com.ai.system.entity.ContextLog;
+import com.ai.system.entity.RagDecisionLog;
 import com.ai.common.Strings;
 import com.ai.rag.RagMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,10 +42,34 @@ public class ChatAuditListener {
     @EventListener
     public void onDecision(ChatDecisionEvent event) {
         try {
-            ragDecisionLogService.save(event.decision());
+            ragDecisionLogService.save(toEntity(event));
         } catch (Exception e) {
             log.warn("写入 RAG 决策日志失败(忽略): {}", e.getMessage());
         }
+    }
+
+    /**
+     * 决策快照 → 持久化实体(存储结构只在本模块出现)。
+     *
+     * @param event 决策事件
+     * @return 待落库的决策日志记录
+     */
+    private RagDecisionLog toEntity(ChatDecisionEvent event) {
+        RagDecisionLog entry = new RagDecisionLog();
+        entry.setSessionId(event.sessionId());
+        entry.setUserId(event.userId());
+        entry.setUserMessage(event.userMessage());
+        entry.setRagMode(event.ragMode());
+        entry.setSessionType(event.sessionType());
+        entry.setRetrievalExecuted(event.retrievalExecuted());
+        entry.setSemanticHits(event.semanticHits());
+        entry.setKeywordHits(event.keywordHits());
+        entry.setFinalHits(event.finalHits());
+        entry.setTopK(event.topK());
+        entry.setSimilarityThreshold(event.similarityThreshold());
+        entry.setRerankMode(event.rerankMode());
+        entry.setDurationMs((int) event.durationMs());
+        return entry;
     }
 
     /**
