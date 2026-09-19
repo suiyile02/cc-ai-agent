@@ -25,16 +25,17 @@ com.ai
 ├── aspect        全局切面层: 跨模块 AOP 统一管理(SelfOrAdminAspect 授权 · ToolCallLogAspect 工具日志)
 ├── config        全局配置层: AppProperties · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
 ├── prompt        提示词模板装配(PromptService, classpath:/prompts/*.st)
-├── rag           RAG 能力模块: 模块根=对外契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome)
-│   └── service   实现(RagRetrievalService/KeywordIntentRouter/KeywordIndex)
+├── rag           RAG 能力模块: 模块根=对外契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome/SourceVO)
+│   └── service   实现: 编排 RagRetrievalService + 协作类(HybridRecaller/RrfFuser/RetrievalCandidate/
+│                 RerankStrategy×3+工厂/RagContextRenderer/DocumentMeta) · KeywordIndex · 两类缓存
 ├── context       上下文管线模块: 模块根=契约(ConversationMemory/HistoryContext/AssembledPrompt/ContextComposition)
 │   ├── entity    ConversationSummary      ├── mapper  ConversationSummaryMapper
 │   └── service   ContextAssembler/ConversationMemoryService/ConversationSummarizer/QueryRewriter
-├── chat          对话模块: controller/ChatController · service/ChatService · event/审计事件 · dto
+├── chat          对话模块: controller/ChatController · service/ChatService · event/审计事件(值对象) · dto
 ├── knowledge     知识库模块: controller/service/entity/mapper/dto
 ├── user          用户鉴权模块: controller/service/entity/mapper/dto
 │   └── security  JwtTokenProvider · UserContext · AuthInterceptor · PasswordHasher · RequireSelfOrAdmin
-├── session       会话模块: controller/service/entity/mapper/dto
+├── session       会话模块: SessionType(模块根枚举, 跨模块共享) · controller/service/entity/mapper/dto
 ├── system        系统审计模块: controller/SystemController · service/四类日志服务+ChatAuditListener
 │   ├── entity    ChatLog/ToolCallLog/RagDecisionLog/ContextLog    ├── mapper  对应四个
 │   └── dto       四个日志 VO
