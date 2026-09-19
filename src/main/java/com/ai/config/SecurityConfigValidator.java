@@ -6,10 +6,12 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
 /**
- * 安全配置启动校验：prod profile 下使用默认 JWT 密钥时拒绝启动。
+ * 安全配置启动校验：prod profile 下使用默认 JWT 密钥、或令牌黑名单处于 fail-open 时拒绝启动。
  *
  * <p>默认密钥随代码仓库分发, 任何拿到源码的人都能伪造管理员 token——
  * 这是 P0 级安全风险, 必须在启动期强制暴露而非运行期依赖人工检查。
+ * 同理, 黑名单 fail-open 会让"Redis 故障"变成"注销功能整体失效"且无任何报错,
+ * 因此 prod 下也必须在启动期拒绝, 而不是等运维发现。
  */
 @Slf4j
 @Component
@@ -51,6 +53,13 @@ public class SecurityConfigValidator implements ApplicationRunner {
         if (secret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 32) {
             throw new IllegalStateException("生产环境拒绝启动: JWT_SECRET 长度不足 32 字节");
         }
-        log.info("安全配置校验通过: JWT_SECRET 已自定义且长度合规");
+        // 令牌黑名单在 prod 必须 fail-closed: 否则 Redis 一挂, 注销/吊销等于没做
+        if (appProperties.getAuth().isBlacklistFailOpen()) {
+            throw new IllegalStateException(
+                    "生产环境拒绝启动: app.auth.blacklist-fail-open 必须为 false"
+                            + "(现值 true=Redis 异常时放行已注销令牌)。application-prod.yaml 已设为 false,"
+                            + " 请检查是否被环境变量或外部配置覆盖");
+        }
+        log.info("安全配置校验通过: JWT_SECRET 已自定义且长度合规, 令牌黑名单为 fail-closed");
     }
 }

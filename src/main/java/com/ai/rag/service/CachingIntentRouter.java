@@ -1,5 +1,6 @@
 package com.ai.rag.service;
 
+import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;
 import com.ai.rag.IntentCacheAdmin;
 import com.ai.rag.IntentRouter;
@@ -28,7 +29,8 @@ import java.time.Duration;
  *       ({@code rag:intent:version}); 调 {@link #evictAll()} 自增版本即整体失效(旧键 TTL 自然清理);</li>
  *   <li>TTL 默认 60 分钟——路由结果是"问题属于哪类"的宽松判断, 短时陈旧可容忍,
  *       改词表后可手动清空立即生效, 不必等 TTL;</li>
- *   <li>Redis 异常一律按未命中处理并走真实路由, 绝不影响对话主流程。</li>
+ *   <li>Redis 异常一律按未命中处理并走真实路由, 绝不影响对话主流程; 异常日志一律 WARN
+ *       (禁止 DEBUG, 生产级别是 info)并经 {@link WarnThrottle} 节流。</li>
  * </ul>
  */
 @Slf4j
@@ -44,6 +46,9 @@ public class CachingIntentRouter implements IntentRouter, IntentCacheAdmin {
     private final KeywordIntentRouter delegate;
     private final StringRedisTemplate redis;
     private final AppProperties appProperties;
+
+    /** 降级告警节流(Redis 故障时 60 秒一条) */
+    private final WarnThrottle degraded = WarnThrottle.of(log);
 
     /**
      * 路由意图(带缓存)。
@@ -72,7 +77,7 @@ public class CachingIntentRouter implements IntentRouter, IntentCacheAdmin {
             return mode;
         } catch (Exception e) {
             // Redis 异常按未命中处理, 走真实路由
-            log.debug("意图路由缓存异常(按未缓存处理): {}", e.getMessage());
+            degraded.warn("意图路由缓存异常(已降级: 走真实路由): {}", e.getMessage());
             return delegate.route(message);
         }
     }
@@ -89,7 +94,7 @@ public class CachingIntentRouter implements IntentRouter, IntentCacheAdmin {
             log.info("意图路由缓存已失效: version={}", version);
             return version == null ? -1L : version;
         } catch (Exception e) {
-            log.warn("意图路由缓存版本自增失败(Redis 不可用?): {}", e.getMessage());
+            degraded.warn("意图路由缓存版本自增失败(已降级: 旧结果仍在 TTL 内): {}", e.getMessage());
             return -1L;
         }
     }

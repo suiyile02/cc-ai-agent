@@ -1,5 +1,6 @@
 package com.ai.rag.service;
 
+import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
 import com.ai.rag.SemanticCacheAdmin;
@@ -31,7 +32,9 @@ import java.util.List;
  *       任何含个性化内容的回答——本轮发生过工具调用的回答由收尾阶段拦截不写
  *       (工具调用计数经 toolContext 透传, 见 ChatService/ChatCompletionService),
  *       依赖会话历史的改写问题由前置阶段的 cacheEligible 排除;</li>
- *   <li>Redis 异常一律降级为未命中, 绝不影响对话主流程。</li>
+ *   <li>Redis 异常一律降级为未命中, 绝不影响对话主流程; 但降级必须<b>看得见</b>——各 catch 一律
+ *       WARN(禁止 DEBUG, 生产级别是 info)并经 {@link WarnThrottle} 折成 60 秒一条,
+ *       既不会静默也不会刷屏。</li>
  * </ul>
  *
  * <p>命中与未命中在审计上可区分: 命中时跳过检索与上下文装配, 因此会留下一条
@@ -52,6 +55,9 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
     private final ObjectMapper objectMapper;
     private final AppProperties appProperties;
     private final ChatClientProvider chatClientProvider;
+
+    /** 降级告警节流: Redis 故障时每请求多处降级, 折成 60 秒一条(见 {@link WarnThrottle}) */
+    private final WarnThrottle degraded = WarnThrottle.of(log);
 
     /** 缓存的回答(来源为去扩展名的文档名列表) */
     public record CachedAnswer(String content, List<String> sources) {
@@ -80,7 +86,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
             log.info("语义缓存命中: question={}", question);
             return answer;
         } catch (Exception e) {
-            log.warn("语义缓存读取失败(按未命中处理): {}", e.getMessage());
+            degraded.warn("语义缓存读取失败(已降级: 按未命中处理): {}", e.getMessage());
             return null;
         }
     }
@@ -106,7 +112,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
                     Duration.ofHours(appProperties.getSemanticCache().getTtlHours()));
             log.debug("语义缓存已写入: question={}", question);
         } catch (Exception e) {
-            log.warn("语义缓存写入失败(忽略): {}", e.getMessage());
+            degraded.warn("语义缓存写入失败(已降级: 本轮不缓存): {}", e.getMessage());
         }
     }
 
@@ -125,7 +131,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
             log.info("语义缓存已随知识库变更失效: kbVersion={}", version);
             return version == null ? -1L : version;
         } catch (Exception e) {
-            log.warn("语义缓存版本号自增失败(Redis 不可用?): {}", e.getMessage());
+            degraded.warn("语义缓存版本号自增失败(已降级: 旧缓存仍在 TTL 内): {}", e.getMessage());
             return -1L;
         }
     }
@@ -147,7 +153,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
             }
             return Boolean.TRUE.equals(redis.hasKey(missKey(question, version)));
         } catch (Exception e) {
-            log.debug("语义负缓存检查失败(按未命中处理): {}", e.getMessage());
+            degraded.warn("语义负缓存检查失败(已降级: 按未命中处理): {}", e.getMessage());
             return false;
         }
     }
@@ -171,7 +177,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
                     Duration.ofMinutes(appProperties.getSemanticCache().getMissTtlMinutes()));
             log.debug("语义负缓存已写入: question={}", question);
         } catch (Exception e) {
-            log.warn("语义负缓存写入失败(忽略): {}", e.getMessage());
+            degraded.warn("语义负缓存写入失败(已降级: 穿透防护暂缺): {}", e.getMessage());
         }
     }
 

@@ -120,7 +120,7 @@ java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ### 3.6 异常与降级（需求第 8 章）
 - `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
 - 降级策略：模型不可用 → `AI_NOT_CONFIGURED` 友好提示；向量库不可用 → RAG 自动降级为不注入上下文继续对话；入库失败 → 仅标记 `status=3`，不影响在线对话；删除失败 → 记录日志继续。
-- **Redis 不可用 → 一律降级，绝不影响可用性**：登录限流读写两侧捕获异常按"未锁定"放行（否则基础设施故障会变成登录接口 500/5001）、会话缓存回退 MySQL、语义/意图缓存按未命中、令牌黑名单按 `app.auth.blacklist-fail-open`（默认放行）。代价与开关口径见 `AGENTS.md`「用户与鉴权」。
+- **Redis 不可用 → 一律降级，绝不影响可用性**：登录限流读写两侧捕获异常按"未锁定"放行（否则基础设施故障会变成登录接口 500/5001）、会话缓存回退 MySQL、语义/意图缓存按未命中、令牌黑名单按 `app.auth.blacklist-fail-open`（**生产基线为 false=拒绝**，由启动校验强制）。降级日志统一 WARN 且按 60 秒节流（`WarnThrottle`），启动时 `RedisReadinessProbe` 输出一条"当前处于降级态的能力清单"。口径与理由见 `AGENTS.md`「Redis 使用与降级约定」。
 
 ## 4. 快速验证示例（curl）
 
@@ -211,7 +211,7 @@ docker-compose.yml          Qdrant+MySQL
 - **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 155 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
+- **测试用例**：单元测试 167 例（Mockito，含 ArchUnit 架构守护 7 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 
@@ -219,3 +219,4 @@ docker-compose.yml          Qdrant+MySQL
 - **上传后状态一直为 1 或变 3**：查看 `knowledge_document.error_message`；多为 Embedding 未配置/额度不足/文件解析失败。列表接口已返回 errorMessage。
 - **问答答“未找到相关信息”**：知识库无命中（阈值过高或未上传文档）；用 `/api/ai/rag/search` 调试 topK 与阈值。
 - **切换向量库维度不一致**：同一 Embedding 模型产出的维度必须一致；换模型请清空旧集合/旧库再入库。
+- **登录与对话都正常，但缓存全不命中/限流好像失效**：看启动日志的 `Redis 自检失败(不可用)` 一行，它会列出当前处于降级态的能力清单；运行期同类降级为 WARN（60 秒一条）。Redis 未启动时应用按设计继续服务，这不是故障。

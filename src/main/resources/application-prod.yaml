@@ -5,6 +5,10 @@
 app:
   auth:
     dev-user-header-enabled: false  # 双保险: 禁用 X-User-Id 模拟登录(缺省已关闭)
+    # 令牌黑名单 fail-closed: Redis 异常时拒绝请求(需重新登录), 而不是放行已注销的令牌。
+    # 注意其代价——Redis 故障期间所有已登录用户会掉线重登; 登录接口本身不受影响(限流仍 fail-open)。
+    # 该项由 SecurityConfigValidator 强制: prod 下配成 true 直接拒绝启动。
+    blacklist-fail-open: false
   demo:
     seed-enabled: false             # 禁用演示数据播种(默认管理员等)
 

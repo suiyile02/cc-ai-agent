@@ -1,5 +1,6 @@
 package com.ai.user.security;
 
+import com.ai.common.WarnThrottle;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -26,6 +27,9 @@ import java.time.Duration;
  * 代价是 Redis 故障期间限流暂停(无防护窗口), 由 WARN 日志暴露给运维;
  * 与令牌黑名单的 {@code app.auth.blacklist-fail-open} 相比, 此处不设为可拒绝——
  * 拒绝会把基础设施故障放大成整站无法登录。
+ *
+ * <p>告警限频：异常一律 WARN(禁止 DEBUG)并经 {@link WarnThrottle} 折成 60 秒一条——
+ * 一次失败登录会触发多处降级, 不节流会把日志打爆。
  */
 @Slf4j
 @Component
@@ -38,6 +42,9 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
     private static final Duration LOCK = Duration.ofMinutes(5);
 
     private final StringRedisTemplate redis;
+
+    /** 降级告警节流(Redis 故障时 60 秒一条) */
+    private final WarnThrottle degraded = WarnThrottle.of(log);
 
     /**
      * 查询锁定键(用户名 + IP 双维度, 任一命中即锁定)。
@@ -52,7 +59,7 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
             return Boolean.TRUE.equals(redis.hasKey(lockKey("u", username)))
                     || Boolean.TRUE.equals(redis.hasKey(lockKey("ip", ip)));
         } catch (Exception e) {
-            log.warn("登录限流检查失败, 本次按未锁定放行(Redis 不可用?): {}", e.getMessage());
+            degraded.warn("登录限流检查失败(已降级: 本次按未锁定放行): {}", e.getMessage());
             return false;
         }
     }
@@ -81,7 +88,7 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
         try {
             return Math.max(ttl(lockKey("u", username)), ttl(lockKey("ip", ip)));
         } catch (Exception e) {
-            log.warn("登录限流剩余时长查询失败(按 0 处理): {}", e.getMessage());
+            degraded.warn("登录限流剩余时长查询失败(已降级: 按 0 处理): {}", e.getMessage());
             return 0;
         }
     }
@@ -99,7 +106,7 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
             }
         } catch (Exception e) {
             // Redis 不可用时降级放行(不阻塞登录主流程), 由告警暴露
-            log.warn("登录限流计数失败(Redis 不可用?): {}", e.getMessage());
+            degraded.warn("登录限流计数失败(已降级: 本次失败未被计数): {}", e.getMessage());
         }
     }
 
@@ -108,7 +115,7 @@ public class RedisLoginAttemptLimiter implements LoginAttemptLimiter {
             redis.delete("login:fail:" + dim + ":" + identity);
             redis.delete(lockKey(dim, identity));
         } catch (Exception e) {
-            log.warn("登录限流清除失败(Redis 不可用?): {}", e.getMessage());
+            degraded.warn("登录限流清除失败(已降级: 旧计数键将随 TTL 过期): {}", e.getMessage());
         }
     }
 
