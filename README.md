@@ -198,11 +198,13 @@ docker-compose.yml          Qdrant+MySQL
 
 > 分层约束由 `LayeredArchitectureTest`(ArchUnit) 固化：业务包禁止循环依赖、common/entity 不反向依赖业务包、Controller 禁止直连 Mapper。跨模块调用的 Service 一律以接口暴露（`RagRetriever` / `IntentRouter` / `ConversationMemory` / `SemanticCacheAdmin`），调用方依赖接口而非实现。
 
+> 全量流程与逐方法说明（Markdown/Mermaid，可随代码一起 review）见 [docs/flow-map.md](docs/flow-map.md)（20 张图：全景、启动装配、鉴权横切、认证用例、知识库上传与状态机、对话前置/同步/流式、混合检索、上下文装配、缓存写入闸门、工具与切面、审计落库、会话与记忆、前端映射、降级总表、存储键空间、线程模型、e2e 对照、偏差清单）与 [docs/method-map.md](docs/method-map.md)（133 个类逐方法作用与调用方）。
+
 > 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（改写→语义缓存查询→路由检索→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
 
 ## 6. 已知简化与后续路线（非阻塞项）
 
-- **前端**：本期仅后端 REST/SSE；对接 Vue3+Element Plus 页面为下一迭代。
+- **前端**：已提供独立仓库 `../ai-agent-web`（Vue 3.5 + Vite 7 + Pinia + axios，自写样式无组件库；5 个视图：登录 / 对话 / 知识库 / 检索调试 / 系统日志），调用面与 §3 端点一一对应（见 `docs/flow-map.md` §17）。后端仍是主交付物，前端未纳入本仓库的构建与测试。
 - **存量数据库升级**：本版本新增 `sys_user.role` 与 `tool_call_log`/`rag_decision_log`/`context_log` 的 `user_id` 列。已有库需手动执行一次 `db/upgrade/2026-09-authorization.sql`（MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，无法随启动脚本幂等执行）；新库由建表脚本直接生效。
 - **表/列注释补齐**：脚本已为 11 张表补齐表注释、66 个缺注释列补齐列注释。已有库执行一次 `db/upgrade/2026-09-column-comments.sql`（该脚本由 existing 库的真实结构生成，仅追加 `COMMENT`，不改类型/可空/默认值；重复执行无害）。**已知历史差异（脚本刻意未动）**：`employee`/`orders`/`sys_user`/`rag_decision_log` 的 `created_at`/`updated_at` 仍是早期 Hibernate 建表遗留的 `datetime(6) NULL`（无默认值），而建表脚本声明为 `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`；如需对齐需另行评估（涉及 NOT NULL 变更，须先确认存量无 NULL 值）。
 - **chat_log.total_tokens**：已采集（从模型响应 `getMetadata().getUsage()` 取总量，配合 `TokenCounter` 的上下文预算审计 `context_log`）；模型不返回 usage 时该列为空。
