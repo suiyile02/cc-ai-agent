@@ -96,8 +96,8 @@
 | `CorsConfig` | `addCorsMappings` | `/api/**` 允许配置来源带任意头（Bearer 走头，不用 cookie） |
 | `WebAuthConfig` | `addInterceptors` | 注册 `AuthInterceptor` 拦 `/api/**` |
 | | `configureAsyncSupport` | SSE 用 Boot 虚拟线程 task executor |
-| `DemoDataInitializer` | `run` / `seedUsers` / `seedEmployees` / `seedOrders` / `employee(...)` | 仅空表播种 admin/admin123、张三李四王五、示例订单（prod 关闭） |
-| `SecurityConfigValidator` | `run` | prod 三条硬规则：默认密钥 / <32 字节 / `blacklist-fail-open=true` → 抛异常拒绝启动；非 prod 只 WARN |
+| `DemoDataInitializer` | `run` / `seedUsers` / `seedEmployees` / `seedOrders` / `employee(...)` | 仅空表播种管理员（口令取 `app.demo.admin-password`）、张三李四王五、示例订单（prod 关闭播种） |
+| `SecurityConfigValidator` | `run` / `looksLikePlaceholder` | prod 四条硬规则：密钥缺失 / <32 字节 / 含占位符特征（`change-me`·`dev-secret`·`your-`·`replace-me`）/ `blacklist-fail-open=true` → 拒绝启动；非 prod 直接放行 |
 | `RedisReadinessProbe` ★ | `run` / `probeFailure` / `degradedCapabilities` | 启动探一次 Redis：可用→INFO 口径汇总；不可用→WARN 逐项列降级能力；异常全吸收不外抛 |
 
 ---
@@ -317,7 +317,8 @@
 | | `login(ctx)` | §5 全链（锁定判定 → 校验 → 失败计数 → status 校验 → 签发） |
 | | `logout(payload,remaining)` | `ban(jti,remaining)` |
 | | `me(userId)` / `buildAuthVO` / `existsByUsername` / `findByUsername` / `toVO` | 查询与装配（禁止返回实体） |
-| `JwtTokenProvider` | `createToken(userId,username,role)` | HS256 + `jti`（UUID）+ 过期 |
+| `JwtTokenProvider` | 构造器 / `randomSecret()` | 仓库无默认密钥：`JWT_SECRET` 留空时非生产生成一次性随机密钥（WARN），prod 由 `SecurityConfigValidator` 拒绝启动 |
+| | `createToken(userId,username,role)` | HS256 + `jti`（UUID）+ 过期 |
 | | `parse(token)` → `TokenPayload(userId,username,role,jti,expiresAt)` | 校验签名与过期，失败抛业务异常 |
 | `PasswordHasher` | `encode` / `matches` / `pbkdf2` | PBKDF2-HmacSHA256 + 随机盐（迭代次数写在类常量） |
 | `UserContext` | `set`/`get`/`clear`/`currentUserId`/`requireUserId`；`CurrentUser.isAdmin()` | ThreadLocal 当前用户；请求结束必须 `clear` |
