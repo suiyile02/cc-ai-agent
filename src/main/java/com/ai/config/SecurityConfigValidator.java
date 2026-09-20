@@ -1,65 +1,80 @@
 package com.ai.config;
 
 import com.ai.config.AppProperties;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+
 /**
- * 安全配置启动校验：prod profile 下使用默认 JWT 密钥、或令牌黑名单处于 fail-open 时拒绝启动。
+ * 安全配置启动校验：prod 下 JWT 密钥缺失/过短/带占位符特征, 或令牌黑名单处于 fail-open 时拒绝启动。
  *
- * <p>默认密钥随代码仓库分发, 任何拿到源码的人都能伪造管理员 token——
- * 这是 P0 级安全风险, 必须在启动期强制暴露而非运行期依赖人工检查。
- * 同理, 黑名单 fail-open 会让"Redis 故障"变成"注销功能整体失效"且无任何报错,
- * 因此 prod 下也必须在启动期拒绝, 而不是等运维发现。
+ * <p>仓库内不再提供任何 JWT 默认密钥（默认密钥随源码分发＝任何人可伪造管理员 token）；
+ * 生产必须在启动期强制暴露这类问题, 而不是运行期依赖人工检查。
+ * 同理, 黑名单 fail-open 会让"Redis 故障"变成"注销功能整体失效"且无任何报错, 故 prod 下一律拒绝。
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class SecurityConfigValidator implements ApplicationRunner {
 
-    /** application.yaml 中的 JWT 默认(开发)密钥, prod 下出现即拒绝启动 */
-    static final String DEV_JWT_SECRET = "ai-agent-dev-secret-change-me-in-prod-2026";
+    /** 最短密钥字节数(HS256 要求 ≥256 bit) */
+    private static final int MIN_SECRET_BYTES = 32;
+
+    /**
+     * 占位符特征: 命中即视为"忘了换成真密钥"。
+     * 用子串而非具体值, 是为了不把历史上公开过的那个默认串再写回仓库。
+     */
+    private static final String[] PLACEHOLDER_MARKERS = {"change-me", "changeme", "dev-secret", "your-", "replace-me"};
 
     private final AppProperties appProperties;
-    private final org.springframework.core.env.Environment environment;
-
-    public SecurityConfigValidator(AppProperties appProperties,
-            org.springframework.core.env.Environment environment) {
-        this.appProperties = appProperties;
-        this.environment = environment;
-    }
+    private final Environment environment;
 
     /**
      * 启动后立即校验(失败抛异常终止启动)。
      *
      * @param args 启动参数(未使用)
-     * @throws IllegalStateException prod 下密钥为默认值/长度不足
+     * @throws IllegalStateException prod 下密钥不合规, 或黑名单为 fail-open
      */
     @Override
     public void run(org.springframework.boot.ApplicationArguments args) {
-        boolean prod = environment.matchesProfiles("prod");
-        String secret = appProperties.getAuth().getJwtSecret();
-
-        if (!prod) {
-            if (DEV_JWT_SECRET.equals(secret)) {
-                log.warn("当前使用默认 JWT 开发密钥(仅限本地开发); 生产必须通过 JWT_SECRET 环境变量注入 ≥32 字节随机串");
-            }
+        if (!environment.matchesProfiles("prod")) {
+            // 非生产: JWT_SECRET 留空由 JwtTokenProvider 生成一次性随机密钥(构造时已 WARN)
             return;
         }
-        if (DEV_JWT_SECRET.equals(secret) || secret == null || secret.isBlank()) {
+        String secret = appProperties.getAuth().getJwtSecret();
+        if (secret == null || secret.isBlank()) {
             throw new IllegalStateException(
-                    "生产环境拒绝启动: JWT_SECRET 未注入或仍为默认开发密钥。请设置环境变量 JWT_SECRET(≥32 字节随机串)");
+                    "生产环境拒绝启动: JWT_SECRET 未注入(仓库已不提供默认密钥)。"
+                            + "请设置 ≥32 字节的随机密钥, 例: openssl rand -base64 48");
         }
-        if (secret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 32) {
+        if (secret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
             throw new IllegalStateException("生产环境拒绝启动: JWT_SECRET 长度不足 32 字节");
         }
-        // 令牌黑名单在 prod 必须 fail-closed: 否则 Redis 一挂, 注销/吊销等于没做
+        if (looksLikePlaceholder(secret)) {
+            throw new IllegalStateException("生产环境拒绝启动: JWT_SECRET 仍是占位符("
+                    + "命中特征 change-me/changeme/dev-secret/your-/replace-me), 请换成真实随机密钥");
+        }
         if (appProperties.getAuth().isBlacklistFailOpen()) {
             throw new IllegalStateException(
                     "生产环境拒绝启动: app.auth.blacklist-fail-open 必须为 false"
                             + "(现值 true=Redis 异常时放行已注销令牌)。application-prod.yaml 已设为 false,"
                             + " 请检查是否被环境变量或外部配置覆盖");
         }
-        log.info("安全配置校验通过: JWT_SECRET 已自定义且长度合规, 令牌黑名单为 fail-closed");
+        log.info("安全配置校验通过: JWT_SECRET 合规(非占位符且长度达标), 令牌黑名单为 fail-closed");
+    }
+
+    /** 是否命中占位符特征(忽略大小写)——用于拦截"直接把示例值当生产密钥"的情况。 */
+    private static boolean looksLikePlaceholder(String secret) {
+        String lower = secret.toLowerCase(java.util.Locale.ROOT);
+        for (String marker : PLACEHOLDER_MARKERS) {
+            if (lower.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

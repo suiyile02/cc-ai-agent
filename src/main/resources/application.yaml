@@ -15,9 +15,11 @@ spring:
   # 环境变量: DB_URL / DB_USERNAME / DB_PASSWORD (缺省见下)
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${DB_URL:jdbc:mysql://localhost:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&createDatabaseIfNotExist=true}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&createDatabaseIfNotExist=true}
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:123456}
+    # 口令不提供默认值(仓库即凭据来源是泄漏根因): 本地开发需设 DB_PASSWORD 环境变量,
+    # 例: export DB_PASSWORD=你的本地口令
+    password: ${DB_PASSWORD:}
     # 虚拟线程放大并发请求数, 默认 10 连接会成为瓶颈(对话+审计+摘要并发抢连接)
     hikari:
       maximum-pool-size: 25
@@ -27,7 +29,7 @@ spring:
   # ============ Redis(登录限流计数/会话元数据缓存; 本地默认无密码) ============
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
+      host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       timeout: 2000
@@ -66,8 +68,9 @@ spring:
     # 前置: 已启动 Qdrant(docker compose up -d); 环境变量: QDRANT_HOST / QDRANT_PORT(gRPC 6334) / QDRANT_API_KEY
     vectorstore:
       qdrant:
-        host: ${QDRANT_HOST:localhost}
-        port: ${QDRANT_PORT:6334}
+        # 用 127.0.0.1 而非 localhost: 后者在双栈机器上可能先解析到 ::1, 而 Qdrant/MySQL 常只监听 IPv4
+        host: ${QDRANT_HOST:127.0.0.1}
+        port: ${QDRANT_PORT:6333}  # gRPC 端口 (非 HTTP 的 6334)
         # 空串时本地无鉴权 Qdrant 会忽略该请求头; 接 Qdrant Cloud/带鉴权实例时设置 QDRANT_API_KEY 即可
         api-key: ${QDRANT_API_KEY:}
         use-tls: false
@@ -98,8 +101,9 @@ app:
     stream-include-usage: true   # 流式请求索取 usage(否则 chat_log.total_tokens 恒为空); 网关不认该字段时置 false
     stream-idle-timeout-ms: 20000  # 流式静默超时: 模型 20s 无增量即主动终止降级(早于 okhttp 60s read timeout)
   auth:
-    # JWT 密钥(生产必须通过 JWT_SECRET 注入, 长度≥32字节), 过期小时数
-    jwt-secret: ${JWT_SECRET:ai-agent-dev-secret-change-me-in-prod-2026}
+    # JWT 密钥: 仓库内不放任何默认值。留空时——非生产由 JwtTokenProvider 生成一次性随机密钥
+    # (每次重启后旧 token 失效, 便于本地开发); 生产(profile=prod)留空直接拒绝启动。
+    jwt-secret: ${JWT_SECRET:}
     token-expire-hours: 168                   # 7 天
     # 开发便捷开关(默认关闭!): 允许用 X-User-Id 请求头模拟登录, 存在身份伪造风险,
     # 仅在本地开发时激活 dev profile(--spring.profiles.active=dev)开启
@@ -111,7 +115,9 @@ app:
     blacklist-fail-open: true
   # ============ 演示数据播种(仅空表生效) ============
   demo:
-    seed-enabled: true                        # 生产 profile 已关闭
+    seed-enabled: true                        # 生产 profile 已关闭(不创建任何账号)
+    # 仅播种时使用的演示口令; 生产请保持 seed-enabled=false, 或经 DEMO_ADMIN_PASSWORD 注入
+    admin-password: ${DEMO_ADMIN_PASSWORD:admin123}
   # ============ 语义缓存(P3-3): 相同 KB 问题的回答缓存, 命中跳过检索+模型调用 ============
   semantic-cache:
     enabled: true

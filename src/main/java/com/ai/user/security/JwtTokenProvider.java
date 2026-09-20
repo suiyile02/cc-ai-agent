@@ -8,6 +8,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
@@ -17,8 +18,12 @@ import java.util.Date;
 /**
  * JWT 令牌提供者：签发/解析 HS256 令牌(claims: sub=用户名, uid=用户ID)。
  */
+@Slf4j
 @Component
 public class JwtTokenProvider {
+
+    /** 随机密钥长度(字节), 与 prod 最短要求一致 */
+    private static final int KEY_BYTES = 32;
 
     private final SecretKey signingKey;
     private final long expireMillis;
@@ -26,13 +31,28 @@ public class JwtTokenProvider {
     /**
      * 构造器：从配置读取密钥与有效期。
      *
+     * <p>仓库内不放任何默认密钥：{@code JWT_SECRET} 留空时非生产环境自动生成一次性随机密钥
+     * （本地开发可正常起, 但重启即让旧 token 失效）；prod 下留空由
+     * {@code SecurityConfigValidator} 拒绝启动。
+     *
      * @param appProperties 应用配置(app.auth.*)
      */
     public JwtTokenProvider(AppProperties appProperties) {
-        byte[] keyBytes = appProperties.getAuth().getJwtSecret()
-                .getBytes(StandardCharsets.UTF_8);
+        String configured = appProperties.getAuth().getJwtSecret();
+        if (configured == null || configured.isBlank()) {
+            configured = randomSecret();
+            log.warn("JWT_SECRET 未配置, 已生成一次性随机密钥(仅限本地开发: 重启后旧 token 失效; prod 下留空将拒绝启动)");
+        }
+        byte[] keyBytes = configured.getBytes(StandardCharsets.UTF_8);
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
         this.expireMillis = appProperties.getAuth().getTokenExpireHours() * 3600_000L;
+    }
+
+    /** 生成 URL-safe Base64 的 32 字节随机密钥（仅用于本地开发兜底）。 */
+    private static String randomSecret() {
+        byte[] bytes = new byte[KEY_BYTES];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     /**

@@ -1,16 +1,21 @@
 # ============================================================
 # 本地开发基础设施：Qdrant(向量库) + MySQL(业务库)
-# 用法: docker compose up -d
+# 用法: docker compose up -d   (口令从同目录 .env 读取, 见下)
 # Qdrant gRPC 端口 6334 / HTTP 6333(控制台 http://localhost:6333/dashboard)
-# MySQL root 密码默认 123456(与 application.yaml 默认一致, 请按需修改)
+#
+# 安全约定(不要放宽):
+#   1) 仓库内不放任何口令。先执行: cp .env.example .env 并填入自己的 MYSQL_ROOT_PASSWORD;
+#      应用侧对应 export DB_PASSWORD=<同一口令>(或写进 gitignore 的 application-local.yaml)。
+#   2) 所有端口只绑 127.0.0.1 —— 避免把 3306/6333 暴露到局域网(Qdrant 未开 API Key 时尤其危险)。
+#   3) Redis 不在本文件内, 需自行启动; 生产必须设 requirepass 且不对公网发布。
 # ============================================================
 services:
   qdrant:
     image: qdrant/qdrant:v1.13.7
     container_name: ai-agent-qdrant
     ports:
-      - "6333:6333"   # REST / Dashboard
-      - "6334:6334"   # gRPC(Spring AI 使用)
+      - "127.0.0.1:6333:6333"   # REST / Dashboard
+      - "127.0.0.1:6334:6334"   # gRPC(Spring AI 使用)
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
@@ -19,12 +24,13 @@ services:
     image: mysql:8.0
     container_name: ai-agent-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: "123456"
+      # 必填、无默认值: 未提供时 compose 直接报错, 防止"示例口令"被带到真实部署
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?未设置 MYSQL_ROOT_PASSWORD, 请先 cp .env.example .env 并填口令}
       MYSQL_DATABASE: ai_agent_db
       TZ: Asia/Shanghai
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped

@@ -144,8 +144,11 @@ public class AppProperties {
 
     @Data
     public static class Auth {
-        /** JWT 签名密钥(生产通过环境变量 JWT_SECRET 注入, 建议长度≥32字节) */
-        private String jwtSecret = "ai-agent-dev-secret-change-me-in-prod-2026";
+        /**
+         * JWT 签名密钥。仓库内不提供任何默认值：留空时非生产自动生成一次性随机密钥,
+         * 生产由 SecurityConfigValidator 拒绝启动。生产经 JWT_SECRET 环境变量注入(≥32字节)。
+         */
+        private String jwtSecret = "";
         /** Token 有效期(小时) */
         private long tokenExpireHours = 168;
         /**
@@ -164,6 +167,8 @@ public class AppProperties {
     public static class Demo {
         /** 是否在启动时播种演示数据(管理员/员工/订单, 仅空表时生效); 生产 profile 关闭 */
         private boolean seedEnabled = true;
+        /** 播种默认管理员时使用的初始口令(仅演示; 生产应关闭播种或用 DEMO_ADMIN_PASSWORD 注入) */
+        private String adminPassword = "admin123";
     }
 
     /** 跨域配置(app.cors.*)：对接前端(Vue3)时放行的来源 */

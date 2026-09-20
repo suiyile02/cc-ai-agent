@@ -19,7 +19,8 @@ import java.math.BigDecimal;
 
 /**
  * 演示数据初始化：当员工/订单/用户表为空时写入示例业务数据，
- * 便于直接体验 Agent 工具调用与登录(默认管理员 admin/admin123)。
+ * 便于直接体验 Agent 工具调用与登录（管理员口令来自 {@code app.demo.admin-password}）。
+ * 生产 profile 关闭播种（{@code app.demo.seed-enabled=false}），不会创建任何账号。
  */
 @Slf4j
 @Component
@@ -49,7 +50,8 @@ public class DemoDataInitializer implements ApplicationRunner {
     }
 
     /**
-     * 播种默认管理员(admin/admin123), 便于首次登录体验。
+     * 播种默认管理员(账号 admin, 口令取 {@code app.demo.admin-password}), 便于首次登录体验。
+     * 表内已有任何用户时跳过, 不覆盖既有数据。
      */
     private void seedUsers() {
         Long count = sysUserMapper.selectCount(null);
@@ -58,7 +60,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         }
         SysUser admin = new SysUser();
         admin.setUsername("admin");
-        admin.setPassword(PasswordHasher.encode("admin123"));
+        admin.setPassword(PasswordHasher.encode(appProperties.getDemo().getAdminPassword()));
         admin.setNickname("管理员");
         admin.setRole(UserContext.ROLE_ADMIN);
         admin.setStatus(1);

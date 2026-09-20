@@ -22,18 +22,21 @@
 
 前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）、Redis（**compose 未纳管，需自行启动**，默认 `localhost:6379`，可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖；用于登录限流/会话缓存/语义缓存/意图缓存/令牌黑名单，全部为"异常即降级"设计，不起也能跑通登录与对话，只是失去缓存与限流）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
 
-```bash
-# Windows PowerShell
-$env:DASHSCOPE_API_KEY="sk-xxxx"
+**仓库内不含任何口令/密钥默认值**（历史上放过 `123456` 与一个默认 JWT 密钥，均已移除）。本地启动前先准备环境变量：
 
-# 先启动基础设施（MySQL + Qdrant）
-docker compose up -d
-# 启动应用（默认即连 MySQL + Qdrant，无需 profile）
-mvn spring-boot:run
-# 或打包运行
-mvn -DskipTests package
-java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
+```bash
+cp .env.example .env      # 填入 MYSQL_ROOT_PASSWORD / DB_PASSWORD 等(.env 已被 gitignore)
+docker compose up -d      # 端口只绑 127.0.0.1(3306/6333/6334), 不暴露到局域网
+
+# Windows PowerShell
+$env:DB_PASSWORD="你在 .env 里填的口令"
+$env:DASHSCOPE_API_KEY="sk-xxxx"
+# JWT_SECRET 可留空(本地自动生成一次性密钥); 生产留空会拒绝启动
+mvn spring-boot:run       # 或打包运行
+mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```
+
+> 跑 `mvn test` 同理需要 `DB_PASSWORD`（上下文用例连本地 MySQL）。若你沿用了仓库里曾出现过的 `123456`，**请先改掉本机 MySQL 口令**——那个值已随历史提交公开。
 
 启动后：
 - 应用端口 **9090**；Qdrant 控制台 http://localhost:6333/dashboard

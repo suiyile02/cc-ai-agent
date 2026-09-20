@@ -330,6 +330,13 @@ com.ai
 - 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库文档删除/重处理(影响全公司共享 RAG 内容的操作必须管理员), 新增管理类操作时同样挂载。
 - 日志归属: 四张日志表均含 `user_id`(tool_call_log 经 Spring AI `toolContext` 透传回填), 查询接口一律按"管理员或本人"过滤。
 - JWT: `JwtTokenProvider` 签发 HS256；请求带 `Authorization: Bearer <token>`。
+- **凭据规则(强制, 因仓库将公开)**: 仓库内**不得**出现任何真实或示例口令/密钥的默认值——
+  `DB_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`JWT_SECRET`、`DASHSCOPE_API_KEY` 一律走环境变量或 gitignore 的 `.env`
+  (模板 `.env.example`)。`jwt-secret` 留空时: 非生产由 `JwtTokenProvider` 生成一次性随机密钥(重启即失效, 仅限本地),
+  **生产留空/过短/含占位符特征(`change-me`/`dev-secret`/`your-`/`replace-me`)则由
+  `SecurityConfigValidator` 拒绝启动**。演示管理员口令来自 `app.demo.admin-password`
+  (生产 `app.demo.seed-enabled=false`, 不创建任何账号)。`docker-compose.yml` 的端口**只绑 `127.0.0.1`**
+  (Qdrant 无 API Key 时暴露到局域网等于开放读写向量库)。
 - 拦截器 `AuthInterceptor` 保护 `/api/**`，通过 `UserContext` 暴露当前用户；`X-User-Id` 模拟登录默认关闭, 仅 dev profile 开启, 严禁生产开启。
 
 ### 统一返回值格式规范
@@ -408,8 +415,9 @@ com.ai
 
 ## 常用命令
 
-- **开发:** `mvn spring-boot:run`(安全基线) / `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)
-- **测试:** `mvn test`
+- **开发:** `cp .env.example .env`(填 `MYSQL_ROOT_PASSWORD`/`DB_PASSWORD`)→ `mvn spring-boot:run`(安全基线) /
+  `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)。`JWT_SECRET` 本地可留空(自动随机密钥)。
+- **测试:** `mvn test`（`AiAgentApplicationTests` 连本地 MySQL, 需先 `DB_PASSWORD=<口令>`）
 - **清理:** `mvn clean`
 - **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动
   (默认 `localhost:6379`, 可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖)——登录限流、会话缓存、
