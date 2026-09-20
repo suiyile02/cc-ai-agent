@@ -309,6 +309,17 @@ com.ai
 - **@Async 一律显式指定执行器名**: 文档入库=`ingestionExecutor`(AsyncConfig), 审计落库/滚动摘要=
   `auditExecutor`(AsyncConfig)。禁止裸 `@Async`——context 里有多个 TaskExecutor 时 Spring 会在
   "无名为 taskExecutor 的 bean" 上报歧义(仅告警但行为悬而未决), 显式指定名字可消除。
+- **会话自动标题(两段式, `SessionTitleService`)**: 首轮在 `ChatPreparationService.prepare` 最前
+  **同步**写截断兜底标题(`app.session-title.fallback-chars`), 再把模型精修提交到
+  `sessionTitleExecutor`——精修**只需问题不需答案**, 因此与本轮检索/回答全程并行, 前端在本轮
+  结束后 `GET /api/sessions/{id}` 刷一次即拿到精修版。三条规则缺一不可:
+  ①抢首轮必须用**条件更新**(`WHERE title IS NULL OR title=''`)并靠影响行数判归属, 禁止"先读再写"
+  (用户快速连发两轮时只有一个请求能触发精修); ②精修回写必须带"标题仍等于我写过的那个兜底值",
+  否则**人工改名会被自动流程覆盖**(`PUT /api/sessions/{id}/title` 是人工入口, 之后不再被改);
+  ③两次写库都必须 `SessionCacheService.evict`——`requireActive` 读的是 Redis 里的会话实体副本。
+  降级: 模型未配置/超时/失败/清洗后为空一律保留兜底标题并 WARN, 绝不影响对话。
+  **标题精修的线程池刻意用 `AbortPolicy`(队列满即拒绝)而非其它池的 `CallerRunsPolicy`**——
+  后者会在队列满时把几秒的模型调用放回**对话请求线程**执行, 而丢弃精修的代价只是"标题没那么好看"。
 - 摘要未就绪时装配走"窗口历史 + Token 预算"兜底, 不丢上下文; 摘要失败保留现状, 下轮写回后再触发。
 - **计数用数据库 COUNT(*), 禁止加载全文再取 size:** 判断"历史是否够一轮改写"走
   `ChatMemoryCounter.countByConversationId`(每轮都调一次, 旧实现 `findByConversationId().size()`

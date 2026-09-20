@@ -12,6 +12,7 @@ import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
 import com.ai.session.SessionType;
+import com.ai.session.service.SessionTitleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -47,6 +48,7 @@ class ChatPreparationServiceTest {
     private RagRetriever ragRetriever;
     private ContextAssembler contextAssembler;
     private ApplicationEventPublisher eventPublisher;
+    private SessionTitleService sessionTitleService;
     private ChatPreparationService service;
 
     @BeforeEach
@@ -57,8 +59,10 @@ class ChatPreparationServiceTest {
         ragRetriever = mock(RagRetriever.class);
         contextAssembler = mock(ContextAssembler.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        sessionTitleService = mock(SessionTitleService.class);
         service = new ChatPreparationService(queryRewriter, semanticAnswerCache, intentRouter,
-                ragRetriever, contextAssembler, new AppProperties(), eventPublisher);
+                ragRetriever, contextAssembler, new AppProperties(), eventPublisher,
+                sessionTitleService);
     }
 
     private ChatSession session() {
@@ -118,7 +122,7 @@ class ChatPreparationServiceTest {
         AppProperties props = new AppProperties();
         props.getSemanticCache().setEnabled(false);
         service = new ChatPreparationService(queryRewriter, semanticAnswerCache, intentRouter,
-                ragRetriever, contextAssembler, props, eventPublisher);
+                ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService);
         givenCacheEligibleBaseline();
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
@@ -150,5 +154,38 @@ class ChatPreparationServiceTest {
         verify(semanticAnswerCache, never()).get(anyString());
         // 决策审计照常发布(rag_mode=TOOL)
         verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
+    }
+
+    @Test
+    void firstTurnTriggersTitleFallbackAndRefine() {
+        givenCacheEligibleBaseline();
+        when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+        when(sessionTitleService.claimFallback(any(), anyString())).thenReturn("加班和调休…");
+
+        service.prepare(session(), QUESTION);
+
+        // 抢到首轮 → 必须提交精修, 否则标题永远停在截断版
+        verify(sessionTitleService).refineAsync("s1", QUESTION, "加班和调休…");
+    }
+
+    @Test
+    void sessionWithExistingTitleSkipsRefine() {
+        givenCacheEligibleBaseline();
+        when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+        when(sessionTitleService.claimFallback(any(), anyString())).thenReturn(null);
+
+        service.prepare(session(), QUESTION);
+
+        verify(sessionTitleService, never()).refineAsync(anyString(), anyString(), anyString());
     }
 }

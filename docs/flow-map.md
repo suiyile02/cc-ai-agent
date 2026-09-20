@@ -112,12 +112,14 @@ flowchart TD
 | 15 | `GET /api/sessions/{id}/messages` | JWT + Service `requireOwned` | `SessionController.messages → listMessages` |
 | 16 | `PUT /api/sessions/{id}/archive` | JWT + Service `requireOwned` | `SessionController.archive → archive` |
 | 17 | `DELETE /api/sessions/{id}` | JWT + Service `requireOwned` | `SessionController.delete → delete` |
-| 18 | `GET /api/system/chat-logs` | `@RequireSelfOrAdmin` | `SystemController.listChatLogs → ChatLogService.list` |
-| 19 | `GET /api/system/tool-call-logs` | `@RequireSelfOrAdmin` | `SystemController.listToolCallLogs → ToolCallLogService.list` |
-| 20 | `GET /api/system/rag-decisions` | `@RequireSelfOrAdmin` | `SystemController.listRagDecisions → RagDecisionLogService.list` |
-| 21 | `GET /api/system/context-logs` | `@RequireSelfOrAdmin` | `SystemController.listContextLogs → ContextLogService.list` |
-| 22 | `DELETE /api/system/semantic-cache` | `@RequireAdmin` | `SystemController.clearSemanticCache → SemanticAnswerCache.evictAll` |
-| 23 | `DELETE /api/system/intent-cache` | `@RequireAdmin` | `SystemController.clearIntentCache → CachingIntentRouter.evictAll` |
+| 18 | `GET /api/sessions/{id}` | JWT + Service `requireOwned` | `SessionController.detail → detail`（前端首轮后刷新自动标题） |
+| 19 | `PUT /api/sessions/{id}/title` | JWT + Service `requireOwned` | `SessionController.rename → rename`（人工名优先，不被自动标题覆盖） |
+| 20 | `GET /api/system/chat-logs` | `@RequireSelfOrAdmin` | `SystemController.listChatLogs → ChatLogService.list` |
+| 21 | `GET /api/system/tool-call-logs` | `@RequireSelfOrAdmin` | `SystemController.listToolCallLogs → ToolCallLogService.list` |
+| 22 | `GET /api/system/rag-decisions` | `@RequireSelfOrAdmin` | `SystemController.listRagDecisions → RagDecisionLogService.list` |
+| 23 | `GET /api/system/context-logs` | `@RequireSelfOrAdmin` | `SystemController.listContextLogs → ContextLogService.list` |
+| 24 | `DELETE /api/system/semantic-cache` | `@RequireAdmin` | `SystemController.clearSemanticCache → SemanticAnswerCache.evictAll` |
+| 25 | `DELETE /api/system/intent-cache` | `@RequireAdmin` | `SystemController.clearIntentCache → CachingIntentRouter.evictAll` |
 
 （注册/登录在 `AuthInterceptor` 内部按路径放行；`X-User-Id` 模拟登录仅 dev profile 且默认关闭。）
 
@@ -303,7 +305,10 @@ flowchart TD
 ```mermaid
 flowchart TD
     P0["prepare(session, userMessage)"] --> P1["new AtomicInteger toolCalls ★"]
-    P1 --> P2["① QueryRewriter.rewrite(sessionId, sessionType, userMessage)<br/>非 AGENT 会话 + 有历史 + 模型可用 才做"]
+    P1 --> P1a["⓪ SessionTitleService.claimFallback<br/>title 为空才尝试：条件 UPDATE 写截断标题（同步、一条 SQL）"]
+    P1a -->|抢到首轮| P1b["refineAsync → sessionTitleExecutor<br/>模型概括（**只需问题**，故与下方检索/回答并行）<br/>队列满被拒 → WARN，保留截断标题"]
+    P1a -->|已有标题/并发未抢到/开关关闭| P2
+    P1b --> P2["① QueryRewriter.rewrite(sessionId, sessionType, userMessage)<br/>非 AGENT 会话 + 有历史 + 模型可用 才做"]
     P2 --> P2a{"含指代/省略线索词?<br/>（reference-hint-required=true）"}
     P2a -->|否| P2b["跳过改写（零等待）→ 用原问题"]
     P2a -->|是| P2c{"熔断冷却中?<br/>breakerOpenUntil"}
@@ -577,6 +582,8 @@ flowchart TD
     M1["GET /api/sessions/{id}/messages"] --> M2["listMessages → requireOwned（软删也可回看）"]
     M2 --> M3["DbChatMemoryRepository.findByConversationId 按 timestamp,id 升序 + summaryOf"]
     A1["PUT /{id}/archive"] --> A2["status=0 + SessionCacheService.evict"]
+    E1["GET /{id}"] --> E2["detail → requireOwned → toVO（前端首轮后刷新标题）"]
+    N1["PUT /{id}/title"] --> N2["rename: requireOwned → setTitle → updateById → 缓存 evict<br/>★ 人工名不会被自动标题覆盖（精修回写比对兜底值）"]
     D1["DELETE /{id}"] --> D2["软删 status=0 + 清理记忆 deleteByConversationId + clearSummary + 缓存 evict"]
     R1["requireActive(sessionId, userId)（对话每轮调用）"] --> R2{"SessionCacheService.get 命中?"}
     R2 -->|是| R3["直接用缓存的 ChatSession（TTL 10min）"]

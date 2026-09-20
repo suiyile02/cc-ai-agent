@@ -14,6 +14,7 @@ import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
 import com.ai.session.SessionType;
+import com.ai.session.service.SessionTitleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -42,6 +43,7 @@ public class ChatPreparationService {
     private final ContextAssembler contextAssembler;
     private final AppProperties appProperties;
     private final ApplicationEventPublisher eventPublisher;
+    private final SessionTitleService sessionTitleService;
 
     /**
      * 一次问答的 RAG 上下文快照(供提示词组装与决策落库)。
@@ -83,6 +85,11 @@ public class ChatPreparationService {
         long start = System.currentTimeMillis();
         // 本轮工具调用计数(与"一次问答"同生命周期, 由 ChatService 注入 toolContext)
         AtomicInteger toolCalls = new AtomicInteger();
+        // 首轮标题: 先同步占位, 再把精修丢进线程池——它只需问题, 因此与下面的检索与模型回答并行
+        String fallbackTitle = sessionTitleService.claimFallback(session, userMessage);
+        if (fallbackTitle != null) {
+            sessionTitleService.refineAsync(session.getSessionId(), userMessage, fallbackTitle);
+        }
         // 查询改写
         QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
                 session.getSessionId(), session.getSessionType(), userMessage);

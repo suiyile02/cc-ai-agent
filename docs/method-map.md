@@ -80,8 +80,9 @@
 
 | 类 | 方法 | 作用 |
 |---|---|---|
-| `AppProperties` | `@ConfigurationProperties("app")` 的嵌套段：`Rag`/`Storage`/`Chat`/`Auth`/`Demo`/`Cors`/`Context(+Budget/QueryRewrite/Summary/History)`/`LogRetention`/`SemanticCache`/`IntentCache`/`Ingestion`/`Concurrency` | 全项目配置的唯一载体（含默认值与注释） |
+| `AppProperties` | `@ConfigurationProperties("app")` 的嵌套段：`Rag`/`Storage`/`Chat`/`Auth`/`Demo`/`Cors`/`Context(+Budget/QueryRewrite/Summary/History)`/`LogRetention`/`SemanticCache`/`IntentCache`/`Ingestion`/`Concurrency`/`SessionTitle` | 全项目配置的唯一载体（含默认值与注释） |
 | `AsyncConfig` | `ingestionExecutor()` | 入库线程池 5/20/队列100 + `CallerRunsPolicy`（队列满由提交线程执行，不静默丢任务） |
+| | `sessionTitleExecutor()` | 标题精修 1/2/队列50 + **`AbortPolicy`**（唯一不回填请求线程的池：丢弃只损失"标题好看度"，回填则给对话凭空加几秒；拒绝由 `refineAsync` 捕获 WARN） |
 | | `auditExecutor()` | 审计与滚动摘要线程池（与入库解耦；同时消除多 TaskExecutor 的注入歧义） |
 | `ChatClientProvider` | `getIfAvailable()` | 运行时惰性取 `ChatModel` 构建并缓存 `ChatClient`；模型未配置返回 null 由调用方降级 |
 | | `modelLabel()` ★ | **当前生效模型名的单一事实来源**（ChatModel 默认选项 → `app.chat.model-label` → `unknown`），供 `chat_log.model_name` 与语义缓存键共用 |
@@ -341,10 +342,16 @@
 | `listMessages(id,userId)` | 回显历史 + 滚动摘要（归档也可看） | Controller |
 | `archive(id,userId)` / `delete(id,userId)` | 软删 `status=0`；delete 另清记忆与摘要；两者 `SessionCacheService.evict` | Controller |
 | `requireActive(sessionId,userId)` | 存在 + 进行中 + 归属校验（对话每轮的入口守卫，§16） | 门面 |
+| `detail(id,userId)` | 单会话详情（前端首轮后刷新自动标题，比拉整页更轻） | Controller |
+| `rename(id,title,userId)` | 人工改名 + `evict`；**自动标题只在首轮触发且回写比对兜底值，故不覆盖人工名** | Controller |
 | `requireOwned(id,userId)` / `toVO(s)` | 归属校验 / 实体转 VO | 内部 |
 | `SessionCacheService.get/put/isNotFound/putNotFound/evict` | `session:meta:*`(10min) + `session:absent:*`(1min)；**全部降级安全 + WARN 节流** | `requireActive`、增删改 |
+| `SessionTitleService.claimFallback(session,question)` | 首轮**抢占式**写兜底标题：条件更新 `WHERE title IS NULL OR ''`，靠影响行数判归属（并发连发只有一个能拿到）；成功即 `evict` 并返回该标题 | `ChatPreparationService.prepare` |
+| `refineAsync(sessionId,question,fallbackTitle)` | 提交模型精修任务到 `sessionTitleExecutor`（**只需问题→与本轮回答并行**）；队列满被拒则 WARN 并保留兜底标题 | 同上（拿到首轮时） |
+| `fallbackTitleOf(question)` | 折叠空白 → 截 `fallback-chars` 字 → 超长补 `…`（`Strings.truncate` 保证不切开 emoji 代理对） | 内部 / 测试 |
+| `cleanTitle(raw)` / `persistRefined(...)` | 清洗模型输出（首行、去"标题："、剥成对包裹符与首尾标点、限长）→ 条件回写"标题仍等于我写的兜底值" | 内部 / 测试 |
 | `SessionType`（**模块根枚举，自 `ChatSession` 内嵌移出**） | `RAG`/`AGENT`/`HYBRID`；被 chat/context/prompt/session 共同引用，故不再寄生于实体 |
-| `ChatSession`(entity)/`ChatSessionMapper`、`SessionCreateRequest.effectiveType()`、`SessionVO`/`SessionMessagesVO`/`HistoryMessageVO` | 表 `chat_session` 与 DTO（类型归一化 HYBRID） | — |
+| `ChatSession`(entity)/`ChatSessionMapper`、`SessionCreateRequest.effectiveType()`、`SessionRenameRequest.title()`、`SessionVO`/`SessionMessagesVO`/`HistoryMessageVO` | 表 `chat_session` 与 DTO（类型归一化 HYBRID；改名 `@NotBlank @Size(max=200)`） | — |
 
 ---
 

@@ -108,6 +108,19 @@ public class ChatSessionService {
     }
 
     /**
+     * 单个会话详情(供前端在自动标题落库后刷新标题, 不必重拉整页列表)。
+     *
+     * @param id     会话主键
+     * @param userId 当前登录用户(校验归属, 不可读他人会话)
+     * @return 会话 VO
+     * @throws BusinessException 不存在(3001)或无权限(5002)
+     */
+    @Transactional(readOnly = true)
+    public SessionVO detail(Long id, Long userId) {
+        return toVO(requireOwned(id, userId));
+    }
+
+    /**
      * 归档会话(status=0)。
      *
      * @param id     会话主键
@@ -119,6 +132,26 @@ public class ChatSessionService {
         session.setStatus(0);
         sessionMapper.updateById(session);
         sessionCache.evict(session.getSessionId());
+    }
+
+    /**
+     * 手动改名。人工标题优先于自动标题：{@code SessionTitleService} 只在会话首轮触发且
+     * 回写时比对"标题仍等于它自己写入的兜底值", 因此改名后不会被自动流程覆盖。
+     *
+     * @param id     会话主键
+     * @param title  新标题(调用方已校验非空且 ≤200)
+     * @param userId 操作人(校验归属)
+     * @return 改名后的会话 VO(前端就地更新列表项, 无需再拉一次)
+     * @throws BusinessException 不存在(3001)或无权限(5002)
+     */
+    @Transactional
+    public SessionVO rename(Long id, String title, Long userId) {
+        ChatSession session = requireOwned(id, userId);
+        session.setTitle(title);
+        sessionMapper.updateById(session);
+        sessionCache.evict(session.getSessionId());
+        log.info("会话改名: sessionId={}", session.getSessionId());
+        return toVO(session);
     }
 
     /**
