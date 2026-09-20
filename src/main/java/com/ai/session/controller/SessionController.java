@@ -5,6 +5,7 @@ import com.ai.common.PageResult;
 import com.ai.common.Result;
 import com.ai.session.dto.SessionCreateRequest;
 import com.ai.session.dto.SessionMessagesVO;
+import com.ai.session.dto.SessionRenameRequest;
 import com.ai.session.dto.SessionVO;
 import com.ai.user.security.UserContext;
 import jakarta.validation.Valid;
@@ -57,6 +58,17 @@ public class SessionController {
     }
 
     /**
+     * 单个会话详情: 前端在首轮对话结束后刷新自动生成的标题用(比拉整页列表更轻)。
+     *
+     * @param id 会话主键
+     * @return 统一响应, data 为会话 VO
+     */
+    @GetMapping("/{id}")
+    public Result<SessionVO> detail(@PathVariable Long id) {
+        return Result.ok(sessionService.detail(id, UserContext.requireUserId()));
+    }
+
+    /**
      * 会话历史消息(会话回显): 记忆中的 USER/ASSISTANT 消息 + 滚动摘要。
      *
      * @param id 会话主键
@@ -78,6 +90,19 @@ public class SessionController {
     public Result<Void> archive(@PathVariable Long id) {
         sessionService.archive(id, UserContext.requireUserId());
         return Result.ok("会话已归档");
+    }
+
+    /**
+     * 会话改名(人工标题优先, 之后不会被自动标题覆盖)。
+     *
+     * @param id      会话主键
+     * @param request 请求体(title 必填 ≤200)
+     * @return 统一响应, data 为改名后的会话 VO
+     */
+    @PutMapping("/{id}/title")
+    public Result<SessionVO> rename(@PathVariable Long id,
+            @RequestBody @Valid SessionRenameRequest request) {
+        return Result.ok(sessionService.rename(id, request.title(), UserContext.requireUserId()));
     }
 
     /**

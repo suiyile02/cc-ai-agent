@@ -105,8 +105,13 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 |---|---|
 | `POST /api/sessions` | 创建会话（sessionType: RAG/AGENT/HYBRID，默认 HYBRID） |
 | `GET /api/sessions` | 我的会话（分页，自动按登录用户隔离） |
+| `GET /api/sessions/{id}` | 单个会话详情 |
+| `PUT /api/sessions/{id}/title` | 手动改名（人工标题优先，不会被自动标题覆盖） |
 | `PUT /api/sessions/{id}/archive` | 归档（status=0） |
 | `DELETE /api/sessions/{id}` | 删除 = 软删 + 清理对话记忆 |
+
+> **会话标题自动生成**：新会话首轮提问时，后端先同步把问题截断成标题占位（`app.session-title.fallback-chars`），
+> 再用模型概括精修（异步，与本轮回答并行；`model-enabled: false` 可只保留截断版）。模型不可用一律停留在截断标题，不影响对话。
 
 ### 3.5 系统管理（需求第 6 章）
 > **授权**：四个日志查询接口均带 `@RequireSelfOrAdmin`——管理员可按任意 `userId`/`sessionId` 过滤全量；普通用户强制只查本人（不传 `userId` 即本人全量，传他人 `userId` 被改写为本人）。语义缓存清空为管理动作，带 `@RequireAdmin`。

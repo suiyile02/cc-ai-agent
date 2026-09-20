@@ -70,7 +70,7 @@ spring:
       qdrant:
         # 用 127.0.0.1 而非 localhost: 后者在双栈机器上可能先解析到 ::1, 而 Qdrant/MySQL 常只监听 IPv4
         host: ${QDRANT_HOST:127.0.0.1}
-        port: ${QDRANT_PORT:6333}  # gRPC 端口 (非 HTTP 的 6334)
+        port: ${QDRANT_PORT:6334}  # gRPC 端口(Spring AI 走 gRPC, HTTP REST 才是 6333)
         # 空串时本地无鉴权 Qdrant 会忽略该请求头; 接 Qdrant Cloud/带鉴权实例时设置 QDRANT_API_KEY 即可
         api-key: ${QDRANT_API_KEY:}
         use-tls: false
@@ -130,6 +130,13 @@ app:
   concurrency:
     max-concurrent-per-user: 3    # 超并发返回 429/6010
     acquire-timeout-ms: 1000
+  # ============ 会话自动标题: 首轮把"未命名会话"填成有意义的短标题 ============
+  session-title:
+    enabled: true
+    fallback-chars: 24       # 兜底标题=问题前 24 字(同步写库, 零等待, 模型不可用也有标题)
+    model-enabled: true      # 关闭则一直停留在截断版, 完全不产生模型开销
+    max-chars: 30            # 精修标题上限(模型不守规矩时的硬截断保护)
+    timeout-ms: 8000         # 精修调用超时; 与本轮回答并行, 超时仅保留兜底标题
   # ============ 文档解析防护(A2): 解析超时 + 解压炸弹预检 ============
   ingestion:
     parse-timeout-ms: 120000       # 单文档解析超时(超时置 status=3)

@@ -52,4 +52,27 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 会话标题精修线程池：一次模型调用, 只为让标题好看一点, 不值得与审计落库抢线程。
+     *
+     * <p><b>刻意使用默认的 AbortPolicy(队列满即拒绝)</b>：{@code auditExecutor}/{@code ingestionExecutor}
+     * 用 CallerRunsPolicy 是因为那两类任务不可丢(丢了就少一条审计/文档卡在处理中); 而标题精修
+     * 被丢弃时兜底标题已经落库, 损失仅是"标题没那么好看"。若沿用 CallerRunsPolicy, 队列一满
+     * 就会把一次几秒的模型调用放回<b>对话请求线程</b>上执行, 等于给对话凭空加上那段延迟。
+     * 拒绝由 {@code SessionTitleService#refineAsync} 捕获并 WARN。
+     *
+     * @return Executor(核心 1 / 最大 2 / 队列 50, 线程名前缀 session-title-)
+     */
+    @Bean(name = "sessionTitleExecutor")
+    public Executor sessionTitleExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("session-title-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
 }

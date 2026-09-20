@@ -115,4 +115,36 @@ class ChatSessionServiceTest {
         System.out.println(list.records());
 
     }
+
+    @Test
+    void ownerCanRenameAndCacheIsEvicted() {
+        ChatSession owned = session(9L, 1);
+        when(sessionMapper.selectById(1L)).thenReturn(owned);
+
+        SessionVO vo = service.rename(1L, "年假政策要点", 9L);
+
+        assertEquals("年假政策要点", vo.title());
+        verify(sessionMapper).updateById(owned);
+        // 会话实体被 Redis 缓存着, 改名后不失效则对话链路仍会读到旧标题
+        verify(sessionCache).evict("sid-1");
+    }
+
+    @Test
+    void renameOnOthersSessionIsRejected() {
+        when(sessionMapper.selectById(1L)).thenReturn(session(9L, 1));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.rename(1L, "越权改名", 8L));
+
+        assertEquals(ErrorCode.AUTH_FAILED, e.getErrorCode());
+        verify(sessionMapper, never()).updateById(any(ChatSession.class));
+    }
+
+    @Test
+    void detailReturnsSessionForOwnerAndRejectsOthers() {
+        when(sessionMapper.selectById(1L)).thenReturn(session(9L, 1));
+
+        assertEquals("sid-1", service.detail(1L, 9L).sessionId());
+        assertThrows(BusinessException.class, () -> service.detail(1L, 8L));
+    }
 }
