@@ -12,8 +12,11 @@ import java.util.List;
 public final class ChatSourceDisplay {
 
     /**
-     * 语义负缓存命中时的固定回答(与 base-system.st 的"知识库未找到"口径一致,
-     * 文本命中 {@link #declaresNoResult(String)} 故不入正缓存)。
+     * 语义负缓存命中时的固定回答。
+     *
+     * <p>与严格模式提示词 {@code prompts/kb-only-system.st} 要求模型复述的话术逐字一致, 否则用户会
+     * 看到两种不同的"没找到"。两者不能共享常量(prompt 模块禁止依赖 chat 模块), 该一致性由
+     * {@code PromptServiceTest#strictRefusalSentenceMatchesNegativeCacheConstant} 把守——改这里必须同改模板。
      */
     public static final String NO_RESULT_ANSWER = "知识库中未找到相关信息，请确认问题或补充相关资料后重试。";
 

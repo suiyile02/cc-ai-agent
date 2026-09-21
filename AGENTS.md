@@ -364,8 +364,27 @@ com.ai
 
 ### Spring AI & RAG 提示词
 
-- System 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system)。
+- System 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system/kb-only-system)。
 - 注入上下文前必须经重排或相似度阈值过滤。
+- **提示词选择矩阵**(`PromptService.systemFor`, 唯一选择点——同步与流式共用)：
+
+| 会话类型 / 意图 | `kb-only=false`(默认, 宽松) | `kb-only=true`(严格知识库) |
+|---|---|---|
+| `AGENT` 会话 | `base-system.st` | `base-system.st`(**刻意不变**: Agent 型本就靠工具) |
+| `TOOL` 意图 | `general-system.st` | `kb-only-system.st` |
+| `GENERAL` 意图 | `general-system.st`(允许闲聊科普) | `kb-only-system.st`(必须友好拒答) |
+| `KB` + 有命中 | `base-system.st` + `rag-context.st`(`{{extraRule}}`=可补充常识) | `kb-only-system.st` + `rag-context.st`(`{{extraRule}}`=禁止引入资料之外的知识) |
+| `KB` + 零命中 | `base-system.st` | `kb-only-system.st` |
+
+- **`TOOL` 必须跟着切换**(易踩点): 宽松模式下 TOOL 与 GENERAL 共用 `general-system.st`, 而该模板首句就授权
+  "可以回答常识、科普、闲聊类问题"。若严格模式只改 GENERAL, "只允许知识库作答"会被 TOOL 分支绕过,
+  开关等于无效。
+- **`kb-only` 是提示词级软约束, 不是硬保证**(刻意如此, 勿在文档/沟通中把它说成"保证不编造"):
+  模型仍被调用, 长多轮或资料字面相关而语义不对题时仍可能拼出看似有据的答案。需要零编造时正解是
+  **硬闸门**——在 `ChatPreparationService` 检索零命中分支直接返回固定文案、不调模型; 与本开关不冲突, 可叠加。
+- 严格模板的拒答措辞与 `ChatSourceDisplay.NO_RESULT_ANSWER`(语义负缓存命中时的固定回答)必须逐字一致;
+  因 `prompt` 模块禁止依赖 `chat` 模块(ArchUnit 规则 5), 两处不能共享常量, 由
+  `PromptServiceTest#strictRefusalSentenceMatchesNegativeCacheConstant` 钉住, **改措辞时两处同改**。
 
 ---
 
