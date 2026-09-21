@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS rag_decision_log (
     final_hits          INT         NOT NULL DEFAULT 0 COMMENT '最终注入上下文的命中段数(重排后 Top-K)',
     top_k               INT         NULL COMMENT '本次检索 Top-K 配置值',
     similarity_threshold DOUBLE     NULL COMMENT '本次检索相似度阈值',
+    semantic_max_score  DOUBLE      NULL COMMENT '语义路阈值过滤前的最大相似度(0=该路无结果或分数不可得); 阈值定标与相关性判据的唯一未截断观察值',
     rerank_mode         VARCHAR(16) NULL COMMENT '重排模式: score/llm/none',
     duration_ms         INT         NULL COMMENT '路由与检索耗时(毫秒)',
     created_at          DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

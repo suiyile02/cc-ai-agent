@@ -15,11 +15,13 @@ import com.ai.session.SessionType;
 import com.ai.session.service.SessionTitleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -104,7 +106,7 @@ class ChatPreparationServiceTest {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
-                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
                 .thenReturn(mock(AssembledPrompt.class));
@@ -125,7 +127,7 @@ class ChatPreparationServiceTest {
                 ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService);
         givenCacheEligibleBaseline();
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
-                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
                 .thenReturn(mock(AssembledPrompt.class));
@@ -161,7 +163,7 @@ class ChatPreparationServiceTest {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
-                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
                 .thenReturn(mock(AssembledPrompt.class));
@@ -178,7 +180,7 @@ class ChatPreparationServiceTest {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
-                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false));
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
                 .thenReturn(mock(AssembledPrompt.class));
@@ -187,5 +189,41 @@ class ChatPreparationServiceTest {
         service.prepare(session(), QUESTION);
 
         verify(sessionTitleService, never()).refineAsync(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void skippedRetrievalRecordsNullMaxScoreNotZero() {
+        // 工具类问题跳过检索: 决策事件里的 semanticMaxScore 必须是 null("没观察"),
+        // 不能是 0.0("观察到 0 分")——否则 P3-6 用它统计分数分布依然失真
+        when(queryRewriter.rewrite(anyString(), any(), anyString()))
+                .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
+        when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        service.prepare(session(), QUESTION);
+
+        ArgumentCaptor<ChatDecisionEvent> sent = ArgumentCaptor.forClass(ChatDecisionEvent.class);
+        verify(eventPublisher).publishEvent(sent.capture());
+        assertNull(sent.getValue().semanticMaxScore(), "未执行检索时语义最高分应为 null");
+        assertFalse(sent.getValue().retrievalExecuted());
+    }
+
+    @Test
+    void executedRetrievalRecordsObservedMaxScore() {
+        givenCacheEligibleBaseline();
+        when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 3, 10, false, 0.72));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        service.prepare(session(), QUESTION);
+
+        ArgumentCaptor<ChatDecisionEvent> sent = ArgumentCaptor.forClass(ChatDecisionEvent.class);
+        verify(eventPublisher).publishEvent(sent.capture());
+        assertEquals(0.72, sent.getValue().semanticMaxScore(), 1e-9, "执行了检索就要带上过滤前最大分");
     }
 }

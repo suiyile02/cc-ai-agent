@@ -67,8 +67,8 @@ public class RagDecisionLogService {
                 l.getId(), l.getSessionId(), l.getUserMessage(), l.getRagMode(),
                 l.getSessionType(), l.getRetrievalExecuted(), l.getSemanticHits(),
                 l.getKeywordHits(), l.getFinalHits(), l.getTopK(),
-                l.getSimilarityThreshold(), l.getRerankMode(), l.getDurationMs(),
-                l.getCreatedAt())).toList();
+                l.getSimilarityThreshold(), l.getSemanticMaxScore(), l.getRerankMode(),
+                l.getDurationMs(), l.getCreatedAt())).toList();
         return PageResult.of(vos, mpPage.getTotal(), (int) mpPage.getCurrent(),
                 (int) mpPage.getSize());
     }

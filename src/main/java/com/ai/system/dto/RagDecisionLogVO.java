@@ -17,6 +17,7 @@ public record RagDecisionLogVO(
         Integer finalHits,
         Integer topK,
         Double similarityThreshold,
+        Double semanticMaxScore,
         String rerankMode,
         Integer durationMs,
         LocalDateTime createdAt) {

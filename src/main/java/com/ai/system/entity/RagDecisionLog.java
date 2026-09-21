@@ -57,6 +57,14 @@ public class RagDecisionLog {
     /** 相似度阈值 */
     private Double similarityThreshold;
 
+    /**
+     * 语义路**阈值过滤前**的最大相似度(0=该路无结果或分数不可得)。
+     *
+     * <p>阈值定标(P3-6)与相关性判据(P3-7 四出口)的唯一观察依据: 阈值之后的分数被截断过,
+     * 拿它统计必然高估可分性。
+     */
+    private Double semanticMaxScore;
+
     /** 重排模式 score/llm/none */
     private String rerankMode;
 

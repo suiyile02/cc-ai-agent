@@ -446,7 +446,7 @@ flowchart TD
     R0["RagRetrievalService.retrieveOutcome(query, topK, threshold)"] --> R3["Timeouts.call(doRetrieve, app.rag.retrieve-timeout-ms=10s)"]
     R3 --> R1{"向量库 / 关键词索引 至少一路可用?"}
     R1 -->|否| R2["none()：本轮未执行检索"]
-    R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant，阈值过滤）"]
+    R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant, **以 0 阈值召回**）<br/>→ recall() 内本地过滤, 并记录**过滤前最大分** semanticMaxScore"]
     R1 -->|是| R5["HybridRecaller.keywordHits（仅 hybrid-enabled 且索引非空）<br/>KeywordIndex.search BM25；宽度 max(topK*2,10)"]
     R4 --> R6["RrfFuser.fuse：按 doc_id:chunk_index 去重 → RRF(k=60) 名次融合"]
     R5 --> R6
@@ -473,6 +473,9 @@ flowchart TD
 `RerankStrategy` 实现，`RerankStrategyFactory` 按 `mode()` 自动收录，编排层零改动。
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
+**阈值已在本地过滤而非下发向量库**（`HybridRecaller.recall`）：下发时低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
+分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**过滤前最大分**写入
+`rag_decision_log.semantic_max_score`，它是 P3-6 定标与 P3-7 相关性判据的唯一未截断观察值。
 
 ---
 
