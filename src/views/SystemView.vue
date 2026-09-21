@@ -232,7 +232,7 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
       <div v-else-if="activeTab === 'rag'" class="table-wrap">
         <table class="data">
           <thead>
-            <tr><th>ID</th><th>用户消息</th><th>意图</th><th>会话类型</th><th>执行检索</th><th>语义/关键词/最终命中</th><th>TopK / 阈值</th><th>重排</th><th>耗时</th><th>时间</th></tr>
+            <tr><th>ID</th><th>用户消息</th><th>意图</th><th>会话类型</th><th>执行检索</th><th>语义/关键词/最终命中</th><th>TopK / 阈值 / 语义最高分</th><th>重排</th><th>耗时</th><th>时间</th></tr>
           </thead>
           <tbody>
             <tr v-for="r in list" :key="r.id" class="clickable" title="点击查看完整 JSON" @click="openDetail(r, `RAG 决策 #${r.id}`)">
@@ -242,7 +242,9 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
               <td class="mono" style="font-size: 11.5px">{{ r.sessionType }}</td>
               <td><StatusTag :type="r.retrievalExecuted ? 'info' : 'neutral'" :text="r.retrievalExecuted ? '是' : '否'" :dot="false" /></td>
               <td class="mono">{{ r.semanticHits }} / {{ r.keywordHits }} / <strong style="color: var(--accent)">{{ r.finalHits }}</strong></td>
-              <td class="mono">{{ r.topK }} / {{ r.similarityThreshold }}</td>
+              <td class="mono">{{ r.topK }} / {{ r.similarityThreshold }} /
+                <span :style="{ color: r.semanticMaxScore != null && r.semanticMaxScore < r.similarityThreshold ? 'var(--warn)' : 'var(--accent)' }">{{ r.semanticMaxScore == null ? '—' : r.semanticMaxScore.toFixed(3) }}</span>
+              </td>
               <td class="mono" style="font-size: 11.5px">{{ r.rerankMode }}</td>
               <td>{{ formatDuration(r.durationMs) }}</td>
               <td class="mono" style="font-size: 11.5px">{{ formatDateTime(r.createdAt) }}</td>
