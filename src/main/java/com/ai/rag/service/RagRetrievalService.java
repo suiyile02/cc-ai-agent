@@ -93,7 +93,8 @@ public class RagRetrievalService implements RagRetriever {
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
                 : mergeAndRerank(query, recall, topK);
-        return new RetrievalOutcome(hits, true, recall.semantic().size(), recall.keyword().size(), false);
+        return new RetrievalOutcome(hits, true, recall.semantic().size(), recall.keyword().size(),
+                false, recall.semanticMaxScore());
     }
 
     /**

@@ -67,6 +67,7 @@ public class ChatAuditListener {
         entry.setFinalHits(event.finalHits());
         entry.setTopK(event.topK());
         entry.setSimilarityThreshold(event.similarityThreshold());
+        entry.setSemanticMaxScore(event.semanticMaxScore());
         entry.setRerankMode(event.rerankMode());
         entry.setDurationMs((int) event.durationMs());
         return entry;

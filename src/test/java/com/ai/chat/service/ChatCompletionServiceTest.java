@@ -83,7 +83,7 @@ class ChatCompletionServiceTest {
     @Test
     void zeroHitNonDegradedWritesNegativeCache() {
         service.complete(session(), "用户问题",
-                prep(new RetrievalOutcome(List.of(), true, 0, 0, false), List.of()),
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0), List.of()),
                 "知识库中未找到相关信息。", 10, 0L);
 
         verify(semanticAnswerCache).putMiss(QUESTION);
@@ -106,7 +106,7 @@ class ChatCompletionServiceTest {
         List<com.ai.rag.SourceVO> sources =
                 List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6));
         service.complete(session(), "用户问题",
-                prep(new RetrievalOutcome(List.of(doc), true, 1, 0, false), sources),
+                prep(new RetrievalOutcome(List.of(doc), true, 1, 0, false, 0.0), sources),
                 "调休按 1:1 计算。", 10, 0L);
 
         verify(semanticAnswerCache).put(eq(QUESTION), eq("调休按 1:1 计算。"),
@@ -138,7 +138,7 @@ class ChatCompletionServiceTest {
         AtomicInteger toolCalls = new AtomicInteger(1);
 
         service.complete(session(), "用户问题",
-                prep(new RetrievalOutcome(List.of(doc), true, 1, 0, false), sources, toolCalls),
+                prep(new RetrievalOutcome(List.of(doc), true, 1, 0, false, 0.0), sources, toolCalls),
                 "张三在研发部, 电话 13800000000。", 10, 0L);
 
         verify(semanticAnswerCache, never()).put(anyString(), anyString(), any());
@@ -151,7 +151,7 @@ class ChatCompletionServiceTest {
     @Test
     void toolCallTurnDoesNotWriteNegativeCache() {
         service.complete(session(), "用户问题",
-                prep(new RetrievalOutcome(List.of(), true, 0, 0, false), List.of(),
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0), List.of(),
                         new AtomicInteger(2)),
                 "订单已发货。", 10, 0L);
 

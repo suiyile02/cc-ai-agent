@@ -215,6 +215,9 @@ public class ChatPreparationService {
                 rag.mode() == RagMode.KB && outcome.executed(),
                 outcome.semanticCount(), outcome.keywordCount(), rag.hits().size(),
                 appProperties.getRag().getTopK(), appProperties.getRag().getSimilarityThreshold(),
+                // 未执行检索(被路由跳过/缓存命中)时必须记 null, 不能记 0.0——
+                // 否则定标时"没观察"会被当成"观察到了 0 分", 分数分布依旧失真
+                outcome.executed() ? outcome.semanticMaxScore() : null,
                 appProperties.getRag().getRerankMode(), costMs));
     }
 }

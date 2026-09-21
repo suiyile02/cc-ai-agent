@@ -123,7 +123,7 @@
 | `RagRetriever`（接口） | 仅保留有调用方的四个方法：`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits,tokenBudget)`、`toSources(hits)`（原 `available()`/单参 `retrieve`/无预算 `buildContext` 无调用方，已删除） |
 | `IntentRouter` | `route(message)` → `RagMode` |
 | `RagMode` | `KB`/`TOOL`/`GENERAL` 三态 |
-| `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
+| `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记 + **`semanticMaxScore`（语义路阈值过滤前最大分）**；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
 | `SemanticCacheAdmin` / `IntentCacheAdmin` | `evictAll()`：跨模块运维清空契约 |
 
 ### `RagRetrievalService` + 四个协作类（2026-09 拆分）
@@ -134,7 +134,7 @@
 | | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
 | | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
 | | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
-| `HybridRecaller` | `recall(query,topK,threshold)` | 两路召回 + 可用性标记（返回 `Recall`） | 编排 |
+| `HybridRecaller` | `recall(query,topK,threshold)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、在本地按阈值过滤**——阈值下发给向量库会让低于阈值的分数永不可见，分布被底部截断、无法定标 | 编排 |
 | | `semanticHits(...)` / `keywordHits(...)` | 单路检索，异常只丢那一路（WARN） | 内部 |
 | `RrfFuser`（静态） | `fuse(semantic,keyword)` / `rrfScore(c)` | 按 `doc_id:chunk_index` 去重 + RRF(k=60) 名次融合 | 编排 |
 | `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score` | 融合/重排 |
@@ -239,7 +239,7 @@
 | `ChatStreamEvent` | `EventType.CONTENT`（唯一） + `[DONE]` |
 | `RagDebugRequest` | 检索调试入参（`topK`/`threshold` 归一化在紧凑构造器里）；原嵌套的 `RagDebugResponse` 无引用点，已删除 |
 | `ChatCompletedEvent` | 问答完成事件负载（record，含 composition/usage/modelLabel） |
-| `ChatDecisionEvent` | 决策事件负载（record，13 个**已计算的值**字段）——不携带 `system.entity` 实体，实体组装在 `ChatAuditListener.toEntity` |
+| `ChatDecisionEvent` | 决策事件负载（record，14 个**已计算的值**字段，含 `semanticMaxScore`）——不携带 `system.entity` 实体，实体组装在 `ChatAuditListener.toEntity` |
 
 ### `ChatService`（门面）
 | 方法 | 作用 |
