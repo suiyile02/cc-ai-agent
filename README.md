@@ -25,18 +25,22 @@
 **仓库内不含任何口令/密钥默认值**（历史上放过 `123456` 与一个默认 JWT 密钥，均已移除）。本地启动前先准备环境变量：
 
 ```bash
-cp .env.example .env      # 填入 MYSQL_ROOT_PASSWORD / DB_PASSWORD 等(.env 已被 gitignore)
+cp .env.example .env      # 供 docker compose 使用: 填 MYSQL_ROOT_PASSWORD 等(.env 已被 gitignore)
 docker compose up -d      # 端口只绑 127.0.0.1(3306/6333/6334), 不暴露到局域网
 
+# 让应用拿到数据库口令(二选一, 见"数据源与环境变量"一节)
+#   ① IDEA/本地推荐: 模块根目录建 application-local.yaml(已 gitignore), 内容一行即可:
+#        DB_PASSWORD: "你的口令"
+#   ② 命令行: 用环境变量
 # Windows PowerShell
-$env:DB_PASSWORD="你在 .env 里填的口令"
+$env:DB_PASSWORD="你的本地口令"
 $env:DASHSCOPE_API_KEY="sk-xxxx"
 # JWT_SECRET 可留空(本地自动生成一次性密钥); 生产留空会拒绝启动
 mvn spring-boot:run       # 或打包运行
 mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```
 
-> 跑 `mvn test` 同理需要 `DB_PASSWORD`（上下文用例连本地 MySQL）。若你沿用了仓库里曾出现过的 `123456`，**请先改掉本机 MySQL 口令**——那个值已随历史提交公开。
+> 跑 `mvn test` 同理需要能连上 MySQL——建了 `application-local.yaml` 就直接 `mvn test`，不必再设环境变量。若你沿用了仓库里曾出现过的 `123456`，**请先改掉本机 MySQL 口令**——那个值已随历史提交公开。
 
 启动后：
 - 应用端口 **9090**；Qdrant 控制台 http://localhost:6333/dashboard
@@ -51,9 +55,20 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 | 用途 | 环境变量 | 缺省 |
 |---|---|---|
-| MySQL 连接 | `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | `jdbc:mysql://localhost:3306/ai_agent_db...` / `root` / `123456` |
-| Qdrant 连接 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_API_KEY` | `localhost` / `6334` / 空 |
+| MySQL 连接 | `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | `jdbc:mysql://127.0.0.1:3306/ai_agent_db...` / `root` / **无默认值**（见下方"本地口令怎么传"） |
+| Qdrant 连接 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_API_KEY` | `127.0.0.1` / `6334`（gRPC） / 空 |
 | 大模型 | `DASHSCOPE_API_KEY` / `AI_BASE_URL` / `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` | 见 `application.yaml` |
+
+**本地口令怎么传**（`DB_PASSWORD` 在仓库里没有默认值，不传就连不上库——这是防泄漏的刻意设计）：
+
+| 场景 | 做法 |
+|---|---|
+| **IDEA 里点启动** | 在模块根目录建 `application-local.yaml`（已 gitignore）写一行 `DB_PASSWORD: "你的口令"`，由 `spring.config.import: optional:file:./application-local.yaml` 自动加载，零配置即可启动 |
+| 命令行 | `DB_PASSWORD=xxx mvn spring-boot:run`（PowerShell：`$env:DB_PASSWORD="xxx"`） |
+| 生产 | 部署平台注入环境变量 |
+
+> ⚠ IDEA 的运行配置**不继承**你在终端里 `export` 的变量，所以只走命令行那条路会让 IDE 启动一直失败——请用上面的 `application-local.yaml`。
+> `.env` 只被 `docker compose` 读取，Spring Boot 不认它。
 
 > 首次启动 Qdrant 自动建集合（需 Embedding 模型可用）；MySQL 表由启动期 `spring.sql.init` 幂等建表（脚本全部 `IF NOT EXISTS`，`continue-on-error` 已关闭）。
 >

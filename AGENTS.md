@@ -342,8 +342,12 @@ com.ai
 - 日志归属: 四张日志表均含 `user_id`(tool_call_log 经 Spring AI `toolContext` 透传回填), 查询接口一律按"管理员或本人"过滤。
 - JWT: `JwtTokenProvider` 签发 HS256；请求带 `Authorization: Bearer <token>`。
 - **凭据规则(强制, 因仓库将公开)**: 仓库内**不得**出现任何真实或示例口令/密钥的默认值——
-  `DB_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`JWT_SECRET`、`DASHSCOPE_API_KEY` 一律走环境变量或 gitignore 的 `.env`
-  (模板 `.env.example`)。`jwt-secret` 留空时: 非生产由 `JwtTokenProvider` 生成一次性随机密钥(重启即失效, 仅限本地),
+  `DB_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`JWT_SECRET`、`DASHSCOPE_API_KEY` 一律走环境变量，本地则写
+  **gitignore 的 `application-local.yaml`**(模块根目录, 由 `spring.config.import: optional:file:./...` 加载;
+  键名写成顶层 `DB_PASSWORD` 即可被 `${DB_PASSWORD:}` 占位符解析, 不涉及覆盖顺序问题——这是刻意选型,
+  使两份配置谁先加载都不影响结果)。模板 `.env.example`。**`.env` 只服务 `docker compose`,
+  Spring Boot 不读它**；IDEA 运行配置也**不继承** shell 的 `export`——这两条都曾导致"改完默认值后本地启动失败",
+  改凭据注入方式时必须同时验证 IDE 里的点启动, 不能只验命令行。`jwt-secret` 留空时: 非生产由 `JwtTokenProvider` 生成一次性随机密钥(重启即失效, 仅限本地),
   **生产留空/过短/含占位符特征(`change-me`/`dev-secret`/`your-`/`replace-me`)则由
   `SecurityConfigValidator` 拒绝启动**。演示管理员口令来自 `app.demo.admin-password`
   (生产 `app.demo.seed-enabled=false`, 不创建任何账号)。`docker-compose.yml` 的端口**只绑 `127.0.0.1`**
@@ -426,9 +430,11 @@ com.ai
 
 ## 常用命令
 
-- **开发:** `cp .env.example .env`(填 `MYSQL_ROOT_PASSWORD`/`DB_PASSWORD`)→ `mvn spring-boot:run`(安全基线) /
-  `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)。`JWT_SECRET` 本地可留空(自动随机密钥)。
-- **测试:** `mvn test`（`AiAgentApplicationTests` 连本地 MySQL, 需先 `DB_PASSWORD=<口令>`）
+- **本地一次性准备:** 模块根目录建 `application-local.yaml`(已 gitignore)写 `DB_PASSWORD: "你的口令"`——
+  这一条同时服务于 IDEA 点启动与命令行, 之后不必再管环境变量。`cp .env.example .env` **只为 docker compose 服务**。
+- **开发:** `mvn spring-boot:run`(安全基线) / `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)。
+  在 IDEA 里直接 Run 同样可用(靠 `application-local.yaml`)。`JWT_SECRET` 本地可留空(自动随机密钥)。
+- **测试:** `mvn test`（`AiAgentApplicationTests` 连本地 MySQL; 有 `application-local.yaml` 即可, 否则需 `DB_PASSWORD=<口令>`）
 - **清理:** `mvn clean`
 - **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动
   (默认 `localhost:6379`, 可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖)——登录限流、会话缓存、

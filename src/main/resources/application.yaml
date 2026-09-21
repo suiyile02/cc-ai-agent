@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: ai-agent
+  # 本地免环境变量入口(IDEA 直接点启动也能连库): 模块根目录放 application-local.yaml
+  # 写 DB_PASSWORD 等键即可, 该文件已在 .gitignore 内。optional: 前缀保证文件不存在时
+  # (生产容器/CI/新克隆)照常启动, 不报错。
+  config:
+    import: optional:file:./application-local.yaml
   threads:
     virtual:
       enabled: true            # Java 21 虚拟线程
@@ -17,8 +22,10 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&createDatabaseIfNotExist=true}
     username: ${DB_USERNAME:root}
-    # 口令不提供默认值(仓库即凭据来源是泄漏根因): 本地开发需设 DB_PASSWORD 环境变量,
-    # 例: export DB_PASSWORD=你的本地口令
+    # 口令不提供默认值(仓库即凭据来源是泄漏根因)。三种注入方式任选:
+    #   ① 本地/IDEA: 模块根目录建 application-local.yaml 写 DB_PASSWORD(见上方 spring.config.import, 已 gitignore)
+    #   ② 命令行: export DB_PASSWORD=你的本地口令(IDEA 运行配置不继承 shell 变量, 别用这条走 IDE)
+    #   ③ 生产: 部署平台注入环境变量
     password: ${DB_PASSWORD:}
     # 虚拟线程放大并发请求数, 默认 10 连接会成为瓶颈(对话+审计+摘要并发抢连接)
     hikari:
