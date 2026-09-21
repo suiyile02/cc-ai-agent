@@ -1,33 +1,53 @@
 package com.ai.config;
 
-import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.core.env.Environment;
+import org.springframework.core.io.ClassPathResource;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code app.chat.kb-only} 的实际绑定测试：读真实 application.yaml。
+ * {@code app.chat.kb-only} 的"仓库默认值"守卫。
  *
- * <p>提示词分支逻辑由 {@code PromptServiceTest} 覆盖, 但那里是直接给字段赋值构造的, 没有覆盖
- * "yaml 里的键名能否绑到字段"。键名拼错不会报错, 开关会静默停在 false, 故实测两件事：
- * ① 该键确实存在于 yaml(拼写正确)；② 其值按预期解析。
+ * <p>刻意<b>不</b>用 @SpringBootTest：合并后的 Environment 会把 gitignore 的
+ * {@code application-local.yaml}(本机偏好)算进来, 那样一个纯本地的开关会让测试无端变红。
+ * 本守卫要管的是"提交进仓库的默认行为", 所以直接读 classpath 上的 application.yaml 原文。
+ *
+ * <p>"键名能否绑到字段"这一环由 {@link KbOnlyEnabledBindingTest} 用非默认值 true 证明
+ * (默认值 false 与"绑定失败停在 false"无法区分, 故那里才是绑定测试该待的地方)。
  */
-@SpringBootTest
 class KbOnlyDefaultBindingTest {
 
-    @Resource
-    private AppProperties appProperties;
-    @Resource
-    private Environment environment;
+    /** 只允许出现一次该键, 且取值必须是 false */
+    private static final Pattern KB_ONLY = Pattern.compile("^\\s*kb-only:\\s*(\\w+)\\s*(?:#.*)?$",
+            Pattern.MULTILINE);
 
     @Test
-    void yamlDefinesTheKebabCaseKeyAndItBindsToDisabled() {
-        assertTrue(environment.containsProperty("app.chat.kb-only"),
-                "application.yaml 里必须存在 app.chat.kb-only 这个键(键名拼错时 Spring 静默忽略, 开关形同虚设)");
-        assertFalse(appProperties.getChat().isKbOnly(),
-                "默认应为关闭: 严格模式改变答题口径, 不得在未显式开启时影响既有行为");
+    void yamlInRepoDeclaresTheKeyExactlyOnceAsDisabled() throws IOException {
+        String yaml = readClasspath("application.yaml");
+
+        Matcher m = KB_ONLY.matcher(yaml);
+        assertTrue(m.find(), "application.yaml 必须显式声明 app.chat.kb-only(不声明就等于隐式依赖 Java 默认值)");
+        assertEquals("false", m.group(1), "提交进仓库的默认必须是关闭——严格模式改变答题口径, 不得默默成为项目默认");
+        assertFalse(m.find(), "该键只允许声明一次, 出现两处则有一份永远不生效(单一事实来源)");
+    }
+
+    @Test
+    void javaDefaultIsDisabled() {
+        // 作用于 new AppProperties()(单元测试的构造路径), 与 yaml 无关
+        assertFalse(new AppProperties().getChat().isKbOnly());
+    }
+
+    private static String readClasspath(String name) throws IOException {
+        try (InputStream in = new ClassPathResource(name).getInputStream()) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 }
