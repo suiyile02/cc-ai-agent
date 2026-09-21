@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { systemApi } from '../api'
 import { formatDateTime, formatDuration, prettyJson, truncate } from '../utils/format'
+import { outcomeTag } from '../utils/outcome'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import Icon from '../components/Icon.vue'
@@ -32,20 +33,8 @@ const filters = reactive({
   ragMode: '',
 })
 
-/**
- * 出口 → 标签。P3-7 起 answerOutcome 才说明"这轮实际依据什么作答"；
- * 旧的 ragMode 只是关键词表的事前预判，保留为灰色参考列。
- */
-const OUTCOMES = {
-  ANSWERED_FROM_KB: { text: '知识库作答', type: 'success' },
-  ANSWERED_FROM_CACHE: { text: '缓存作答', type: 'success' },
-  REFUSED_NO_EVIDENCE: { text: '无据拒答', type: 'warn' },
-  ANSWERED_OPEN: { text: '自由作答', type: 'info' },
-  TOOL_DATA: { text: '工具数据', type: 'info' },
-}
-function outcomeTag(o) {
-  return o ? (OUTCOMES[o] || { text: o, type: 'neutral' }) : { text: '—', type: 'neutral' }
-}
+// 出口标签口径见 utils/outcome.js（与检索调试页共用）；旧的 ragMode 只是关键词表的事前预判，
+// 保留为灰色参考列，用来对照"预判 vs 实际出口"的偏差。
 
 const list = ref([])
 const page = reactive({ num: 1, size: 10, total: 0, totalPages: 0 })
