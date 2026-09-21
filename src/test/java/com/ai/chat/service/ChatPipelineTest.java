@@ -8,6 +8,7 @@ import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.AssembledPrompt;
 import com.ai.context.service.QueryRewriter;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagMode;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
@@ -100,7 +101,7 @@ class ChatPipelineTest {
     private ChatPreparationService.PreparedChat hitPrep() {
         return new ChatPreparationService.PreparedChat(
                 new QueryRewriter.RewriteResult(QUESTION, false),
-                new ChatPreparationService.RagContext(List.of(), RagMode.KB, RetrievalOutcome.none()),
+                new ChatPreparationService.RagContext(List.of(), RagMode.KB, RetrievalOutcome.none(), ChatOutcome.ANSWERED_FROM_CACHE),
                 List.of(), null, true, QUESTION,
                 new SemanticAnswerCache.CachedAnswer("缓存答案", List.of("员工手册")),
                 new AtomicInteger());
@@ -110,7 +111,8 @@ class ChatPipelineTest {
         return new ChatPreparationService.PreparedChat(
                 new QueryRewriter.RewriteResult(QUESTION, false),
                 new ChatPreparationService.RagContext(
-                        List.of(new Document("调休相关内容")), RagMode.KB, RetrievalOutcome.none()),
+                        List.of(new Document("调休相关内容")), RagMode.KB, RetrievalOutcome.none(),
+                        ChatOutcome.ANSWERED_FROM_KB),
                 List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6)),
                 assembled, true, QUESTION, null, new AtomicInteger());
     }

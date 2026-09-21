@@ -40,12 +40,6 @@ public class AppProperties {
         /** 注入上下文字符上限 */
         private int contextMaxChars = 8000;
         /**
-         * 意图路由开关(默认 true)：按问题内容决定是否需要 RAG 检索——
-         * 命中内部业务关键词走检索；纯常识/闲聊问题跳过检索直接自由问答。
-         * 设为 false 则恢复“RAG/HYBRID 会话每次都检索”的旧行为。
-         */
-        private boolean autoRoute = true;
-        /**
          * 混合检索开关(默认 true)：语义向量检索 + 关键词(BM25) 多路召回后再重排。
          * false 时退化为“仅语义向量检索 + 相似度阈值过滤”。
          */
@@ -152,7 +146,7 @@ public class AppProperties {
          * <p><b>这是提示词级软约束, 不是硬保证</b>: 模型仍被调用, 极端情况仍可能不遵守。
          * 需要"保证零编造"时应在检索零命中处直接返回固定文案(硬闸门), 而非依赖本开关。
          */
-        private boolean kbOnly = false;
+        private boolean kbOnly = true;
     }
 
     @Data

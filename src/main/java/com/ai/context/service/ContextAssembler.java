@@ -8,7 +8,7 @@ import com.ai.prompt.PromptService;
 import com.ai.common.TokenCounter;
 import com.ai.config.AppProperties;
 import com.ai.session.entity.ChatSession;
-import com.ai.rag.RagMode;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagRetriever;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,12 +47,12 @@ public class ContextAssembler {
      * @param session     会话
      * @param userMessage 当前用户问题(原始, 用于模型 user 轮)
      * @param ragHits     检索命中文档(已重排取 Top-K; 无检索时为空)
-     * @param mode        意图路由结果 KB/GENERAL
+     * @param outcome     本轮出口(决定 system 模板; P3-7 起取代意图路由预判)
      * @param rewritten   当前问题是否经过多轮改写(仅用于可观测标记)
      * @return 装配结果(system + 历史消息 + 用户输入 + Token 组成)
      */
     public AssembledPrompt assemble(ChatSession session, String userMessage,
-            List<Document> ragHits, RagMode mode, boolean rewritten) {
+            List<Document> ragHits, ChatOutcome outcome, boolean rewritten) {
         AppProperties.Context cfg = appProperties.getContext();
         // 获取会话的 Token 默认预算配置
         int total = Math.max(0, cfg.getModelMaxTokens() - cfg.getReservedForAnswer());
@@ -67,7 +67,7 @@ public class ContextAssembler {
         int ragTokens = tokenCounter.count(contextText);
 
         // system 段: base + 可选 rag-context 模板
-        String system = promptService.systemFor(session.getSessionType(), mode, hasHits, contextText);
+        String system = promptService.systemFor(session.getSessionType(), outcome, hasHits, contextText);
         int systemTokens = Math.max(0, tokenCounter.count(system) - ragTokens);
 
         // history 段: 摘要 + 最近窗口(受预算约束, 内部触发滚动摘要)

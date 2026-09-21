@@ -65,6 +65,7 @@ public class RagDecisionLogService {
         mapper.selectPage(mpPage, qw);
         List<RagDecisionLogVO> vos = mpPage.getRecords().stream().map(l -> new RagDecisionLogVO(
                 l.getId(), l.getSessionId(), l.getUserMessage(), l.getRagMode(),
+                l.getAnswerOutcome(),
                 l.getSessionType(), l.getRetrievalExecuted(), l.getSemanticHits(),
                 l.getKeywordHits(), l.getFinalHits(), l.getTopK(),
                 l.getSimilarityThreshold(), l.getSemanticMaxScore(), l.getRerankMode(),

@@ -2,7 +2,7 @@ package com.ai.prompt;
 
 import com.ai.chat.service.ChatSourceDisplay;
 import com.ai.config.AppProperties;
-import com.ai.rag.RagMode;
+import com.ai.rag.ChatOutcome;
 import com.ai.session.SessionType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,22 +11,24 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link PromptService} 提示词选择单元测试：覆盖「会话类型 × 意图路由 × 是否有命中 × kb-only」
- * 的模板选择矩阵。重点是严格模式({@code app.chat.kb-only})下不再把 TOOL/GENERAL 授权给
- * "可以回答常识、科普、闲聊"的自由作答模板, 以及拒答口径与语义负缓存固定文案不漂移。
+ * {@link PromptService} 提示词选择单元测试：覆盖「会话类型 × 出口 × 是否命中 × kb-only」矩阵。
  *
- * <p>纯字符串断言(读真实 classpath 模板), 不调用模型。
+ * <p>P3-7 后入参从"意图路由预判(RagMode)"换成"检索事后算出的出口(ChatOutcome)"，
+ * 因此本测试的每个用例都在断言**出口 → 模板**的对应关系，而不是词表 → 模板。
+ * 纯字符串断言(读真实 classpath 模板)，不调模型。
  */
 class PromptServiceTest {
 
-    /** 严格模板的判定性句子(只出现在 kb-only 模板里) */
+    /** 严格模板的判定性句子 */
     private static final String STRICT_MARKER = "只能依据";
-    /** 宽松 general 模板的判定性句子 */
+    /** 宽松自由问答模板的判定性句子 */
     private static final String OPEN_CHAT_MARKER = "常识、科普、闲聊";
-    /** 宽松模式下资料块给出的补充许可 */
+    /** 宽松模式下资料块的补充规则 */
     private static final String LOOSE_EXTRA_RULE = "可适当补充常识性解释";
-    /** 严格模式下资料块的替代规则 */
+    /** 严格模式下资料块的补充规则 */
     private static final String STRICT_EXTRA_RULE = "禁止引入资料之外的知识";
+    /** 部分命中必须先答可答部分(第 0 步实测该行为不稳定, 故显式钉进模板) */
+    private static final String PARTIAL_RULE = "若资料只覆盖了问题的一部分";
 
     private AppProperties appProperties;
     private PromptService service;
@@ -41,131 +43,141 @@ class PromptServiceTest {
         appProperties.getChat().setKbOnly(kbOnly);
     }
 
-    /* ---------------- AGENT 会话: 不受开关影响 ---------------- */
+    /* ---------------- AGENT 会话：出口不参与模板选择 ---------------- */
 
     @Test
-    void agentSessionKeepsBasePromptEvenWhenKbOnlyEnabled() {
+    void agentSessionKeepsBasePromptRegardlessOfOutcome() {
         givenKbOnly(true);
 
-        String system = service.systemFor(SessionType.AGENT, RagMode.KB, false, null);
-
-        assertFalse(system.contains(STRICT_MARKER), "AGENT 会话靠工具作答, 不应被套上知识库严格模板");
-        assertTrue(system.contains("企业内部"), "AGENT 应仍使用 base-system.st");
+        for (ChatOutcome outcome : ChatOutcome.values()) {
+            String system = service.systemFor(SessionType.AGENT, outcome, false, null);
+            assertFalse(system.contains(STRICT_MARKER),
+                    "AGENT 会话靠工具作答, 不应被套上知识库严格模板: " + outcome);
+            assertTrue(system.contains("企业内部"), "AGENT 应仍使用 base-system.st: " + outcome);
+        }
     }
 
-    /* ---------------- GENERAL 意图 ---------------- */
+    /* ---------------- 有知识库依据 ---------------- */
 
     @Test
-    void generalIntentUsesOpenChatPromptWhenKbOnlyDisabled() {
+    void answeredFromKbInjectsContextWithLooseRule() {
         givenKbOnly(false);
 
-        String system = service.systemFor(SessionType.HYBRID, RagMode.GENERAL, false, null);
+        String system = service.systemFor(SessionType.RAG, ChatOutcome.ANSWERED_FROM_KB,
+                true, "员工年假按入职年限计算。");
 
-        assertTrue(system.contains(OPEN_CHAT_MARKER), "默认(宽松)模式下闲聊类仍允许自由作答");
-    }
-
-    @Test
-    void generalIntentUsesStrictPromptWhenKbOnlyEnabled() {
-        givenKbOnly(true);
-
-        String system = service.systemFor(SessionType.HYBRID, RagMode.GENERAL, false, null);
-
-        assertTrue(system.contains(STRICT_MARKER), "严格模式下与库无关的问题不得自由作答");
-        assertFalse(system.contains(OPEN_CHAT_MARKER), "严格模式不得再授权闲聊式作答");
-    }
-
-    /* ---------------- TOOL 意图(回归防护: 曾被一并授权自由作答) ---------------- */
-
-    @Test
-    void toolIntentIsNotGivenOpenChatLicenseUnderKbOnly() {
-        givenKbOnly(true);
-
-        String system = service.systemFor(SessionType.HYBRID, RagMode.TOOL, false, null);
-
-        assertFalse(system.contains(OPEN_CHAT_MARKER),
-                "工具类问题绝不能拿" + OPEN_CHAT_MARKER + "模板——等于把'保留内部工具'变成'工具+自由知识'");
-        assertTrue(system.contains("工具"), "严格模式仍须允许调用业务工具查内部数据");
-    }
-
-    @Test
-    void toolIntentUnchangedWhenKbOnlyDisabled() {
-        givenKbOnly(false);
-
-        String system = service.systemFor(SessionType.HYBRID, RagMode.TOOL, false, null);
-
-        assertTrue(system.contains(OPEN_CHAT_MARKER), "开关关闭时行为必须与改动前完全一致");
-    }
-
-    /* ---------------- KB 意图 + 有命中: 资料块的补充规则随开关切换 ---------------- */
-
-    @Test
-    void kbWithHitsKeepsLooseExtraRuleWhenKbOnlyDisabled() {
-        givenKbOnly(false);
-
-        String system = service.systemFor(SessionType.RAG, RagMode.KB, true, "员工年假按入职年限计算。");
-
-        assertTrue(system.contains(LOOSE_EXTRA_RULE), "宽松模式保留原有的'可补充常识'许可");
+        assertTrue(system.contains(LOOSE_EXTRA_RULE), "宽松模式保留原有的「可补充常识」许可");
         assertFalse(system.contains(STRICT_EXTRA_RULE));
         assertTrue(system.contains("员工年假按入职年限计算"), "资料正文必须已注入");
     }
 
     @Test
-    void kbWithHitsSwapsToStrictExtraRuleWhenKbOnlyEnabled() {
+    void answeredFromKbInjectsContextWithStrictRuleAndPartialHandling() {
         givenKbOnly(true);
 
-        String system = service.systemFor(SessionType.RAG, RagMode.KB, true, "员工年假按入职年限计算。");
+        String system = service.systemFor(SessionType.RAG, ChatOutcome.ANSWERED_FROM_KB,
+                true, "员工年假按入职年限计算。");
 
         assertTrue(system.contains(STRICT_EXTRA_RULE), "严格模式下资料块不得再邀请模型补充常识");
+        assertTrue(system.contains(PARTIAL_RULE), "部分命中必须先答可答部分——实测该行为不稳定");
         assertFalse(system.contains(LOOSE_EXTRA_RULE), "两条规则互斥, 同时出现即自相矛盾");
     }
 
-    /* ---------------- KB 意图 + 零命中 ---------------- */
+    @Test
+    void cacheHitSharesTheKbTemplatePath() {
+        givenKbOnly(true);
+
+        String system = service.systemFor(SessionType.RAG, ChatOutcome.ANSWERED_FROM_CACHE,
+                true, "资料");
+
+        assertTrue(system.contains(STRICT_MARKER), "缓存命中的回答同样源自知识库, 模板口径应一致");
+    }
+
+    /* ---------------- 无据可依 ---------------- */
 
     @Test
-    void kbWithoutHitsUsesBasePromptWhenKbOnlyDisabled() {
-        givenKbOnly(false);
+    void refusedNoEvidenceAlwaysUsesStrictTemplate() {
+        for (boolean kbOnly : new boolean[]{true, false}) {
+            givenKbOnly(kbOnly);
 
-        String system = service.systemFor(SessionType.RAG, RagMode.KB, false, null);
+            String system = service.systemFor(SessionType.HYBRID, ChatOutcome.REFUSED_NO_EVIDENCE,
+                    false, null);
 
-        assertFalse(system.contains(STRICT_MARKER));
-        assertTrue(system.contains("知识库中未找到相关信息"), "宽松模式仍要求如实说未找到");
+            assertTrue(system.contains(STRICT_MARKER), "拒答出口必须用严格模板(kbOnly=" + kbOnly + ")");
+            assertFalse(system.contains(OPEN_CHAT_MARKER), "拒答轮次绝不能再授权自由作答");
+        }
     }
 
     @Test
-    void kbWithoutHitsUsesStrictPromptWhenKbOnlyEnabled() {
+    void refusalSentenceMatchesNegativeCacheConstant() {
         givenKbOnly(true);
 
-        String system = service.systemFor(SessionType.RAG, RagMode.KB, false, null);
+        String system = service.systemFor(SessionType.RAG, ChatOutcome.REFUSED_NO_EVIDENCE, false, null);
 
-        assertTrue(system.contains(STRICT_MARKER));
-    }
-
-    /* ---------------- 拒答口径与负缓存固定文案同源(防漂移) ---------------- */
-
-    @Test
-    void strictRefusalSentenceMatchesNegativeCacheConstant() {
-        givenKbOnly(true);
-
-        String system = service.systemFor(SessionType.RAG, RagMode.KB, false, null);
-
-        // ChatSourceDisplay.NO_RESULT_ANSWER 是"负缓存命中"时用户看到的固定回答,
-        // 严格模板要求模型复述同一句话——两处措辞一旦分叉, 用户会看到两种不同的"没找到"。
-        // 生产代码不能共享常量(prompt 模块禁止依赖 chat 模块), 故用本测试钉住。
+        // ChatSourceDisplay.NO_RESULT_ANSWER 是负缓存命中时用户看到的固定回答,
+        // 严格模板要求模型复述同一句——两处措辞分叉, 用户会看到两种不同的"没找到"。
+        // prompt 模块禁止依赖 chat 模块, 无法共享常量, 故用本测试钉住。
         assertTrue(system.contains(ChatSourceDisplay.NO_RESULT_ANSWER),
                 "严格模板的拒答口径必须与 ChatSourceDisplay.NO_RESULT_ANSWER 完全一致");
     }
 
-    /* ---------------- 模板加载失败防护 ---------------- */
+    /* ---------------- 自由作答轮 ---------------- */
+
+    @Test
+    void openAnswerUsesGeneralTemplateInBothModes() {
+        // ANSWERED_OPEN 只在"允许自由作答"或"本轮不检索(AGENT 之外的非 RAG 会话)"时出现,
+        // 两种情况都不该被套上"必须拒答"的严格模板
+        for (boolean kbOnly : new boolean[]{true, false}) {
+            givenKbOnly(kbOnly);
+
+            String system = service.systemFor(SessionType.HYBRID, ChatOutcome.ANSWERED_OPEN,
+                    false, null);
+
+            assertTrue(system.contains(OPEN_CHAT_MARKER), "自由作答出口应使用 general-system(kbOnly=" + kbOnly + ")");
+            assertFalse(system.contains(STRICT_MARKER));
+        }
+    }
+
+    /* ---------------- 工具轮(回归防护: 不得被套成"可回答常识科普闲聊"后自由编造) ---------------- */
+
+    @Test
+    void toolTurnUnderKbOnlyUsesStrictTemplateButKeepsTools() {
+        givenKbOnly(true);
+
+        String system = service.systemFor(SessionType.HYBRID, ChatOutcome.TOOL_DATA, false, null);
+
+        assertFalse(system.contains(OPEN_CHAT_MARKER),
+                "严格模式下工具轮不得拿「常识科普闲聊」模板——否则开关形同虚设");
+        assertTrue(system.contains("工具"), "严格模式必须仍允许调工具, 否则「查订单」会被误拒");
+    }
+
+    @Test
+    void toolTurnWithoutKbOnlyKeepsGeneralTemplate() {
+        givenKbOnly(false);
+
+        String system = service.systemFor(SessionType.HYBRID, ChatOutcome.TOOL_DATA, false, null);
+
+        assertTrue(system.contains(OPEN_CHAT_MARKER), "宽松模式下工具轮行为与本批改造前一致");
+    }
+
+    /* ---------------- 默认值与模板加载 ---------------- */
+
+    @Test
+    void strictModeIsTheProjectDefault() {
+        assertTrue(new AppProperties().getChat().isKbOnly(),
+                "P3-7 起严格知识库模式为默认; 若这里为 false 说明默认值被改动而本测试未同步");
+    }
 
     @Test
     void everyBranchResolvesToNonEmptyTemplate() {
-        givenKbOnly(true);
-
-        for (RagMode mode : RagMode.values()) {
-            for (boolean hasHits : new boolean[]{true, false}) {
-                String system = service.systemFor(SessionType.HYBRID, mode, hasHits, "资料");
-                assertTrue(system.length() > 80,
-                        "分支 " + mode + "/hasHits=" + hasHits + " 提示词过短, 疑似模板文件读取失败(load 失败返回空串)");
+        for (boolean kbOnly : new boolean[]{true, false}) {
+            givenKbOnly(kbOnly);
+            for (ChatOutcome outcome : ChatOutcome.values()) {
+                for (boolean hasHits : new boolean[]{true, false}) {
+                    String system = service.systemFor(SessionType.HYBRID, outcome, hasHits, "资料");
+                    assertTrue(system.length() > 80, "分支 " + outcome + "/hasHits=" + hasHits
+                            + " 提示词过短, 疑似模板文件读取失败(load 失败返回空串)");
+                }
             }
         }
     }

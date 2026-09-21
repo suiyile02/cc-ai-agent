@@ -225,8 +225,11 @@ st, r = req('GET', f'/api/system/rag-decisions?sessionId={SESSION_A}', token=E2E
 rows = r['data']['records'] if st == 200 else []
 general_rows = [v for v in rows if v['ragMode'] == 'GENERAL']
 check('RAG 决策日志落库', st == 200 and r['data']['total'] >= 5, f"total={r['data']['total']}")
-check('闲聊问题路由为 GENERAL 且未检索', len(general_rows) >= 1
-      and all(not v['retrievalExecuted'] for v in general_rows), f'GENERAL rows={len(general_rows)}')
+# P3-7 起 GENERAL 也一律检索(出口由检索事实算出), 故此处断言反转: 闲聊轮必须"检索过但无据可依"。
+check('闲聊轮已执行检索且出口为无据拒答(P3-7)', len(general_rows) >= 1
+      and all(v['retrievalExecuted'] for v in general_rows)
+      and all(v.get('answerOutcome') in ('REFUSED_NO_EVIDENCE', 'ANSWERED_OPEN') for v in general_rows),
+      f"GENERAL rows={[(v.get('answerOutcome'), v['retrievalExecuted']) for v in general_rows]}")
 
 st, r = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
 rows = r['data']['records'] if st == 200 else []

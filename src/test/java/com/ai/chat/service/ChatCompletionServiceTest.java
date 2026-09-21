@@ -3,6 +3,7 @@ package com.ai.chat.service;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
 import com.ai.context.service.QueryRewriter;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagMode;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.service.SemanticAnswerCache;
@@ -72,26 +73,49 @@ class ChatCompletionServiceTest {
      * @param toolCalls 本轮工具调用计数容器
      * @return 前置结果(KB 路由 + 可缓存)
      */
+    /** 出口为 ANSWERED_FROM_KB 的常规前置结果 */
     private ChatPreparationService.PreparedChat prep(RetrievalOutcome outcome,
             List<com.ai.rag.SourceVO> sources, AtomicInteger toolCalls) {
+        return prep(outcome, sources, toolCalls, ChatOutcome.ANSWERED_FROM_KB);
+    }
+
+    private ChatPreparationService.PreparedChat prep(RetrievalOutcome outcome,
+            List<com.ai.rag.SourceVO> sources, AtomicInteger toolCalls, ChatOutcome chatOutcome) {
         return new ChatPreparationService.PreparedChat(
                 new QueryRewriter.RewriteResult(QUESTION, false),
-                new ChatPreparationService.RagContext(outcome.hits(), RagMode.KB, outcome),
+                new ChatPreparationService.RagContext(outcome.hits(), RagMode.KB, outcome, chatOutcome),
                 sources, null, true, QUESTION, null, toolCalls);
     }
 
     @Test
-    void zeroHitNonDegradedWritesNegativeCache() {
+    void refusedNoEvidenceWritesNegativeCache() {
         service.complete(session(), "用户问题",
-                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0), List.of()),
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0), List.of(),
+                        new AtomicInteger(), ChatOutcome.REFUSED_NO_EVIDENCE),
                 "知识库中未找到相关信息。", 10, 0L);
 
         verify(semanticAnswerCache).putMiss(QUESTION);
         verify(semanticAnswerCache, never()).put(anyString(), anyString(), any());
     }
 
+    /**
+     * P3-7 新增规则: 零命中但走自由作答(ANSWERED_OPEN)的轮次**不得**写负缓存。
+     * 旧实现按"零命中"写, 会把宽松模式下本可自由作答的问题缓存成固定"未找到"文案。
+     */
+    @Test
+    void openAnswerWithZeroHitsWritesNothing() {
+        service.complete(session(), "用户问题",
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.2), List.of(),
+                        new AtomicInteger(), ChatOutcome.ANSWERED_OPEN),
+                "秋天适合出游, 推荐几个地方。", 10, 0L);
+
+        verify(semanticAnswerCache, never()).putMiss(anyString());
+        verify(semanticAnswerCache, never()).put(anyString(), anyString(), any());
+    }
+
     @Test
     void degradedZeroHitDoesNotWriteNegativeCache() {
+        // 检索超时降级时出口恒为 ANSWERED_OPEN(见 OutcomeResolver), 不该把瞬时故障固化成"无答案"
         service.complete(session(), "用户问题",
                 prep(RetrievalOutcome.executedEmpty(), List.of()),
                 "知识库中未找到相关信息。", 10, 0L);
@@ -118,8 +142,8 @@ class ChatCompletionServiceTest {
     void nonCacheEligibleWritesNothing() {
         ChatPreparationService.PreparedChat notEligible = new ChatPreparationService.PreparedChat(
                 new QueryRewriter.RewriteResult(QUESTION, false),
-                new ChatPreparationService.RagContext(List.of(), RagMode.GENERAL,
-                        RetrievalOutcome.none()),
+                new ChatPreparationService.RagContext(List.of(), RagMode.GENERAL, RetrievalOutcome.none(),
+                        ChatOutcome.ANSWERED_OPEN),
                 List.of(), null, false, QUESTION, null, new AtomicInteger());
         service.complete(session(), "用户问题", notEligible, "随便聊聊", 10, 0L);
 

@@ -84,9 +84,17 @@ class ChatPreparationServiceTest {
         when(semanticAnswerCache.get(anyString())).thenReturn(null);
     }
 
+    /**
+     * P3-7 改序后的负缓存语义: 检索**先**执行(出口只能由检索事实算出),
+     * 负缓存的作用是"省掉一次注定拒答的模型调用", 不再是"跳过检索"。
+     */
     @Test
-    void negativeCacheHitShortCircuitsRetrievalAndAssembly() {
+    void negativeCacheSavesTheModelCallButNotTheRetrieval() {
         givenCacheEligibleBaseline();
+        // 本轮检索执行了但无语义证据(默认 kb-only=true → 出口 REFUSED_NO_EVIDENCE)
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.31));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(true);
 
         ChatPreparationService.PreparedChat prep = service.prepare(session(), QUESTION);
@@ -96,7 +104,8 @@ class ChatPreparationServiceTest {
         assertTrue(prep.cachedAnswer().sources().isEmpty());
         assertNull(prep.assembled(), "负缓存命中不装配上下文");
         verify(semanticAnswerCache).isMiss(QUESTION);
-        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        // 与改造前唯一的区别: 检索必须真的跑过——出口不能靠猜
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble());
         verify(contextAssembler, never()).assemble(any(), anyString(), anyList(), any(), anyBoolean());
         verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
     }
