@@ -333,7 +333,7 @@ flowchart TD
     P7a -->|否| P7c["CachingIntentRouter.route（rag:intent:v{版本}:{sha256}）"]
     P7c --> P7d{"TOOL?"}
     P7d -->|是| P7e["★无条件跳过检索（答案在业务库）→ RagContext(mode=TOOL)"]
-    P7d -->|GENERAL 且 auto-route| P7f["跳过检索，用 general-system.st"]
+    P7d -->|GENERAL 且 auto-route| P7f["跳过检索；提示词按 kb-only 选<br/>宽松=general-system.st / 严格=kb-only-system.st"]
     P7d -->|KB| P7g["RagRetrievalService.retrieveOutcome（见 §9）"]
     P7b --> P8
     P7e --> P8
@@ -697,7 +697,7 @@ flowchart TD
         F1["用户/日期/UUID.ext（原始上传文件）"]
     end
     subgraph PR["classpath:/prompts"]
-        T1["base-system.st · rag-context（注入模板）· general-system.st"]
+        T1["base-system.st · rag-context.st（含 {{extraRule}} 占位）· general-system.st · kb-only-system.st"]
     end
 ```
 

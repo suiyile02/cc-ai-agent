@@ -107,7 +107,7 @@
 
 | 方法 | 作用 | 调用方 |
 |---|---|---|
-| `PromptService.systemFor(type,mode,hasContext,contextText)` | 按会话类型/意图/是否命中上下文选模板并渲染系统提示词（`base-system.st` + `rag-context` 注入） | 门面 `buildSpec` |
+| `PromptService.systemFor(type,mode,hasContext,contextText)` | 按会话类型/意图/是否命中上下文选模板并渲染系统提示词（`base-system.st` + `rag-context` 注入）；`app.chat.kb-only=true` 时 GENERAL/TOOL/KB 一律改用 `kb-only-system.st` 且资料块的 `{{extraRule}}` 换成"禁止引入资料之外的知识"（AGENT 会话不受影响） | 门面 `buildSpec` |
 | `baseSystem(type)` | 加载基础模板并替换类型占位符 | 内部 |
 | `template(path)` | 读模板原文（带缓存），供改写/摘要复用 | `QueryRewriter`、`ConversationSummarizer` |
 | `load(path)` | classpath 读取；失败不缓存空串（下次重试） | 内部 |

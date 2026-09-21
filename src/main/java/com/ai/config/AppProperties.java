@@ -141,6 +141,18 @@ public class AppProperties {
          * 才被重置(实测整轮 61s 只返回一条 19 字提示)。0=关闭该保护(不推荐)。
          */
         private long streamIdleTimeoutMs = 20_000;
+        /**
+         * 严格知识库模式(默认关闭)。
+         *
+         * <p>开启后主对话只能依据「知识库检索到的资料」或「业务工具返回结果」作答, 禁止模型用
+         * 自身预训练知识回答公司内部事务; 无资料/资料无关时按固定口径友好拒答。
+         * 影响范围: 提示词选择({@code PromptService.systemFor})——GENERAL 与 TOOL 不再套用
+         * "可回答常识科普闲聊"的自由作答模板; {@code AGENT} 会话不受影响(本就靠工具作答)。
+         *
+         * <p><b>这是提示词级软约束, 不是硬保证</b>: 模型仍被调用, 极端情况仍可能不遵守。
+         * 需要"保证零编造"时应在检索零命中处直接返回固定文案(硬闸门), 而非依赖本开关。
+         */
+        private boolean kbOnly = false;
     }
 
     @Data
@@ -336,7 +348,7 @@ public class AppProperties {
         /** 兜底标题截取长度(按 UTF-16 单元计, 不会切开 emoji 代理对) */
         private int fallbackChars = 24;
         /** 是否调用模型精修(关闭则一直停留在兜底的截断标题, 零模型开销) */
-        private boolean modelEnabled = true;
+        private boolean modelEnabled = false;
         /** 精修标题长度上限(模型不守规矩时的硬截断保护) */
         private int maxChars = 30;
         /** 精修调用超时毫秒(超时放弃, 保留兜底标题) */

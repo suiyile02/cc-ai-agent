@@ -111,7 +111,25 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
 流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + KB 路由"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过检索与装配直接返回；负缓存命中则直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **意图路由**（`app.rag.auto-route=true` 时：常识/闲聊问题自动跳过检索、以 `general-system.st` 自由作答；命中内部关键词（`app.rag.internal-keywords` 可覆盖缺省词表）才执行检索）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`app.rag.auto-route=false` / `hybrid-enabled=false` 可分别关闭路由与混合检索。
 
+### 3.2.1 严格知识库模式（`app.chat.kb-only`，默认关闭）
+
+打开后主对话**只能依据知识库检索到的资料或业务工具返回结果作答**，不再使用模型自身的通用知识：
+
+| 情形 | 用户看到的 |
+|---|---|
+| 库里没检索到 / 资料不足以回答 | 固定口径友好提示：「知识库中未找到相关信息，请确认问题或补充相关资料后重试。」（可再附换关键词或补充文档的建议） |
+| 问题与知识库无关（闲聊、常识、时事、写作翻译） | 礼貌说明本助手只回答企业内部制度与业务问题，并邀请用户提这类问题，**不作答原请求** |
+| 制度/业务问题且命中资料 | 只依据资料作答，不引入资料之外的数字、日期、条款 |
+| 查订单/员工/物流等 | **照常可用**（`BusinessTools` 读的是自家 MySQL，属内部数据，不在禁止范围） |
+| `AGENT` 类型会话 | 不受影响（本就靠工具作答） |
+
+> **它是提示词级软约束，不是硬保证**：模型仍会被调用，极端情况（长多轮、资料字面相关但语义不对题）
+> 仍可能拼出看似有据的答案。若要求"保证零编造"，需要的是硬闸门——检索零命中时直接返回固定文案、
+> 不调模型；两者不冲突可叠加，见 `docs/optimization-roadmap.md`。
+> 关闭状态（默认）下行为与引入本开关之前完全一致。
+
 ### 3.3 Agent 工具（需求第 4 章）
+
 - `BusinessTools`：`queryEmployee(姓名)`、`queryOrder(订单号)`、`getCurrentTime()`（`@Tool`/`@ToolParam` 描述触发条件与参数）
 - `ToolCallLogAspect`（AOP）自动记录每次工具调用的入参/出参/耗时/状态到 `tool_call_log`；会话与用户经 Spring AI `toolContext` 透传进切面（session_id/user_id 已完整落库），同一 `toolContext` 还携带本轮工具调用计数（`AtomicInteger`），供收尾阶段判断"该轮答案含实时/个性化数据"并跳过语义缓存写入
 
