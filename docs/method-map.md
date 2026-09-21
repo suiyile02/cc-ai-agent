@@ -80,7 +80,7 @@
 
 | 类 | 方法 | 作用 |
 |---|---|---|
-| `AppProperties` | `@ConfigurationProperties("app")` 的嵌套段：`Rag`/`Storage`/`Chat`/`Auth`/`Demo`/`Cors`/`Context(+Budget/QueryRewrite/Summary/History)`/`LogRetention`/`SemanticCache`/`IntentCache`/`Ingestion`/`Concurrency`/`SessionTitle` | 全项目配置的唯一载体（含默认值与注释） |
+| `AppProperties` | `@ConfigurationProperties("app")` 的嵌套段：`Rag`/`Storage`/`Chat`/`Auth`/`Demo`/`Cors`/`Context(+Budget/QueryRewrite/Summary/History)`/`LogRetention`/`SemanticCache`/`Ingestion`/`Concurrency`/`SessionTitle` | 全项目配置的唯一载体（含默认值与注释） |
 | `AsyncConfig` | `ingestionExecutor()` | 入库线程池 5/20/队列100 + `CallerRunsPolicy`（队列满由提交线程执行，不静默丢任务） |
 | | `sessionTitleExecutor()` | 标题精修 1/2/队列50 + **`AbortPolicy`**（唯一不回填请求线程的池：丢弃只损失"标题好看度"，回填则给对话凭空加几秒；拒绝由 `refineAsync` 捕获 WARN） |
 | | `auditExecutor()` | 审计与滚动摘要线程池（与入库解耦；同时消除多 TaskExecutor 的注入歧义） |
@@ -126,7 +126,7 @@
 | `ChatOutcome` ★新增 | 本轮**实际出口**: `ANSWERED_FROM_KB`/`ANSWERED_FROM_CACHE`/`REFUSED_NO_EVIDENCE`/`ANSWERED_OPEN`/`TOOL_DATA` |
 | `OutcomeResolver.resolve(outcome,toolTurn,kbOnly,threshold)` ★新增 | 纯函数出口判定(工具轮优先避免被误判无据; 未执行/降级不作拒答依据) |
 | `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记 + **`semanticMaxScore`（语义路阈值过滤前最大分）**；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
-| `SemanticCacheAdmin` / `IntentCacheAdmin` | `evictAll()`：跨模块运维清空契约 |
+| `SemanticCacheAdmin` | `evictAll()`：跨模块运维清空契约（`IntentCacheAdmin` 已随 P3-7 B 批删除） |
 
 ### `RagRetrievalService` + 四个协作类（2026-09 拆分）
 | 类 | 方法 | 作用 | 调用方 |
@@ -159,15 +159,16 @@
 | `keyOf(docId,chunkIndex)` | 分块主键 `doc:chunk` | 内部 |
 | `isEmpty()` / `size()` | 可用性判断 / 规模（`size()` † 仅测试） | 检索、重建、测试 |
 
-### `KeywordIntentRouter` / `CachingIntentRouter`
+### `KeywordIntentRouter`（`IntentRouter` 唯一实现）
 | 方法 | 作用 | 调用方 |
 |---|---|---|
-| `KeywordIntentRouter.route(message)` | 三态判定：工具词 → TOOL（跳过检索）→ 内部词 → KB → 否则 GENERAL。**P3-7 起调用方只用 TOOL 这一支** | 前置 |
+| `KeywordIntentRouter.route(message)` | 三态判定：工具词 → TOOL（跳过知识库检索）→ 内部词 → KB → 否则 GENERAL。**P3-7 起只有 TOOL 影响链路**，KB/GENERAL 只落审计 `rag_mode` 供对照预判与出口 | 前置 |
 | `isToolQuestion(message)` | 命中 `app.rag.tool-keywords` 即为工具问题 | 内部 |
 | `looksInternal(message)` | 命中 `app.rag.internal-keywords` | 内部 |
-| `CachingIntentRouter.route(message)` | 先读 `rag:intent:v{版}:{sha256}`，未命中调真实路由并回写（TTL 60min）；**Redis 异常整段按未命中处理** | 全局 `@Primary` 注入点 |
-| `evictAll()` | 版本自增整体失效（管理员接口） | `SystemController` |
-| `currentVersion` / `key` / `normalize` / `digest` | 版本读取与键构造（归一化与语义缓存同口径） | 内部 |
+
+> 原 `CachingIntentRouter`（@Primary Redis 缓存装饰器 + `IntentCacheAdmin` + `DELETE /api/system/intent-cache`）
+> 已随 P3-7 B 批删除：它缓存的预判只剩"是否工具轮"，底层是微秒级的内存 `contains` 扫描，
+> 缓存反而每次判定多付两次 Redis 往返。
 
 ### `SemanticAnswerCache`（实现 `SemanticCacheAdmin`）
 | 方法 | 作用 | 调用方 |
@@ -260,8 +261,8 @@
 | 方法 | 作用 |
 |---|---|
 | `prepare(session,userMessage)` | 编排 §8 全部步骤(改写 → 检索 → **出口判定** → 缓存查询 → 审计 → 装配)；new `AtomicInteger toolCalls` ★ |
-| `resolveRagContext(session,userMessage)` | AGENT 不检索；否则路由（TOOL 无条件跳过检索）→ KB 才检索 |
-| `cacheEligible(session,rw,retrievalQuery)` | enabled && 未改写 && 非 AGENT && route==KB |
+| `resolveRagContext(session,userMessage,route)` ★改 | 工具轮跳过知识库检索→`TOOL_DATA`；非 RAG 会话 `empty()`；其余**一律检索**并用 `OutcomeResolver` 算出口（不再"KB 才检索"） |
+| `cacheEligible(session,rw)` ★改 | enabled && 未改写 && 非 AGENT（**不再要求 route==KB**；出口门禁移到调用处） |
 | `publishDecision(session,userMessage,rag,costMs)` | 发 `ChatDecisionEvent`（模型失败也留痕） |
 | `PreparedChat`（record） | `rw`/`rag`/`sources`/`assembled`/`cacheEligible`/`retrievalQuery`/`cachedAnswer`/`toolCalls` ★ |
 | `RagContext.empty()` | 未检索时的空上下文 |

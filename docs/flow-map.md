@@ -48,7 +48,7 @@ flowchart TD
         PREP["chat/ChatPreparationService 前置"]
         COMP["chat/ChatCompletionService 收尾"]
         MEM["context/ConversationMemoryService"]
-        RAG["rag/RagRetrievalService + KeywordIndex + CachingIntentRouter"]
+        RAG["rag/RagRetrievalService + KeywordIndex + KeywordIntentRouter"]
         CACHE["rag/SemanticAnswerCache"]
     end
 
@@ -119,7 +119,6 @@ flowchart TD
 | 22 | `GET /api/system/rag-decisions` | `@RequireSelfOrAdmin` | `SystemController.listRagDecisions → RagDecisionLogService.list` |
 | 23 | `GET /api/system/context-logs` | `@RequireSelfOrAdmin` | `SystemController.listContextLogs → ContextLogService.list` |
 | 24 | `DELETE /api/system/semantic-cache` | `@RequireAdmin` | `SystemController.clearSemanticCache → SemanticAnswerCache.evictAll` |
-| 25 | `DELETE /api/system/intent-cache` | `@RequireAdmin` | `SystemController.clearIntentCache → CachingIntentRouter.evictAll` |
 
 （注册/登录在 `AuthInterceptor` 内部按路径放行；`X-User-Id` 模拟登录仅 dev profile 且默认关闭。）
 
@@ -135,7 +134,7 @@ flowchart TD
     S2 --> S4["config/ContextConfig<br/>TokenCounter = JtokTokenCounter(CL100K_BASE)"]
     S2 --> S5["config/AsyncConfig<br/>ingestionExecutor(5/20/队列100, CallerRuns)<br/>auditExecutor"]
     S2 --> S6["config/MybatisPlusConfig<br/>分页插件 · AuditMetaObjectHandler · SqlSessionTemplate · @MapperScan"]
-    S2 --> S7["rag/service/CachingIntentRouter @Primary<br/>包 KeywordIntentRouter"]
+    S2 --> S7["rag/service/KeywordIntentRouter<br/>IntentRouter 唯一实现(无缓存装饰器, P3-7 B 批下线)"]
     S2 --> S8["user/security/RedisLoginAttemptLimiter<br/>按 app.auth.rate-limit-backend 选择（默认 redis）"]
     S7 --> S9["上下文就绪 ApplicationReady"]
     S8 --> S9
@@ -660,7 +659,6 @@ flowchart LR
 | `VectorStore` 不可用 | Qdrant 故障 | 检索路返回空；入库置 `status=3` | WARN | 重启后向量集合仍在 |
 | `KeywordIndex` 空 | 进程重启且重建未跑完 | 只走语义路（`keywordHits=0`） | INFO 重建耗时 | `KeywordIndexRebuilder` 自动重建 |
 | 语义缓存读写 | Redis 不可用 | `get→null`、`isMiss→false`、`put/putMiss/evictAll` 忽略 | WARN（节流） | Redis 恢复 |
-| 意图路由缓存 | Redis 不可用 | 按未命中走真实 `KeywordIntentRouter` | WARN（节流） | 同上 |
 | 会话缓存 | Redis 不可用 | 回退 MySQL 查询（含 `isNotFound→false`） | WARN（节流） | 同上 |
 | 令牌黑名单 | Redis 不可用 | dev 放行 / prod 拒绝（`blacklist-fail-open`） | WARN（节流） | 同上 |
 | 登录限流 | Redis 不可用 | `isLocked→false`、`remainingLockMs→0`（★不冒成 500） | WARN（节流） | 同上；启动自检汇总 |
@@ -687,7 +685,6 @@ flowchart TD
         K1["login:fail:u/* · login:fail:ip/* · login:lock:u/* · login:lock:ip/*"]
         K2["session:meta:* (10min) · session:absent:* (1min)"]
         K3["rag:answer:v{版}:m{模型}:{摘要} · rag:miss:同命名空间 · rag:kb:version"]
-        K4["rag:intent:v{版}:{摘要} · rag:intent:version"]
         K5["jwt:black:{jti} (TTL=令牌剩余有效期)"]
     end
     subgraph QD["Qdrant"]
@@ -701,7 +698,7 @@ flowchart TD
     end
 ```
 
-删除会话 → 清 `SPRING_AI_CHAT_MEMORY` + `conversation_summary` + `session:meta:*`；文档变更 → `rag:kb:version` 自增使语义缓存整体换命名空间；改路由词表 → `rag:intent:version` 自增（或管理员 `DELETE /api/system/intent-cache`）。
+删除会话 → 清 `SPRING_AI_CHAT_MEMORY` + `conversation_summary` + `session:meta:*`；文档变更 → `rag:kb:version` 自增使语义缓存整体换命名空间。（历史上的 `rag:intent:*` 随 P3-7 B 批失去读取方，存量键在 TTL 内自然过期，不必清理。）
 
 ---
 

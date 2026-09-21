@@ -235,4 +235,31 @@ class ChatPreparationServiceTest {
         verify(eventPublisher).publishEvent(sent.capture());
         assertEquals(0.72, sent.getValue().semanticMaxScore(), 1e-9, "执行了检索就要带上过滤前最大分");
     }
+
+    /**
+     * P3-7 B 批回归: GENERAL 预判轮次同样真的执行了检索, `retrieval_executed` 必须记 true。
+     * 旧实现写的是 "rag_mode==KB && executed"(预判时代的遗留), 会把 GENERAL 轮次的真实检索
+     * 记成"未执行"——审计里表现为"有分数、有命中, 却没检索过"的自相矛盾行。
+     */
+    @Test
+    void generalRouteStillRecordsRetrievalAsExecuted() {
+        when(queryRewriter.rewrite(anyString(), any(), anyString()))
+                .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
+        when(intentRouter.route(anyString())).thenReturn(RagMode.GENERAL);
+        when(semanticAnswerCache.get(anyString())).thenReturn(null);
+        when(semanticAnswerCache.isMiss(anyString())).thenReturn(false);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.2046));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        service.prepare(session(), QUESTION);
+
+        ArgumentCaptor<ChatDecisionEvent> sent = ArgumentCaptor.forClass(ChatDecisionEvent.class);
+        verify(eventPublisher).publishEvent(sent.capture());
+        assertEquals("GENERAL", sent.getValue().ragMode(), "预判要如实留痕, 供与出口对照评估词表猜错率");
+        assertTrue(sent.getValue().retrievalExecuted(), "GENERAL 轮次的检索同样已执行");
+        assertEquals(0.2046, sent.getValue().semanticMaxScore(), 1e-9);
+    }
 }
