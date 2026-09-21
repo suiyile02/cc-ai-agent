@@ -10,6 +10,7 @@ public record RagDecisionLogVO(
         String sessionId,
         String userMessage,
         String ragMode,
+        String answerOutcome,
         String sessionType,
         Boolean retrievalExecuted,
         Integer semanticHits,

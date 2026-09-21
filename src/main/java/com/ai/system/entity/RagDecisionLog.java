@@ -33,8 +33,19 @@ public class RagDecisionLog {
     /** 用户消息(截断保存) */
     private String userMessage;
 
-    /** 意图判定: KB=需要检索 / GENERAL=无需检索 */
+    /**
+     * 意图路由预判: KB=需要检索 / GENERAL=无需检索 / TOOL=工具类。
+     *
+     * <p>P3-7 起仅作诊断参考——作答口径由 {@link #answerOutcome} 决定，本列不再参与判定。
+     */
     private String ragMode;
+
+    /**
+     * 本轮实际出口(见 {@code com.ai.rag.ChatOutcome}): ANSWERED_FROM_KB / ANSWERED_FROM_CACHE /
+     * REFUSED_NO_EVIDENCE / ANSWERED_OPEN / TOOL_DATA。事后由检索事实算出，不是事前猜测;
+     * 缓存命中自 P3-7 起由 ANSWERED_FROM_CACHE 显式标识(旧推断式不变式已作废)。
+     */
+    private String answerOutcome;
 
     /** 会话类型 RAG/AGENT/HYBRID */
     private String sessionType;

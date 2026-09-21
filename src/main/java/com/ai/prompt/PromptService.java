@@ -2,7 +2,7 @@ package com.ai.prompt;
 
 import com.ai.config.AppProperties;
 import com.ai.session.SessionType;
-import com.ai.rag.RagMode;
+import com.ai.rag.ChatOutcome;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -15,20 +15,14 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 提示词组装。模板位于 classpath:/prompts/*.st，支持 {{sessionType}} / {{context}} 占位替换。
+ * 提示词组装。模板位于 classpath:/prompts/*.st，支持 {{sessionType}} / {{context}} / {{extraRule}} 占位替换。
  *
- * <p>按「会话类型 + 意图路由结果 + 是否命中」选择模板：
- * <ul>
- *   <li>AGENT 会话      → base-system.st(工具 Agent 角色, 不受 kb-only 影响)</li>
- *   <li>GENERAL / TOOL  → 宽松=general-system.st(自由问答)；严格=kb-only-system.st</li>
- *   <li>KB 意图且有命中 → 系统提示 + rag-context.st(注入资料)</li>
- *   <li>KB 意图但未命中 → 系统提示(要求严格"知识库未找到"，避免编造)</li>
- * </ul>
+ * <p>系统提示词由**本轮出口**({@link ChatOutcome})决定，而非由关键词表预判决定——这是 P3-7 的落点：
+ * 「知识库内容能否被问到」不再取决于有人记得改词表。模板映射见 {@link #systemFor}。
  *
- * <p>{@code app.chat.kb-only=true} 时"系统提示"一律换成 {@code prompts/kb-only-system.st}
- * (只依据资料/工具结果作答, 否则按固定口径友好拒答), 且资料块的补充规则由"可补充常识"换成
- * "禁止引入资料之外的知识"。<b>该开关是提示词级软约束</b>——模型仍被调用, 不保证零编造,
- * 理由与硬闸门替代方案见 {@code AppProperties.Chat#kbOnly} 与 AGENTS.md。
+ * <p>{@code app.chat.kb-only}(默认 **true**) 决定"无知识库依据时是否允许用模型自身知识作答":
+ * true → 一律走 {@code prompts/kb-only-system.st}(无据必拒答); false → 走 {@code general-system.st}(自由作答)。
+ * 它是提示词级软约束, 不保证零编造, 理由与硬闸门替代见 {@code AppProperties.Chat#kbOnly} 与 AGENTS.md。
  */
 @Slf4j
 @Service
@@ -37,44 +31,68 @@ public class PromptService {
 
     /** 严格模式系统提示 */
     private static final String KB_ONLY_SYSTEM = "prompts/kb-only-system.st";
+    /** 自由问答系统提示(无知识库依据时允许用模型自身知识) */
+    private static final String GENERAL_SYSTEM = "prompts/general-system.st";
     /** 宽松模式下资料块的补充规则(与改动前的固定文案一致) */
     private static final String LOOSE_EXTRA_RULE = "可适当补充常识性解释";
-    /** 严格模式下资料块的补充规则: 与"可补充常识"互斥, 同时出现即自相矛盾 */
-    private static final String STRICT_EXTRA_RULE = "只能使用以上资料中的信息，禁止引入资料之外的知识";
+    /**
+     * 严格模式下资料块的补充规则: 与"可补充常识"互斥, 同时出现即自相矛盾。
+     *
+     * <p>后半句针对**部分命中**(实测同一模板在"保修期"题会先答已知部分、在"退货地址"题却整题拒答,
+     * 行为不稳定)——资料只覆盖问题一部分时必须先答可答部分, 这是真实问答里最常见的形态。
+     */
+    private static final String STRICT_EXTRA_RULE = "只能使用以上资料中的信息，禁止引入资料之外的知识；"
+            + "若资料只覆盖了问题的一部分，先据资料回答那一部分，并单独指出其余部分知识库未涉及";
 
     private final AppProperties appProperties;
 
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     /**
-     * 按会话类型/意图路由/命中情况选择并组装系统提示词。
+     * 按会话类型与本轮出口选择并组装系统提示词。
+     *
+     * <table border="1">
+     *   <caption>模板映射</caption>
+     *   <tr><th>出口</th><th>kb-only=false</th><th>kb-only=true(默认)</th></tr>
+     *   <tr><td>ANSWERED_FROM_KB / ANSWERED_FROM_CACHE</td>
+     *       <td>base-system + rag-context(可补充常识)</td><td>kb-only-system + rag-context(禁引入外部知识)</td></tr>
+     *   <tr><td>REFUSED_NO_EVIDENCE</td><td colspan="2">kb-only-system(固定口径友好拒答; 该出口只可能在严格模式出现)</td></tr>
+     *   <tr><td>TOOL_DATA</td><td>general-system</td><td>kb-only-system(其第 4 条允许并只认工具返回值)</td></tr>
+     *   <tr><td>ANSWERED_OPEN</td><td colspan="2">general-system(自由作答; AGENT 之外的非检索会话)</td></tr>
+     *   <tr><td>AGENT 会话(任意出口)</td><td colspan="2">base-system——本就靠工具, 不被出口改造波及</td></tr>
+     * </table>
      *
      * @param type        会话类型 RAG/AGENT/HYBRID
-     * @param mode        意图路由结果 KB/TOOL/GENERAL
+     * @param outcome     本轮出口
      * @param hasContext  是否有检索上下文可注入
      * @param contextText 检索得到的上下文文本
      * @return 组装后的 system 提示词
      */
-    public String systemFor(SessionType type, RagMode mode, boolean hasContext, String contextText) {
+    public String systemFor(SessionType type, ChatOutcome outcome, boolean hasContext, String contextText) {
         if (type == SessionType.AGENT) {
             return baseSystem(type);
         }
         boolean strict = appProperties.getChat().isKbOnly();
-        // TOOL(工具类)与 GENERAL(闲聊)都不注入知识库上下文——
-        // 工具由 Spring AI 的 ChatClient.tools() 独立注入, 模型会自主决定调用。
-        // 严格模式下 TOOL 同样必须换模板: 旧模板"可回答常识科普闲聊"会把"保留内部工具"
-        // 变成"工具 + 自由知识", 使开关形同虚设。
-        if (mode == RagMode.GENERAL || mode == RagMode.TOOL) {
-            return strict ? load(KB_ONLY_SYSTEM) : load("prompts/general-system.st");
-        }
+        return switch (outcome) {
+            // 有知识库依据: 注入资料块。缓存命中路径不装配上下文, 走到这里时 hasContext 必为 true
+            case ANSWERED_FROM_KB, ANSWERED_FROM_CACHE -> withContext(strict, type, hasContext, contextText);
+            case REFUSED_NO_EVIDENCE -> load(KB_ONLY_SYSTEM);
+            // 工具轮: 严格模式下仍可调工具作答(kb-only-system 第 4 条把工具结果列为合法来源)
+            case TOOL_DATA -> strict ? load(KB_ONLY_SYSTEM) : load(GENERAL_SYSTEM);
+            case ANSWERED_OPEN -> load(GENERAL_SYSTEM);
+        };
+    }
+
+    /** 有命中时在系统提示后追加资料块; 无命中(理论上不该出现)时退回纯系统提示 */
+    private String withContext(boolean strict, SessionType type, boolean hasContext, String contextText) {
         String system = strict ? load(KB_ONLY_SYSTEM) : baseSystem(type);
-        if (hasContext && contextText != null && !contextText.isBlank()) {
-            String ctx = load("prompts/rag-context.st")
-                    .replace("{{context}}", contextText)
-                    .replace("{{extraRule}}", strict ? STRICT_EXTRA_RULE : LOOSE_EXTRA_RULE);
-            return system + "\n\n" + ctx;
+        if (!hasContext || contextText == null || contextText.isBlank()) {
+            return system;
         }
-        return system;
+        String ctx = load("prompts/rag-context.st")
+                .replace("{{context}}", contextText)
+                .replace("{{extraRule}}", strict ? STRICT_EXTRA_RULE : LOOSE_EXTRA_RULE);
+        return system + "\n\n" + ctx;
     }
 
     /**

@@ -93,7 +93,6 @@ app:
     top-k: 5                              # 检索 Top-K(需求默认 5)
     similarity-threshold: 0.45            # 相似度阈值(实测该 embedding 模型分数偏低, 0.6 会误杀正确 chunk, 如"加班调休"0.565)
     context-max-chars: 8000               # 注入上下文的最大字符数
-    auto-route: true                      # 意图路由: 常识/闲聊自动跳过 RAG 检索直接作答; false=每次都检索
     auto-rebuild-index: true              # 启动时自动重建关键词索引(从 Qdrant 读回分块, 不重新向量化)
     # internal-keywords: [...]            # 意图路由关键词表(缺省内置企业词表, 见 AppProperties, 可在此覆盖)
     # tool-keywords: [...]                # 工具类问题词表(订单/物流/快递等, 缺省见 AppProperties): 命中即跳过检索交给工具调用
@@ -107,7 +106,7 @@ app:
     disable-thinking: true       # 关闭主对话思维链: 修复 qwen3 长思考整段静默 >60s 撞 okhttp 超时被重置; 同时大幅提速
     stream-include-usage: true   # 流式请求索取 usage(否则 chat_log.total_tokens 恒为空); 网关不认该字段时置 false
     stream-idle-timeout-ms: 20000  # 流式静默超时: 模型 20s 无增量即主动终止降级(早于 okhttp 60s read timeout)
-    kb-only: false                 # 严格知识库模式: true=只依据知识库资料/工具结果作答, 无关或无命中时按固定口径友好拒答
+    kb-only: true                  # 严格知识库模式: true=只依据知识库资料/工具结果作答, 无关或无命中时按固定口径友好拒答
                                    # (提示词级软约束, 不保证零编造; AGENT 会话不受影响) 见 prompts/kb-only-system.st
   auth:
     # JWT 密钥: 仓库内不放任何默认值。留空时——非生产由 JwtTokenProvider 生成一次性随机密钥

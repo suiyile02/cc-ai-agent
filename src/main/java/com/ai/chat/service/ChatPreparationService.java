@@ -7,7 +7,9 @@ import com.ai.config.AppProperties;
 import com.ai.context.AssembledPrompt;
 import com.ai.context.service.ContextAssembler;
 import com.ai.context.service.QueryRewriter;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.IntentRouter;
+import com.ai.rag.OutcomeResolver;
 import com.ai.rag.RagMode;
 import com.ai.rag.RagRetriever;
 import com.ai.rag.RetrievalOutcome;
@@ -25,11 +27,17 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 对话前置阶段(同步/流式共用)：改写 → 语义缓存查询 → 意图路由/混合检索 → 决策审计 → 装配。
+ * 对话前置阶段(同步/流式共用)：改写 → 检索 → **出口判定** → 语义缓存查询 → 决策审计 → 装配。
  *
  * <p>统一两条管线此前各自实现的"准备"段——缓存的查询、决策落库、来源提取只存在一份代码。
- * 正缓存命中时跳过检索与装配, 但仍发布决策审计(KB/未执行);
- * 负缓存命中(穿透防护)同样短路, 直接返回固定"未找到"文案。
+ *
+ * <p><b>检索先于缓存查询</b>(P3-7)：出口只能由检索事实算出，词表不再预判"该不该检索"，
+ * 因此正缓存命中时本轮确实付了一次检索(代价实测 159~321ms)；换来的收益是
+ * "知识库里的内容能否被问到"不再取决于有人记得改配置。缓存命中不再由"KB+未执行检索"推断，
+ * 而是记为一等出口 {@code ANSWERED_FROM_CACHE}。
+ *
+ * <p>负缓存语义随之改变：它现在只省一次注定拒答的<b>模型调用</b>，不再跳过检索，
+ * 且只在出口为 {@code REFUSED_NO_EVIDENCE} 时读写——绝不让一条旧的"没查到"覆盖刚查到的证据。
  */
 @Slf4j
 @Service
@@ -48,16 +56,19 @@ public class ChatPreparationService {
     /**
      * 一次问答的 RAG 上下文快照(供提示词组装与决策落库)。
      *
-     * @param hits    最终命中文档(已重排取 Top-K)
-     * @param mode    意图路由结果 KB/GENERAL
-     * @param outcome 检索结果明细(执行与否/各路命中数)
+     * @param hits        最终注入上下文的文档(已重排取 Top-K)
+     * @param mode        意图路由预判 KB/GENERAL/TOOL —— 仅填旧审计列与诊断参考,
+     *                    <b>不再参与作答口径判定</b>(判定看 {@code chatOutcome})
+     * @param outcome     检索结果明细(执行与否/各路命中数/阈值过滤前最大分)
+     * @param chatOutcome 本轮作答依据的出口(由检索事实事后算出)
      */
     public record RagContext(List<Document> hits, RagMode mode,
-                             RetrievalOutcome outcome) {
+                             RetrievalOutcome outcome, ChatOutcome chatOutcome) {
 
-        /** 未检索的空上下文(AGENT 会话 / 常识问题跳过检索时使用) */
+        /** 未执行检索的空上下文(AGENT 会话 / 非 RAG 会话) */
         public static RagContext empty() {
-            return new RagContext(List.of(), RagMode.GENERAL, RetrievalOutcome.none());
+            return new RagContext(List.of(), RagMode.GENERAL, RetrievalOutcome.none(),
+                    ChatOutcome.ANSWERED_OPEN);
         }
     }
 
@@ -96,113 +107,123 @@ public class ChatPreparationService {
         String retrievalQuery = rw.query() == null || rw.query().isBlank() ? userMessage : rw.query();
         long rewriteMs = System.currentTimeMillis() - start;
 
-        // 判断查询的问题是否有缓存
-        boolean cacheEligible = cacheEligible(session, rw, retrievalQuery);
+        // ① 检索先行: 出口只能由检索事实算出。词表不再预判"要不要检索"(GENERAL 也查)——
+        //    这是 P3-7 的核心: 知识库内容能否被问到, 不再取决于有没有人记得改一份与文档无关的配置。
+        //    意图判定每轮只做一次(旧实现在缓存准入与路由两处各做一遍)。
+        boolean toolTurn = intentRouter.route(retrievalQuery) == RagMode.TOOL;
+        long retrieveStart = System.currentTimeMillis();
+        RagContext rag = resolveRagContext(session, retrievalQuery, toolTurn);
+        long retrieveMs = System.currentTimeMillis() - retrieveStart;
+        ChatOutcome outcome = rag.chatOutcome();
+
+        // ② 语义缓存查询: 条目跨用户共享, 所以只在"确有知识库依据"或"确将拒答"的轮次参与
+        boolean cacheEligible = cacheEligible(session, rw);
         long cacheStart = System.currentTimeMillis();
-        SemanticAnswerCache.CachedAnswer cached =
-                cacheEligible ? semanticAnswerCache.get(retrievalQuery) : null;
-        boolean missHit = cacheEligible && cached == null && semanticAnswerCache.isMiss(retrievalQuery);
+        SemanticAnswerCache.CachedAnswer cached = cacheEligible && outcome == ChatOutcome.ANSWERED_FROM_KB
+                ? semanticAnswerCache.get(retrievalQuery) : null;
+        // 负缓存(穿透防护)只可能出现在"本轮确实无据可依"时——检索先行已经知道有没有证据,
+        // 绝不再让一条 30 分钟前的"没查到"覆盖刚查到的证据
+        boolean missHit = cacheEligible && cached == null && outcome == ChatOutcome.REFUSED_NO_EVIDENCE
+                && semanticAnswerCache.isMiss(retrievalQuery);
         long cacheMs = System.currentTimeMillis() - cacheStart;
 
-        RagContext rag;
         List<SourceVO> sources;
         AssembledPrompt assembled;
         if (cached != null) {
-            // 正缓存命中: 跳过检索与装配; 决策审计照常留痕(KB/未执行)
-            rag = new RagContext(List.of(), RagMode.KB, RetrievalOutcome.none());
+            // 正缓存命中: 跳过装配与模型调用; 检索事实保留在 rag.outcome() 里如实留痕
+            // (executed=true 而注入 0 段), 出口改记 ANSWERED_FROM_CACHE
+            rag = new RagContext(List.of(), rag.mode(), rag.outcome(), ChatOutcome.ANSWERED_FROM_CACHE);
             sources = List.of();
             assembled = null;
             publishDecision(session, userMessage, rag, System.currentTimeMillis() - start);
             // 命中分支同样打印各段耗时: 此处是"缓存本该秒回却变慢"的唯一现场
-            log.info("语义缓存命中: session={}, question={}, 改写 {}ms, 缓存查询 {}ms, 前置合计 {}ms",
-                    session.getSessionId(), userMessage, rewriteMs, cacheMs,
-                    System.currentTimeMillis() - start);
+            log.info("语义缓存命中: session={}, question={}, 改写 {}ms, 检索+缓存查询 {}ms, 前置合计 {}ms",
+                    session.getSessionId(), userMessage, rewriteMs,
+                    System.currentTimeMillis() - start - rewriteMs, System.currentTimeMillis() - start);
         } else if (missHit) {
-            // 负缓存命中(穿透防护): 该问题此前检索零命中, 短时间直接返回固定"未找到"文案,
-            // 跳过检索与模型调用; 审计口径与正缓存命中一致(KB/未执行, 不变式不被破坏)
+            // 负缓存命中: 无据可依的固定拒答文案, 省掉一次模型调用; 出口与真拒答一致
             cached = new SemanticAnswerCache.CachedAnswer(ChatSourceDisplay.NO_RESULT_ANSWER, List.of());
-            rag = new RagContext(List.of(), RagMode.KB, RetrievalOutcome.none());
             sources = List.of();
             assembled = null;
             publishDecision(session, userMessage, rag, System.currentTimeMillis() - start);
-            log.info("语义负缓存命中(零命中问题短路): session={}, question={}, 改写 {}ms, 缓存查询 {}ms, 前置合计 {}ms",
-                    session.getSessionId(), userMessage, rewriteMs, cacheMs,
-                    System.currentTimeMillis() - start);
+            log.info("语义负缓存命中(无据可依短路): session={}, question={}, 改写 {}ms, 检索+缓存查询 {}ms, 前置合计 {}ms",
+                    session.getSessionId(), userMessage, rewriteMs,
+                    System.currentTimeMillis() - start - rewriteMs, System.currentTimeMillis() - start);
         } else {
-            // 意图路由判断是否需要Rag检索 + （t/f）RAG 检索
-            rag = resolveRagContext(session, retrievalQuery);
             publishDecision(session, userMessage, rag, System.currentTimeMillis() - start - rewriteMs);
             sources = ragRetriever.toSources(rag.hits());
             // 装配提示词并进行 token计算
+            long assembleStart = System.currentTimeMillis();
             assembled = contextAssembler.assemble(
-                    session, userMessage, rag.hits(), rag.mode(), rw.rewritten());
-            log.info("对话前置阶段完成: session={}, 改写 {}ms, 缓存查询 {}ms, 路由+检索+装配 {}ms, 命中 {} 段",
-                    session.getSessionId(), rewriteMs, cacheMs,
-                    System.currentTimeMillis() - start - rewriteMs, rag.hits().size());
+                    session, userMessage, rag.hits(), rag.chatOutcome(), rw.rewritten());
+            long assembleMs = System.currentTimeMillis() - assembleStart;
+            // 分段耗时必须逐项打全(AGENTS.md 强制): 这是端点延迟标定与"慢在哪一段"的唯一现场
+            log.info("对话前置阶段完成: session={}, 出口={}, 改写 {}ms, 检索 {}ms, 缓存查询 {}ms, 装配 {}ms, 合计 {}ms, 命中 {} 段",
+                    session.getSessionId(), outcome, rewriteMs, retrieveMs, cacheMs, assembleMs,
+                    System.currentTimeMillis() - start, rag.hits().size());
         }
         return new PreparedChat(rw, rag, sources, assembled, cacheEligible, retrievalQuery, cached,
                 toolCalls);
     }
 
     /**
-     * 判定本轮是否可尝试语义缓存: 已启用缓存、问题未经过多轮改写(改写问题依赖会话上下文,
-     * 缓存会串味)、非 AGENT 会话、意图路由为 KB。
+     * 判定本轮答案是否有资格参与语义缓存: 已启用缓存、问题未经过多轮改写(改写问题依赖会话上下文,
+     * 缓存会串味)、非 AGENT 会话。
      *
-     * @param session        会话
-     * @param rw             查询改写结果
-     * @param retrievalQuery 检索问题
+     * <p>刻意<b>不再</b>在此判意图——出口 {@code ChatOutcome} 由调用方在检索之后与本题组合使用
+     * (正缓存只服务 ANSWERED_FROM_KB, 负缓存只服务 REFUSED_NO_EVIDENCE)。
+     *
+     * @param session 会话
+     * @param rw      查询改写结果
      * @return true=可尝试缓存
      */
-    private boolean cacheEligible(ChatSession session, QueryRewriter.RewriteResult rw,
-            String retrievalQuery) {
+    private boolean cacheEligible(ChatSession session, QueryRewriter.RewriteResult rw) {
         return appProperties.getSemanticCache().isEnabled()
                 && !rw.rewritten()
-                && session.getSessionType() != SessionType.AGENT
-                && intentRouter.route(retrievalQuery) == RagMode.KB;
+                && session.getSessionType() != SessionType.AGENT;
     }
 
     /**
-     * 意图路由 + RAG 检索：AGENT 会话不检索；RAG/HYBRID 会话在 autoRoute=true 时按问题内容路由——
-     * 工具类(mode=TOOL)/常识闲聊(mode=GENERAL)跳过检索, 知识库类问题(mode=KB)才执行混合检索。
+     * 检索并算出本轮出口：AGENT/非 RAG 会话不检索；工具轮跳过知识库检索(答案在业务库)；
+     * 其余一律执行混合检索——**不再由关键词表预判"该不该查"**。
      *
      * @param session     会话
-     * @param userMessage 用户消息
-     * @return RAG 上下文快照
+     * @param userMessage 检索问题
+     * @param toolTurn    意图路由是否命中工具词表(仅作成本短路, 不是作答判据)
+     * @return RAG 上下文快照(含出口)
      */
-    private RagContext resolveRagContext(ChatSession session, String userMessage) {
-        // 工具类问题(查订单/查物流等)答案在业务库, 知识库检索查不到——无条件跳过,
-        // 不受 auto-route 开关影响; 模型在干净上下文下自主调 BusinessTools
-        RagMode intent = intentRouter.route(userMessage);
-        if (intent == RagMode.TOOL) {
-            log.debug("工具类问题, 跳过检索(交给模型调工具): {}", userMessage);
-            return new RagContext(List.of(), RagMode.TOOL, RetrievalOutcome.none());
+    private RagContext resolveRagContext(ChatSession session, String userMessage, boolean toolTurn) {
+        if (toolTurn) {
+            // 工具类问题(查订单/物流)答案在业务库, 知识库检索必然查不到反而挤占上下文预算——
+            // 跳过它是省一次 embedding, 不是判据; 出口记 TOOL_DATA, 严格模式下照样允许调工具
+            log.debug("工具类问题, 跳过知识库检索(交给模型调工具): {}", userMessage);
+            return new RagContext(List.of(), RagMode.TOOL, RetrievalOutcome.none(),
+                    ChatOutcome.TOOL_DATA);
         }
         boolean ragSession = session.getSessionType() == SessionType.RAG
                 || session.getSessionType() == SessionType.HYBRID;
         if (!ragSession) {
             return RagContext.empty();
         }
-        if (appProperties.getRag().isAutoRoute() && intent == RagMode.GENERAL) {
-            log.debug("RAG 意图路由：通用/常识问题, 跳过检索 sessionId={}", session.getSessionId());
-            return RagContext.empty();
-        }
-        log.debug("RAG 意图路由：知识库类问题, 执行检索 sessionId={}", session.getSessionId());
         RetrievalOutcome outcome = ragRetriever.retrieveOutcome(
                 userMessage, appProperties.getRag().getTopK(),
                 appProperties.getRag().getSimilarityThreshold());
-        return new RagContext(outcome.hits(), RagMode.KB, outcome);
+        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, false,
+                appProperties.getChat().isKbOnly(), appProperties.getRag().getSimilarityThreshold());
+        return new RagContext(outcome.hits(), RagMode.KB, outcome, chatOutcome);
     }
 
     /**
-     * 发布"意图路由/检索决策"事件(异步写 rag_decision_log, 模型失败也留痕)。
+     * 发布"检索决策/出口"事件(异步写 rag_decision_log, 模型失败也留痕)。
      *
-     * <p>审计约定: {@code rag_mode=KB 且 retrieval_executed=false} 只可能是语义缓存命中
-     * ——未命中时 KB 分支必定执行过检索; 此时不会产生 context_log(未装配上下文),
-     * 据此可在日志中区分"缓存命中"与"检索了但没命中知识块"。
+     * <p><b>审计口径变更(P3-7)</b>：旧约定"缓存命中 ⟺ {@code rag_mode=KB 且 retrieval_executed=false}"
+     * 已作废——检索现在先于缓存查询执行，缓存命中时确实执行了检索。缓存命中改由一等公民
+     * {@code answer_outcome=ANSWERED_FROM_CACHE} 标识（比原来的两列推断更直白，也不会被新分支破坏）。
+     * 缓存命中轮次不装配上下文，因此<b>不产生 context_log</b> 这条约定保持不变。
      *
      * @param session     会话
      * @param userMessage 用户消息(截断 500 保存)
-     * @param rag         RAG 上下文快照(含路由模式与各路命中数)
+     * @param rag         RAG 上下文快照(含出口、路由模式与各路命中数)
      * @param costMs      决策与检索耗时
      */
     private void publishDecision(ChatSession session, String userMessage, RagContext rag, long costMs) {
@@ -211,11 +232,11 @@ public class ChatPreparationService {
         eventPublisher.publishEvent(new ChatDecisionEvent(
                 session.getSessionId(), session.getUserId(),
                 Strings.truncate(userMessage, 500),
-                rag.mode().name(), session.getSessionType().name(),
+                rag.mode().name(), rag.chatOutcome().name(), session.getSessionType().name(),
                 rag.mode() == RagMode.KB && outcome.executed(),
                 outcome.semanticCount(), outcome.keywordCount(), rag.hits().size(),
                 appProperties.getRag().getTopK(), appProperties.getRag().getSimilarityThreshold(),
-                // 未执行检索(被路由跳过/缓存命中)时必须记 null, 不能记 0.0——
+                // 未执行检索(工具轮/AGENT 会话)时必须记 null, 不能记 0.0——
                 // 否则定标时"没观察"会被当成"观察到了 0 分", 分数分布依旧失真
                 outcome.executed() ? outcome.semanticMaxScore() : null,
                 appProperties.getRag().getRerankMode(), costMs));

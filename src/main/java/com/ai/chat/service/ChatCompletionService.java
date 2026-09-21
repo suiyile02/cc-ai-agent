@@ -4,6 +4,7 @@ import com.ai.chat.event.ChatCompletedEvent;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
 import com.ai.context.service.QueryRewriter;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagMode;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
@@ -54,24 +55,22 @@ public class ChatCompletionService {
         publishCompleted(session, userMessage, answer, sourceNames,
                 System.currentTimeMillis() - startMs, prep.rw(), prep.rag().mode(),
                 prep.assembled() == null ? null : prep.assembled().composition(), usage);
-        // 写入语义缓存: 正缓存(KB 命中且问题未改写且回答非"未找到") + 负缓存(穿透防护)
+        // 写入语义缓存: 正缓存(本轮有知识库依据、问题未改写、回答非"未找到") +
+        // 负缓存(本轮判定为"无据可依"的拒答, 用于重复无据问题省一次模型调用)。
         // 本轮调用过工具 → 回答含业务库实时数据(员工联系方式/订单状态), 且缓存条目跨用户共享,
         // 因此正/负缓存一律不写(否则他人同问即命中这条带他人数据的答案)。
         int toolCalls = prep.toolCalls().get();
+        ChatOutcome outcome = prep.rag().chatOutcome();
         if (toolCalls > 0) {
             log.info("本轮发生 {} 次工具调用, 跳过语义缓存写入: session={}, question={}",
                     toolCalls, session.getSessionId(), prep.retrievalQuery());
-        } else if (prep.cacheEligible() && prep.rag().mode() == RagMode.KB) {
-            if (!prep.rag().hits().isEmpty() && !ChatSourceDisplay.declaresNoResult(answer)) {
-                semanticAnswerCache.put(prep.retrievalQuery(), answer, sourceNames);
-            } else if (prep.rag().hits().isEmpty()
-                    && prep.rag().outcome() != null
-                    && prep.rag().outcome().executed()
-                    && !prep.rag().outcome().degraded()) {
-                // 检索真实执行且非降级: 零命中是确定性"无答案", 写短 TTL 负缓存防穿透
-                // (超时/异常降级不入负缓存, 避免把瞬时故障误判为无答案)
-                semanticAnswerCache.putMiss(prep.retrievalQuery());
-            }
+        } else if (prep.cacheEligible() && outcome == ChatOutcome.ANSWERED_FROM_KB
+                && !prep.rag().hits().isEmpty() && !ChatSourceDisplay.declaresNoResult(answer)) {
+            semanticAnswerCache.put(prep.retrievalQuery(), answer, sourceNames);
+        } else if (prep.cacheEligible() && outcome == ChatOutcome.REFUSED_NO_EVIDENCE) {
+            // 只给"无据可依"写负缓存: 旧实现按"零命中"写, 会把宽松模式下本可自由作答的问题
+            // 也缓存成固定"未找到"文案——出口化之后这类轮次是 ANSWERED_OPEN, 不再误入负缓存
+            semanticAnswerCache.putMiss(prep.retrievalQuery());
         }
     }
 

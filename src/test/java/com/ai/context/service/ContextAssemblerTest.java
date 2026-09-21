@@ -8,6 +8,7 @@ import com.ai.prompt.PromptService;
 import com.ai.config.AppProperties;
 import com.ai.session.SessionType;
 import com.ai.session.entity.ChatSession;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagMode;
 import com.ai.rag.service.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +68,7 @@ class ContextAssemblerTest {
                 .thenReturn("系统提示 年假五天");
 
         AssembledPrompt ap = assembler.assemble(session(), "年假几天",
-                List.of(Document.builder().text("年假五天").build()), RagMode.KB, false);
+                List.of(Document.builder().text("年假五天").build()), ChatOutcome.ANSWERED_FROM_KB, false);
 
         assertNotNull(ap);
         ContextComposition c = ap.composition();
@@ -90,7 +91,7 @@ class ContextAssemblerTest {
         when(ragRetrievalService.buildContext(anyList(), anyInt())).thenReturn("");
         when(promptService.systemFor(any(), any(), anyBoolean(), anyString())).thenReturn("系统提示");
 
-        AssembledPrompt ap = assembler.assemble(session(), "你好", List.of(), RagMode.GENERAL, false);
+        AssembledPrompt ap = assembler.assemble(session(), "你好", List.of(), ChatOutcome.ANSWERED_OPEN, false);
 
         // 首条应为摘要 SYSTEM 消息, 其后为历史
         assertEquals(2, ap.messages().size());

@@ -60,6 +60,7 @@ public class ChatAuditListener {
         entry.setUserId(event.userId());
         entry.setUserMessage(event.userMessage());
         entry.setRagMode(event.ragMode());
+        entry.setAnswerOutcome(event.answerOutcome());
         entry.setSessionType(event.sessionType());
         entry.setRetrievalExecuted(event.retrievalExecuted());
         entry.setSemanticHits(event.semanticHits());

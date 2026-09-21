@@ -169,12 +169,15 @@ com.ai
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
 - **上传入口校验顺序(禁止跳过)**: 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
-- 检索链路: 意图路由(KB/GENERAL) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`) -> Top-K 注入。
+- 检索链路: **一律检索**(RAG/HYBRID 会话, 工具轮除外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`)
+  -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门, 详见 P3-7。
 - **检索整段受 `app.rag.retrieve-timeout-ms`(默认 10s)保护**: 嵌入与向量库是外部网络调用,
   端点挂起会把对话拖住(实测单轮检索卡过 100s)。超时/异常降级为 `RetrievalOutcome.executedEmpty()`
-  ——记为 **已执行、零命中**, 而不是 `none()`(未执行), 以保持下述审计不变式。
-- **审计不变式**: `rag_decision_log(rag_mode=KB, retrieval_executed=false)` **只可能是语义缓存命中**
-  (检索超时降级记为 true, 不会混入)。缓存命中路径不产生 `context_log`(未装配上下文)。
+  ——记为 **已执行、零命中**, 而不是 `none()`(未执行); 出口判定据此给 `ANSWERED_OPEN` 而非拒答,
+  避免把一次瞬时故障固化成"知识库没有答案"。
+- **审计口径(P3-7 变更)**: 旧不变式"`rag_mode=KB` 且 `retrieval_executed=false` ⟺ 语义缓存命中"
+  **已作废**——检索现在先于缓存查询执行, 缓存命中时确实执行过检索。缓存命中改由一等公民
+  `answer_outcome=ANSWERED_FROM_CACHE` 标识。仍然成立的约定: 缓存命中路径不产生 `context_log`(未装配上下文)。
 - **相似度阈值勿随意上调**: `similarity-threshold` 默认 0.45——实测该 embedding 模型分数量级偏低
   (正确 chunk 可能只有 0.5~0.6), 阈值 0.6 会误杀正确答案(案例: "加班调休"0.565 被过滤导致答非所问)。
   调整前必须用 `/api/ai/rag/search` 以低阈值观察真实分数分布。
@@ -190,12 +193,19 @@ com.ai
   ⚠ **勿把 BM25 命中数当相关性信号**: 实测它对"今天天气""写一首诗"这类问题同样返回 10 条并填满 topK,
   小语料下恒有命中——相关性判据只能建在向量路过阈值上(见 roadmap P3-7)。
 - 每次对话的意图路由/检索决策自动落库 `rag_decision_log`(见 `/api/system/rag-decisions`)。
-- **意图路由三态(2026-09 规则引擎扩展)**: `RagMode` = KB(知识库检索) / TOOL(工具调用) / GENERAL(闲聊)。
-  - 判定顺序: 命中 `app.rag.tool-keywords`(订单/物流/快递/包裹等, 含少量同义词) → **TOOL, 无条件跳过检索**
-    (答案在业务库, `BusinessTools` 查询, 检索知识库查不到; 且不受 auto-route 开关影响);
-    命中 `app.rag.internal-keywords` → KB, 检索; 否则 GENERAL, 跳过。
-  - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味), 决策审计记 `rag_mode=TOOL, retrieval_executed=false`。
-  - **意图路由结果缓存**(`CachingIntentRouter` @Primary 装饰器): 问题→路由结果缓存 Redis
+- **意图路由三态的职责已大幅收窄(P3-7)**: `RagMode` = KB / TOOL / GENERAL 仍是枚举, 但
+  **只用于工具类的成本短路**(跳过一次必然无用的知识库检索), **不再决定"这个问题要不要查知识库"**。
+  作答口径一律由检索结果算出的 `ChatOutcome` 决定。旧版本文档把"由词表决定是否检索"当成设计,
+  其后果是"知识库内容能否被问到取决于有人记得改词表", 已实测证伪(售后文档在库却答"未找到")。
+  - 判定顺序: 命中 `app.rag.tool-keywords`(订单/物流/快递/包裹等, 含少量同义词) → TOOL, 跳过知识库检索
+    (答案在业务库, 检索必然查不到反而挤占上下文预算); 其余(RAG/HYBRID 会话)**一律执行检索**。
+  - `app.rag.internal-keywords` **已退出正确性路径**: 它不再决定内容可否被问到, 仅影响审计里的
+    `rag_mode` 诊断标签。上传新文档**不再需要同步改词表**(这是 P3-7 的主要收益)。
+  - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味): 出口记 `TOOL_DATA`, 收尾按出口
+    与 `toolCalls` 双重排除写缓存。
+  - ⚠ **意图路由结果缓存**(`CachingIntentRouter` @Primary 装饰器): P3-7 A 批后它缓存的判定只剩
+    "是否工具轮"这一项成本短路, 价值已大幅降低, **列入 roadmap P3-7 B 批下线**; 以下是其现存机制:
+    问题→路由结果缓存 Redis
     (`rag:intent:v{version}:{sha256}`, TTL 默认 60 分钟)。一致性/时效性: ① TTL 兜底旧词表结果自然过期;
     ② 改路由词表后调 `DELETE /api/system/intent-cache`(@RequireAdmin)版本自增立即失效;
     ③ Redis 异常一律按未命中处理走真实路由, 绝不影响对话。
@@ -257,11 +267,11 @@ com.ai
 
 ### 语义缓存与审计不变式
 
-- 缓存命中时**跳过检索与上下文装配**: 同步接口整段返回, 流式只发 **1 个** content 事件
+- 缓存命中时**跳过上下文装配与模型调用**(P3-7 起检索已先跑过, 不再能跳过检索): 同步接口整段返回, 流式只发 **1 个** content 事件
   (不是逐 token 增量)——前端/测试断言"流式增量≥2"必须在冷缓存下进行。
-- 审计约定(用于区分"缓存命中"与"检索了但没命中知识块"):
-  `rag_decision_log(rag_mode=KB, retrieval_executed=false)` **只可能是缓存命中**,
-  且该轮**不会**产生 `context_log`(未装配上下文); 未命中的 KB 轮次两者都有。
+- 审计约定(P3-7 起): 缓存命中由 `rag_decision_log.answer_outcome=ANSWERED_FROM_CACHE` 显式标识
+  (不再靠 `rag_mode`+`retrieval_executed` 反推), 且该轮**不会**产生 `context_log`(未装配上下文)。
+  出口共五个值, 语义见 `com.ai.rag.ChatOutcome`。
 - 缓存键 = 知识库版本号 + 对话模型标识 + 归一化问题 SHA-256, 形如
   `rag:answer:v{版本}:m{模型}:{摘要}`(负缓存 `rag:miss:` 同命名空间)。两个失效维度:
   文档上传/删除/重处理 → 版本自增失效; **切换对话模型** → `m{模型}` 段天然形成新命名空间
@@ -382,18 +392,20 @@ com.ai
 - 注入上下文前必须经重排或相似度阈值过滤。
 - **提示词选择矩阵**(`PromptService.systemFor`, 唯一选择点——同步与流式共用)：
 
-| 会话类型 / 意图 | `kb-only=false`(默认, 宽松) | `kb-only=true`(严格知识库) |
+入参是 **`ChatOutcome`(检索后算出的出口)**, 不是意图预判——这是 P3-7 的落点。默认 `kb-only=true`。
+
+| 出口(`ChatOutcome`) | `kb-only=false`(宽松) | `kb-only=true`(默认, 严格) |
 |---|---|---|
-| `AGENT` 会话 | `base-system.st` | `base-system.st`(**刻意不变**: Agent 型本就靠工具) |
-| `TOOL` 意图 | `general-system.st` | `kb-only-system.st` |
-| `GENERAL` 意图 | `general-system.st`(允许闲聊科普) | `kb-only-system.st`(必须友好拒答) |
-| `KB` + 有命中 | `base-system.st` + `rag-context.st`(`{{extraRule}}`=可补充常识) | `kb-only-system.st` + `rag-context.st`(`{{extraRule}}`=禁止引入资料之外的知识) |
-| `KB` + 零命中 | `base-system.st` | `kb-only-system.st` |
+| `ANSWERED_FROM_KB` / `ANSWERED_FROM_CACHE` | `base-system.st` + `rag-context.st`(`{{extraRule}}`=可补充常识) | `kb-only-system.st` + `rag-context.st`(`{{extraRule}}`=禁止引入资料之外的知识, **且要求先答资料覆盖的那部分**) |
+| `REFUSED_NO_EVIDENCE` | —— 该出口只可能在严格模式出现 | `kb-only-system.st`(按固定口径友好拒答) |
+| `TOOL_DATA` | `general-system.st` | `kb-only-system.st`(第 4 条仍允许并只认工具返回值) |
+| `ANSWERED_OPEN` | `general-system.st`(自由作答) | `general-system.st`(非检索会话/检索降级) |
+| `AGENT` 会话(任意出口) | `base-system.st` | `base-system.st`(**刻意不变**: Agent 型本就靠工具) |
 
 - **`TOOL` 必须跟着切换**(易踩点): 宽松模式下 TOOL 与 GENERAL 共用 `general-system.st`, 而该模板首句就授权
   "可以回答常识、科普、闲聊类问题"。若严格模式只改 GENERAL, "只允许知识库作答"会被 TOOL 分支绕过,
   开关等于无效。
-- **`kb-only` 是提示词级软约束, 不是硬保证**(刻意如此, 勿在文档/沟通中把它说成"保证不编造"):
+- **默认 `kb-only=true`。它是提示词级软约束, 不是硬保证**(刻意如此, 勿在文档/沟通中把它说成"保证不编造"):
   模型仍被调用, 长多轮或资料字面相关而语义不对题时仍可能拼出看似有据的答案。需要零编造时正解是
   **硬闸门**——在 `ChatPreparationService` 检索零命中分支直接返回固定文案、不调模型; 与本开关不冲突, 可叠加。
 - 严格模板的拒答措辞与 `ChatSourceDisplay.NO_RESULT_ANSWER`(语义负缓存命中时的固定回答)必须逐字一致;

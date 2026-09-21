@@ -121,8 +121,10 @@
 |---|---|
 | `SourceVO`（record，**自 `chat/dto` 迁入**） | 检索输出的来源表达：`fileName`/`documentId`/`chunkIndex`/`snippet`/`score`；生产方定义、chat 消费 |
 | `RagRetriever`（接口） | 仅保留有调用方的四个方法：`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits,tokenBudget)`、`toSources(hits)`（原 `available()`/单参 `retrieve`/无预算 `buildContext` 无调用方，已删除） |
-| `IntentRouter` | `route(message)` → `RagMode` |
-| `RagMode` | `KB`/`TOOL`/`GENERAL` 三态 |
+| `IntentRouter` | `route(message)` → `RagMode`；**P3-7 起仅用于识别工具轮**, 不再决定该不该检索 |
+| `RagMode` | `KB`/`TOOL`/`GENERAL` 三态(预判, 只填审计的 rag_mode 诊断列) |
+| `ChatOutcome` ★新增 | 本轮**实际出口**: `ANSWERED_FROM_KB`/`ANSWERED_FROM_CACHE`/`REFUSED_NO_EVIDENCE`/`ANSWERED_OPEN`/`TOOL_DATA` |
+| `OutcomeResolver.resolve(outcome,toolTurn,kbOnly,threshold)` ★新增 | 纯函数出口判定(工具轮优先避免被误判无据; 未执行/降级不作拒答依据) |
 | `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记 + **`semanticMaxScore`（语义路阈值过滤前最大分）**；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
 | `SemanticCacheAdmin` / `IntentCacheAdmin` | `evictAll()`：跨模块运维清空契约 |
 
@@ -160,7 +162,7 @@
 ### `KeywordIntentRouter` / `CachingIntentRouter`
 | 方法 | 作用 | 调用方 |
 |---|---|---|
-| `KeywordIntentRouter.route(message)` | 三态判定：工具词 → TOOL（无条件）→ 内部词 → KB → 否则 GENERAL | 前置 |
+| `KeywordIntentRouter.route(message)` | 三态判定：工具词 → TOOL（跳过检索）→ 内部词 → KB → 否则 GENERAL。**P3-7 起调用方只用 TOOL 这一支** | 前置 |
 | `isToolQuestion(message)` | 命中 `app.rag.tool-keywords` 即为工具问题 | 内部 |
 | `looksInternal(message)` | 命中 `app.rag.internal-keywords` | 内部 |
 | `CachingIntentRouter.route(message)` | 先读 `rag:intent:v{版}:{sha256}`，未命中调真实路由并回写（TTL 60min）；**Redis 异常整段按未命中处理** | 全局 `@Primary` 注入点 |
@@ -257,7 +259,7 @@
 ### `ChatPreparationService`（前置，同步与流式共用）
 | 方法 | 作用 |
 |---|---|
-| `prepare(session,userMessage)` | 编排 §8 全部步骤；new `AtomicInteger toolCalls` ★ |
+| `prepare(session,userMessage)` | 编排 §8 全部步骤(改写 → 检索 → **出口判定** → 缓存查询 → 审计 → 装配)；new `AtomicInteger toolCalls` ★ |
 | `resolveRagContext(session,userMessage)` | AGENT 不检索；否则路由（TOOL 无条件跳过检索）→ KB 才检索 |
 | `cacheEligible(session,rw,retrievalQuery)` | enabled && 未改写 && 非 AGENT && route==KB |
 | `publishDecision(session,userMessage,rag,costMs)` | 发 `ChatDecisionEvent`（模型失败也留痕） |
