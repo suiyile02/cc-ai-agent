@@ -7,6 +7,7 @@ import com.ai.config.AppProperties;
 import com.ai.context.AssembledPrompt;
 import com.ai.context.service.ContextAssembler;
 import com.ai.context.service.QueryRewriter;
+import com.ai.context.service.ShortQueryExpander;
 import com.ai.rag.ChatOutcome;
 import com.ai.rag.IntentRouter;
 import com.ai.rag.OutcomeResolver;
@@ -27,9 +28,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 对话前置阶段(同步/流式共用)：改写 → 检索 → **出口判定** → 语义缓存查询 → 决策审计 → 装配。
+ * 对话前置阶段(同步/流式共用)：改写 → 短查询扩展 → 检索 → **出口判定** → 语义缓存查询 → 决策审计 → 装配。
  *
  * <p>统一两条管线此前各自实现的"准备"段——缓存的查询、决策落库、来源提取只存在一份代码。
+ * 检索调试接口({@link #debugSearch})也走这同一条链的"扩展+检索+出口判定"三步，
+ * 避免"调试页能查到、对话却拒答"这类口径分叉。
  *
  * <p><b>检索先于缓存查询</b>(P3-7)：出口只能由检索事实算出，词表不再预判"该不该检索"，
  * 因此正缓存命中时本轮确实付了一次检索(代价实测 159~321ms)；换来的收益是
@@ -52,6 +55,7 @@ public class ChatPreparationService {
     private final AppProperties appProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final SessionTitleService sessionTitleService;
+    private final ShortQueryExpander shortQueryExpander;
 
     /**
      * 一次问答的 RAG 上下文快照(供提示词组装与决策落库)。
@@ -105,6 +109,14 @@ public class ChatPreparationService {
         QueryRewriter.RewriteResult rw = queryRewriter.rewrite(
                 session.getSessionId(), session.getSessionType(), userMessage);
         String retrievalQuery = rw.query() == null || rw.query().isBlank() ? userMessage : rw.query();
+        // 短查询扩展: 裸词("产品")的余弦分偏低会被出口判据误杀, 补全成完整问题再检索。
+        // 扩展成功即视为"已改写"——语义缓存据此不读写(扩写词检索出的答案不能挂到原始短词键上)
+        ShortQueryExpander.ExpandResult expanded =
+                shortQueryExpander.expand(session.getSessionType(), retrievalQuery);
+        if (expanded.expanded()) {
+            retrievalQuery = expanded.query();
+            rw = new QueryRewriter.RewriteResult(expanded.query(), true);
+        }
         long rewriteMs = System.currentTimeMillis() - start;
 
         // ① 检索先行: 出口只能由检索事实算出。词表不再预判"要不要检索"(GENERAL 也查)——
@@ -245,5 +257,52 @@ public class ChatPreparationService {
                 // 否则定标时"没观察"会被当成"观察到了 0 分", 分数分布依旧失真
                 outcome.executed() ? outcome.semanticMaxScore() : null,
                 appProperties.getRag().getRerankMode(), costMs));
+    }
+
+    /**
+     * 检索调试结果：命中标块 + <b>对话侧会判的出口</b>（同一判据、同一阈值语义）。
+     *
+     * @param retrievalQuery 实际用于检索的问题(可能经多轮改写或短查询扩展)
+     * @param expanded       是否做过短查询扩展
+     * @param outcome        检索明细(各路命中数/阈值过滤前最大分)
+     * @param chatOutcome    把这轮交给对话作答时会命中的出口
+     * @param topK           生效的 Top-K
+     * @param threshold      生效的语义路余弦阈值
+     */
+    public record DebugSearch(String retrievalQuery, boolean expanded, RetrievalOutcome outcome,
+                              ChatOutcome chatOutcome, int topK, double threshold) {
+    }
+
+    /**
+     * 检索调试：走与对话<b>完全相同</b>的"扩展 → 混合检索 → 出口判定"三步，只回显不落地
+     * (不写记忆/审计/缓存，也不装配提示词、不调用对话模型)。
+     *
+     * <p>与对话的唯一差别在这里：调试的目的就是"看看能召回什么"，所以工具类问题也照样检索
+     * (对话里工具轮会跳过检索)，但出口判定仍按工具轮口径算，页面才能预测"对话会怎么答"。
+     *
+     * @param question   用户输入的查询
+     * @param topK       召回条数; null 或 &lt;1 时取 {@code app.rag.top-k}
+     * @param threshold  语义路余弦阈值; null 时取 {@code app.rag.similarity-threshold}(与对话一致)
+     * @param expandShort 是否允许短查询扩展(默认与对话一致)
+     * @return 调试结果
+     */
+    public DebugSearch debugSearch(String question, Integer topK, Double threshold, boolean expandShort) {
+        int effectiveTopK = topK == null || topK < 1 ? appProperties.getRag().getTopK() : topK;
+        double effectiveThreshold = threshold == null
+                ? appProperties.getRag().getSimilarityThreshold() : threshold;
+        String query = question == null ? "" : question.trim();
+        boolean expanded = false;
+        if (expandShort) {
+            ShortQueryExpander.ExpandResult r = shortQueryExpander.expand(SessionType.HYBRID, query);
+            if (r.expanded()) {
+                query = r.query();
+                expanded = true;
+            }
+        }
+        RetrievalOutcome outcome = ragRetriever.retrieveOutcome(query, effectiveTopK, effectiveThreshold);
+        boolean toolTurn = intentRouter.route(query) == RagMode.TOOL;
+        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, toolTurn,
+                appProperties.getChat().isKbOnly(), effectiveThreshold);
+        return new DebugSearch(query, expanded, outcome, chatOutcome, effectiveTopK, effectiveThreshold);
     }
 }

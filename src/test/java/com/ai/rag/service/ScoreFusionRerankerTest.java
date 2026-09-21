@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,5 +53,43 @@ class ScoreFusionRerankerTest {
         assertEquals(List.of(2L, 3L, 1L),
                 ordered.stream().map(c -> DocumentMeta.docId(c.doc())).toList());
         assertTrue(ordered.get(0).fusedScore() >= ordered.get(2).fusedScore());
+    }
+
+    /**
+     * 融合分写进 {@code score} 后，两路**原始分**必须仍可从 metadata 取回——
+     * 检索调试页与出口判据都要看真实余弦分，而融合分是相对名次(词面榜首恒为 1.0)。
+     */
+    @Test
+    void rawPathScoresSurviveIntoFinalDocument() {
+        List<RetrievalCandidate> ordered = reranker.rerank("q", List.of(
+                candidate(1L, 0.4097, 12.0), candidate(2L, null, 12.0)));
+        // 注意别按位次取：本批里"仅词面命中"的归一分(1.0)会盖过双路命中(0.6*0.4097+0.4)，
+        // 这本身就是"融合分不能当相似度"的例证。按 doc_id 取。
+        Document bothPaths = docOf(ordered, 1L);
+        Document keywordOnly = docOf(ordered, 2L);
+
+        assertEquals(0.4097, DocumentMeta.semanticScore(bothPaths), 1e-9, "原始余弦分应可取回");
+        assertEquals(12.0, DocumentMeta.keywordScore(bothPaths), 1e-9);
+        assertEquals(0.6 * 0.4097 + 0.4, DocumentMeta.similarity(bothPaths), 1e-9,
+                "similarity() 返回的是融合分, 不能当相似度读");
+        assertNull(DocumentMeta.semanticScore(keywordOnly),
+                "仅词面命中=无语义证据, 出口判据据此判无据");
+        assertEquals(1.0, DocumentMeta.similarity(keywordOnly), 1e-9,
+                "BM25 榜首归一后恒为 1.0——这正是调试页分数看着偏高的来源");
+    }
+
+    private Document docOf(List<RetrievalCandidate> candidates, long docId) {
+        return candidates.stream()
+                .filter(c -> Long.valueOf(docId).equals(DocumentMeta.docId(c.doc())))
+                .findFirst().orElseThrow().toDocument();
+    }
+
+    /** 未走融合(关键词路为空, 语义路直出)时 score 本身就是原始余弦分 */
+    @Test
+    void semanticOnlyPathWithoutFusionStillReportsRawCosine() {
+        Document direct = Document.builder().id("c9").text("t")
+                .metadata(Map.of("doc_id", 9L, "chunk_index", 0)).score(0.55).build();
+
+        assertEquals(0.55, DocumentMeta.semanticScore(direct), 1e-9);
     }
 }

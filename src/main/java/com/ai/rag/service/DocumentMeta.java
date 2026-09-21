@@ -40,6 +40,24 @@ final class DocumentMeta {
     }
 
     /**
+     * 语义路的**原始余弦分**（与出口判据同口径），与融合分区分开。
+     *
+     * <p>{@link #similarity} 返回的是"当前挂在 score 上的分"，重排后那是融合分（相对名次，
+     * 单路榜首恒为 1.0），不能当相似度读。本方法优先取 {@code metadata.semantic_score}；
+     * 纯语义路直出（未走融合，无 {@code rerank_score}）时 score 就是原始余弦分；
+     * 仅关键词命中则该值不可得，返回 null（对话侧据此判"无据"）。
+     *
+     * @param doc 命中分块
+     * @return 原始余弦相似度；该分块没有语义路证据时 null
+     */
+    static Double semanticScore(Document doc) {
+        if (doc.getMetadata().get("semantic_score") instanceof Number n) {
+            return n.doubleValue();
+        }
+        return doc.getMetadata().containsKey("rerank_score") ? null : doc.getScore();
+    }
+
+    /**
      * 关键词路的 BM25 原始得分。
      *
      * @param doc 命中分块

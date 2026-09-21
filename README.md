@@ -106,10 +106,10 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 |---|---|
 | `POST /api/ai/chat` | 同步问答，返回 `{content}`（引用来源不再返回前端，只落库 `chat_log.sources`） |
 | `POST /api/ai/chat/stream` | SSE 类型化事件流：`event:content`(正文增量) → `data:[DONE]`；不推送阶段提示/思考流/来源事件（引用来源只落库，审计走系统日志接口） |
-| `POST /api/ai/rag/search` | RAG 检索调试（topK/阈值即时调参看命中） |
+| `POST /api/ai/rag/search` | RAG 检索调试：**走对话同一条链**（短查询扩展→检索→出口判定），返回命中块（含余弦分/BM25 分/融合名次）与"这轮交给对话会判哪个出口"；`topK`/`similarityThreshold` 留空即跟随对话配置 |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **检索**（RAG/HYBRID 会话一律执行，工具轮除外；不再由关键词表预判"该不该查"）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **短查询扩展**（`ShortQueryExpander`：去空白后不足 6 字的提问先补全成完整检索句——裸词"产品"余弦仅 0.41 会被判无据，补全后可达 0.52~0.70；扩展成功的轮次视为"已改写"，不参与语义缓存读写）→ **检索**（RAG/HYBRID 会话一律执行，工具轮除外；不再由关键词表预判"该不该查"）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
 
 ### 3.2.1 严格知识库模式（`app.chat.kb-only`，**默认开启**）
 
@@ -182,9 +182,9 @@ curl -s -X POST $BASE/api/sessions -H "Content-Type: application/json" -H "$AUTH
 curl -s -X POST $BASE/api/knowledge/upload -H "$AUTH" -F "file=@docs/sample/员工手册示例.md"
 curl -s "$BASE/api/knowledge/documents?status=2" -H "$AUTH"
 
-# 3) RAG 检索调试(看命中分块与分数)
+# 3) RAG 检索调试(命中块 + 对话出口预测; 参数留空即与对话同口径)
 curl -s -X POST $BASE/api/ai/rag/search -H "Content-Type: application/json" -H "$AUTH" \
-  -d '{"question":"入职满两年的员工有多少天年假？","topK":3,"similarityThreshold":0.3}'
+  -d '{"question":"产品","topK":3,"similarityThreshold":0.3,"expandShortQuery":true}'
 
 # 4) 同步问答(知识库问题 / 工具问题 / 多轮记忆)
 curl -s -X POST $BASE/api/ai/chat -H "Content-Type: application/json" -H "$AUTH" \
@@ -241,7 +241,7 @@ docker-compose.yml          Qdrant+MySQL
 
 > 全量流程与逐方法说明（Markdown/Mermaid，可随代码一起 review）见 [docs/flow-map.md](docs/flow-map.md)（20 张图：全景、启动装配、鉴权横切、认证用例、知识库上传与状态机、对话前置/同步/流式、混合检索、上下文装配、缓存写入闸门、工具与切面、审计落库、会话与记忆、前端映射、降级总表、存储键空间、线程模型、e2e 对照、偏差清单）与 [docs/method-map.md](docs/method-map.md)（133 个类逐方法作用与调用方）。
 
-> 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（改写→语义缓存查询→路由检索→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
+> 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（标题→改写→短查询扩展→检索→出口判定→语义缓存查询→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
 
 ## 6. 已知简化与后续路线（非阻塞项）
 
@@ -254,12 +254,12 @@ docker-compose.yml          Qdrant+MySQL
 - **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 238 例（Mockito，含 ArchUnit 架构守护 11 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
+- **测试用例**：单元测试 246 例（Mockito，含 ArchUnit 架构守护 11 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 
 - **401/403/404**：检查 `DASHSCOPE_API_KEY`、`AI_BASE_URL`、模型名（qwen-plus 是否开通）；百炼控制台核实。
 - **上传后状态一直为 1 或变 3**：查看 `knowledge_document.error_message`；多为 Embedding 未配置/额度不足/文件解析失败。列表接口已返回 errorMessage。
-- **问答答“未找到相关信息”**：知识库无命中（阈值过高或未上传文档）；用 `/api/ai/rag/search` 调试 topK 与阈值。
+- **问答答“未找到相关信息”**：先看 `/api/ai/rag/search` 响应里的 `answerOutcome` 与 `semanticMaxScore`——该接口与对话同一条链，它判"无据拒答"就是对话的真实结论。常见三种原因：① 库里确实没有（`keywordCount` 与 `semanticCount` 都很低）；② 问题太短导致余弦偏低（关掉 `expandShortQuery` 对比即可看出扩展有没有生效）；③ 阈值高于真实分布（`semanticMaxScore` 略低于 `similarityThreshold`，见 roadmap P3-6）。⚠ 命中列表里的 `score` 是融合相对名次（仅词面命中的榜首恒 1.0），**不能当相似度看**，判相关性只看 `semanticScore`。
 - **切换向量库维度不一致**：同一 Embedding 模型产出的维度必须一致；换模型请清空旧集合/旧库再入库。
 - **登录与对话都正常，但缓存全不命中/限流好像失效**：看启动日志的 `Redis 自检失败(不可用)` 一行，它会列出当前处于降级态的能力清单；运行期同类降级为 WARN（60 秒一条）。Redis 未启动时应用按设计继续服务，这不是故障。

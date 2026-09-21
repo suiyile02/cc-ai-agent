@@ -172,6 +172,12 @@ app:
       reference-hint-required: true  # 指代词启发式: 问题不含指代/省略线索词时跳过改写(零等待)
       # reference-hints: [...]   # 线索词表(缺省: 那/它/他/她/这个/上面/刚才等, 见 AppProperties)
       disable-thinking: true     # 改写调用注入 enable_thinking=false(qwen3 关思维链, 实测大幅降延迟)
+    short-query:                 # 短查询扩展: 裸词("产品")余弦分偏低, 补全成完整问题再检索
+      enabled: true              # 关闭后短词按其原样检索(实测"产品"0.410 < 阈值 0.45 → 被判无据拒答)
+      min-chars: 6               # 去空白后字符数小于该值才扩展(完整句子零等待)
+      timeout-ms: 3000           # 扩展调用超时; 超时/失败/空结果一律回退原问题
+      max-chars: 60              # 扩展结果长度上限(模型啰嗦时硬截断)
+      disable-thinking: true     # 与改写/摘要同口径关闭思维链
     summary:
       enabled: true              # 历史滚动摘要压缩
       trigger-messages: 20       # 历史消息数超过该阈值触发摘要

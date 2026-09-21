@@ -119,7 +119,7 @@
 ### 模块根（对外契约）
 | 成员 | 作用 |
 |---|---|
-| `SourceVO`（record，**自 `chat/dto` 迁入**） | 检索输出的来源表达：`fileName`/`documentId`/`chunkIndex`/`snippet`/`score`；生产方定义、chat 消费 |
+| `SourceVO`（record，**自 `chat/dto` 迁入**） | 检索输出的来源表达：`fileName`/`documentId`/`chunkIndex`/`snippet` + **三个不同口径的分数** `score`(融合相对名次)/`semanticScore`(原始余弦, 判据用)/`keywordScore`(BM25 原始分)；生产方定义、chat 消费 |
 | `RagRetriever`（接口） | 仅保留有调用方的四个方法：`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits,tokenBudget)`、`toSources(hits)`（原 `available()`/单参 `retrieve`/无预算 `buildContext` 无调用方，已删除） |
 | `IntentRouter` | `route(message)` → `RagMode`；**P3-7 起仅用于识别工具轮**, 不再决定该不该检索 |
 | `RagMode` | `KB`/`TOOL`/`GENERAL` 三态(预判, 只填审计的 rag_mode 诊断列) |
@@ -139,14 +139,14 @@
 | `HybridRecaller` | `recall(query,topK,threshold)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、在本地按阈值过滤**——阈值下发给向量库会让低于阈值的分数永不可见，分布被底部截断、无法定标 | 编排 |
 | | `semanticHits(...)` / `keywordHits(...)` | 单路检索，异常只丢那一路（WARN） | 内部 |
 | `RrfFuser`（静态） | `fuse(semantic,keyword)` / `rrfScore(c)` | 按 `doc_id:chunk_index` 去重 + RRF(k=60) 名次融合 | 编排 |
-| `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score` | 融合/重排 |
+| `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score`，并把两路**原始分**写入 `metadata.semantic_score`/`keyword_score`（否则融合后无从判断真实相似度） | 融合/重排 |
 | `RerankStrategy`（接口） | `mode()` / `rerank(query,candidates)` | 重排策略契约；D3 接模型时新增实现即可 | 工厂 |
 | `ScoreFusionReranker` | `rerank(...)` | `score` 模式：语义 0.6 + BM25 归一 0.4；单路直取该路分 | 工厂 / LLM 回退 |
 | `LlmReranker` | `rerank(...)` / `buildPrompt` / `parseOrder` | `llm` 模式：模型排 ≤10 条；异常/解析失败回退 score | 工厂 |
 | `RrfOrderReranker` | `rerank(...)` | `none` 模式：保持 RRF 顺序并赋相对顺位分（首位 1.0） | 工厂 |
 | `RerankStrategyFactory` | `current()` | 按 `app.rag.rerank-mode` 取策略；未知值 WARN 回退 score | 编排 |
 | `RagContextRenderer` | `render(hits,tokenBudget)` | Token 预算 + 字符上限双重约束的上下文渲染（含注入防护标记） | 编排 |
-| `DocumentMeta`（静态） | `similarity` / `keywordScore` / `chunkKey` / `fileName` / `docId` / `chunkIndex` / `snippet` / `fromKeywordHit` | 命中分块的元数据读取口径（与入库 `addMetadata` 对齐） | 融合/重排/渲染/编排 |
+| `DocumentMeta`（静态） | `similarity` / **`semanticScore`** / `keywordScore` / `chunkKey` / `fileName` / `docId` / `chunkIndex` / `snippet` / `fromKeywordHit` | 命中分块的元数据读取口径（与入库 `addMetadata` 对齐）。`similarity` 返回 score 上当前挂的分（重排后即融合分），`semanticScore` 才是原始余弦分 | 融合/重排/渲染/编排 |
 
 ### `KeywordIndex`（进程内 BM25）
 | 方法 | 作用 | 调用方 |
@@ -214,7 +214,7 @@
 | `lockFor(sessionId)` | 取/建会话级锁对象（Caffeine 有界，防泄漏） | 内部 |
 | `summaryTokens(summary)` | 摘要段 token（含 SYSTEM 注入开销） | 内部 |
 
-### `ConversationSummarizer` / `QueryRewriter`
+### `ConversationSummarizer` / `QueryRewriter` / `ShortQueryExpander`
 | 方法 | 作用 |
 |---|---|
 | `summarize(existing,oldMessages)` | 合并"已有摘要 + 新增老消息"生成新摘要（disable-thinking、`Timeouts` 限时） |
@@ -222,6 +222,9 @@
 | `rewrite(sessionId,sessionType,userMessage)` | 指代消解：非 AGENT + 有历史 + 含线索词 + 未冷却 才调 `CompressionQueryTransformer`；失败/超时回退原问题 |
 | `resolveTransformer()` | 注入优先，否则按 ChatClient 可用性惰性构建 |
 | `containsReferenceHint(message)` | 线索词表判定（`app.context.query-rewrite.reference-hints`） |
+| `ShortQueryExpander.expand(sessionType,query)` ★新增 | 短查询扩展：去空白后 < `short-query.min-chars` 才调模型补全成完整检索句；AGENT 会话跳过；超时/失败/空/等同原句一律回退（WARN 节流） |
+| `ShortQueryExpander.complete(prompt)` | 模型调用（包私有作测试替换点），注入 `enable_thinking=false` |
+| `ShortQueryExpander.sanitize(raw,maxChars)` | 清洗：取首行、去引号与"补全后："前缀、按上限截断 |
 
 ### `ContextAssembler`
 | 方法 | 作用 |
@@ -240,9 +243,10 @@
 | `ChatRequest` | `sessionId`+`message`（Bean Validation） |
 | `ChatResponse` | `{content}`（引用来源不再返回） |
 | `ChatStreamEvent` | `EventType.CONTENT`（唯一） + `[DONE]` |
-| `RagDebugRequest` | 检索调试入参（`topK`/`threshold` 归一化在紧凑构造器里）；原嵌套的 `RagDebugResponse` 无引用点，已删除 |
+| `RagDebugRequest` | 检索调试入参：`topK`/`similarityThreshold` **留 null 即跟随对话配置**（旧的"null→0"归一化会造出第三套口径，已取消）；`expandShortQuery` 默认 true |
+| `RagDebugVO` ★新增 | 调试响应：`sources` + `answerOutcome`(对话出口预测) + `retrievalQuery`/`expanded` + `executed`/`degraded` + `topK`/`similarityThreshold`/`semanticCount`/`keywordCount`/`semanticMaxScore`/`finalHits`/`kbOnly` |
 | `ChatCompletedEvent` | 问答完成事件负载（record，含 composition/usage/modelLabel） |
-| `ChatDecisionEvent` | 决策事件负载（record，14 个**已计算的值**字段，含 `semanticMaxScore`）——不携带 `system.entity` 实体，实体组装在 `ChatAuditListener.toEntity` |
+| `ChatDecisionEvent` | 决策事件负载（record，15 个**已计算的值**字段，含 `semanticMaxScore`）——不携带 `system.entity` 实体，实体组装在 `ChatAuditListener.toEntity` |
 
 ### `ChatService`（门面）
 | 方法 | 作用 |
@@ -255,22 +259,24 @@
 | `needTools(session)` | AGENT/HYBRID 才挂工具 |
 | `requireChatClient()` | 模型未配置 → 友好降级异常 |
 | `extractText(response)` / `usageTotal(response)` | 从响应取正文/`usage.totalTokens`（`result` 为空的 usage-only 分块仍可取） |
-| `debugRetrieve(question,topK,threshold)` | 忽略意图路由直接检索（调参用） |
+| `debugRetrieve(question,topK,threshold,expandShort)` ★改 | 检索调试：交 `ChatPreparationService.debugSearch` 走对话同一条链，映射为 `RagDebugVO`（含出口预测） |
 
 ### `ChatPreparationService`（前置，同步与流式共用）
 | 方法 | 作用 |
 |---|---|
-| `prepare(session,userMessage)` | 编排 §8 全部步骤(改写 → 检索 → **出口判定** → 缓存查询 → 审计 → 装配)；new `AtomicInteger toolCalls` ★ |
+| `prepare(session,userMessage)` | 编排 §8 全部步骤(标题 → 改写 → **短查询扩展** → 检索 → **出口判定** → 缓存查询 → 审计 → 装配)；new `AtomicInteger toolCalls` ★ |
 | `resolveRagContext(session,userMessage,route)` ★改 | 工具轮跳过知识库检索→`TOOL_DATA`；非 RAG 会话 `empty()`；其余**一律检索**并用 `OutcomeResolver` 算出口（不再"KB 才检索"） |
 | `cacheEligible(session,rw)` ★改 | enabled && 未改写 && 非 AGENT（**不再要求 route==KB**；出口门禁移到调用处） |
 | `publishDecision(session,userMessage,rag,costMs)` | 发 `ChatDecisionEvent`（模型失败也留痕） |
 | `PreparedChat`（record） | `rw`/`rag`/`sources`/`assembled`/`cacheEligible`/`retrievalQuery`/`cachedAnswer`/`toolCalls` ★ |
 | `RagContext.empty()` | 未检索时的空上下文 |
+| `debugSearch(question,topK,threshold,expandShort)` ★新增 | 检索调试：走"扩展 → 检索 → 出口判定"同一条链，只回显不落地（不写记忆/审计/缓存、不调对话模型）；工具轮照样检索，但出口按工具轮口径预测 |
+| `DebugSearch`（record） | `retrievalQuery`/`expanded`/`outcome`/`chatOutcome`/`topK`/`threshold` |
 
 ### `ChatCompletionService`（收尾，同步与流式共用）
 | 方法 | 作用 |
 |---|---|
-| `complete(session,userMessage,prep,answer,usage,startMs)` | 记忆写回 → 摘要触发 → 完成事件 → ★缓存闸门（`toolCalls>0` 跳过正负缓存；否则 `cacheEligible && mode==KB` 内按 `declaresNoResult` 决定 `put` 或 `putMiss`）→ 来源落库 |
+| `complete(session,userMessage,prep,answer,usage,startMs)` | 记忆写回 → 摘要触发 → 完成事件 → ★缓存闸门（`toolCalls>0` 跳过正负缓存；否则 `cacheEligible` 下按**出口**决定：`ANSWERED_FROM_KB` 写正缓存、`REFUSED_NO_EVIDENCE` 写负缓存）→ 来源落库 |
 | `completeCached(session,userMessage,cached,startMs)` | 命中路径收尾：写记忆与审计，不写模型耗时口径的缓存 |
 | `completeInterrupted(session,userMessage,answer,startMs)` | 中断收尾：只写记忆/审计，**禁止**触达缓存写入 |
 | `publishCompleted(...)` | 组 `ChatCompletedEvent`，`modelLabel()` 取 `chatClientProvider.modelLabel()` ★ |

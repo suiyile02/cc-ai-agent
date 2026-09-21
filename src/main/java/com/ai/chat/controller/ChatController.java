@@ -5,7 +5,7 @@ import com.ai.common.Result;
 import com.ai.chat.dto.ChatRequest;
 import com.ai.chat.dto.ChatResponse;
 import com.ai.chat.dto.RagDebugRequest;
-import com.ai.rag.SourceVO;
+import com.ai.chat.dto.RagDebugVO;
 import com.ai.user.security.UserContext;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -16,8 +16,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
-
-import java.util.List;
 
 /**
  * 智能对话接口(需求第 3 章)：同步问答 / SSE 流式问答 / RAG 检索调试。
@@ -61,15 +59,14 @@ public class ChatController {
     }
 
     /**
-     * RAG 检索调试：直接查看命中块与分数(不受意图路由影响)。
+     * RAG 检索调试：走对话同一条链路，返回命中块(含两路原始分)与对话出口预测。
      *
-     * @param request 请求体(question + 可选 topK/similarityThreshold)
-     * @return 统一响应, data 为命中来源列表
+     * @param request 请求体(question + 可选 topK/阈值/是否短查询扩展)
+     * @return 统一响应, data 为调试结果
      */
     @PostMapping("/rag/search")
-    public Result<List<SourceVO>> ragSearch(@RequestBody @Valid RagDebugRequest request) {
-        List<SourceVO> hits = chatService.debugRetrieve(request.question(),
-                request.topK(), request.similarityThreshold());
-        return Result.ok(hits);
+    public Result<RagDebugVO> ragSearch(@RequestBody @Valid RagDebugRequest request) {
+        return Result.ok(chatService.debugRetrieve(request.question(), request.topK(),
+                request.similarityThreshold(), request.expandShort()));
     }
 }

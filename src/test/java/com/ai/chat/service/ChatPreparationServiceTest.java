@@ -5,6 +5,8 @@ import com.ai.config.AppProperties;
 import com.ai.context.AssembledPrompt;
 import com.ai.context.service.ContextAssembler;
 import com.ai.context.service.QueryRewriter;
+import com.ai.context.service.ShortQueryExpander;
+import com.ai.rag.ChatOutcome;
 import com.ai.rag.IntentRouter;
 import com.ai.rag.RagMode;
 import com.ai.rag.RagRetriever;
@@ -31,14 +33,16 @@ import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link ChatPreparationService} 前置阶段单元测试：负缓存(穿透防护)命中时
- * 必须短路跳过检索与装配, 以固定"未找到"文案返回。
+ * {@link ChatPreparationService} 前置阶段单元测试：检索先行的出口判定、缓存准入闸门
+ * (正/负缓存只在"确有依据"或"确将拒答"时参与)、决策事件字段口径、短查询扩展对缓存准入的影响。
  */
 class ChatPreparationServiceTest {
 
@@ -51,6 +55,7 @@ class ChatPreparationServiceTest {
     private ContextAssembler contextAssembler;
     private ApplicationEventPublisher eventPublisher;
     private SessionTitleService sessionTitleService;
+    private ShortQueryExpander shortQueryExpander;
     private ChatPreparationService service;
 
     @BeforeEach
@@ -62,9 +67,13 @@ class ChatPreparationServiceTest {
         contextAssembler = mock(ContextAssembler.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         sessionTitleService = mock(SessionTitleService.class);
+        // 默认不扩展(各用例按需改写), 避免每个用例都要桩一层模型调用
+        shortQueryExpander = mock(ShortQueryExpander.class);
+        lenient().when(shortQueryExpander.expand(any(), anyString())).thenAnswer(inv ->
+                new ShortQueryExpander.ExpandResult(inv.getArgument(1), false));
         service = new ChatPreparationService(queryRewriter, semanticAnswerCache, intentRouter,
                 ragRetriever, contextAssembler, new AppProperties(), eventPublisher,
-                sessionTitleService);
+                sessionTitleService, shortQueryExpander);
     }
 
     private ChatSession session() {
@@ -133,7 +142,8 @@ class ChatPreparationServiceTest {
         AppProperties props = new AppProperties();
         props.getSemanticCache().setEnabled(false);
         service = new ChatPreparationService(queryRewriter, semanticAnswerCache, intentRouter,
-                ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService);
+                ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService,
+                shortQueryExpander);
         givenCacheEligibleBaseline();
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
@@ -261,5 +271,71 @@ class ChatPreparationServiceTest {
         assertEquals("GENERAL", sent.getValue().ragMode(), "预判要如实留痕, 供与出口对照评估词表猜错率");
         assertTrue(sent.getValue().retrievalExecuted(), "GENERAL 轮次的检索同样已执行");
         assertEquals(0.2046, sent.getValue().semanticMaxScore(), 1e-9);
+    }
+
+    /**
+     * 短查询扩展成功的轮次必须"缓存不合格": 缓存条目跨用户共享,
+     * 用扩写词检索出的答案挂到原始短词键上, 后来者会拿到跑题内容。
+     */
+    @Test
+    void expandedQueryBarsSemanticCache() {
+        String expanded = "产品的定价和套餐有哪些规定";
+        when(queryRewriter.rewrite(anyString(), any(), anyString()))
+                .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
+        when(shortQueryExpander.expand(any(), anyString()))
+                .thenReturn(new ShortQueryExpander.ExpandResult(expanded, true));
+        when(intentRouter.route(anyString())).thenReturn(RagMode.KB);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(mock(org.springframework.ai.document.Document.class)),
+                        true, 2, 5, false, 0.72));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        ChatPreparationService.PreparedChat prep = service.prepare(session(), "产品");
+
+        assertTrue(prep.rag().chatOutcome() == ChatOutcome.ANSWERED_FROM_KB, "扩展后过阈值, 判有据作答");
+        assertFalse(prep.cacheEligible(), "扩展轮不得读写语义缓存");
+        verify(ragRetriever).retrieveOutcome(eq(expanded), anyInt(), anyDouble());
+        verify(semanticAnswerCache, never()).get(anyString());
+    }
+
+    /** 调试接口缺省口径必须与对话一致: 阈值/TopK 取配置值, 出口按同一判据算 */
+    @Test
+    void debugSearchFollowsChatDefaults() {
+        AppProperties props = new AppProperties();
+        service = new ChatPreparationService(queryRewriter, semanticAnswerCache, intentRouter,
+                ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService,
+                shortQueryExpander);
+        when(intentRouter.route(anyString())).thenReturn(RagMode.GENERAL);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 5, false, 0.4097));
+
+        ChatPreparationService.DebugSearch debug = service.debugSearch("产品", null, null, false);
+
+        assertEquals(props.getRag().getTopK(), debug.topK());
+        assertEquals(props.getRag().getSimilarityThreshold(), debug.threshold(), 1e-9,
+                "留空即跟随对话阈值, 不再暗置 0(不过滤)——那会造出第三种口径");
+        assertEquals(ChatOutcome.REFUSED_NO_EVIDENCE, debug.chatOutcome(),
+                "关键词有命中但向量未过阈值 → 对话会拒答, 页面须如实预测");
+        assertFalse(debug.expanded());
+        verify(shortQueryExpander, never()).expand(any(), anyString());
+    }
+
+    /** 工具轮: 页面照样检索(目的就是看召回), 但出口预测须与对话一致记 TOOL_DATA */
+    @Test
+    void debugSearchPredictsToolTurnAndReportsExpandedQuery() {
+        when(shortQueryExpander.expand(any(), anyString()))
+                .thenReturn(new ShortQueryExpander.ExpandResult("订单的物流状态是什么", true));
+        when(intentRouter.route("订单的物流状态是什么")).thenReturn(RagMode.TOOL);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 1, 3, false, 0.51));
+
+        ChatPreparationService.DebugSearch debug = service.debugSearch("订单", 5, 0.45, true);
+
+        assertTrue(debug.expanded());
+        assertEquals("订单的物流状态是什么", debug.retrievalQuery());
+        assertEquals(ChatOutcome.TOOL_DATA, debug.chatOutcome());
+        verify(ragRetriever).retrieveOutcome("订单的物流状态是什么", 5, 0.45);
     }
 }
