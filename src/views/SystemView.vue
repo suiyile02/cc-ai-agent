@@ -32,6 +32,21 @@ const filters = reactive({
   ragMode: '',
 })
 
+/**
+ * 出口 → 标签。P3-7 起 answerOutcome 才说明"这轮实际依据什么作答"；
+ * 旧的 ragMode 只是关键词表的事前预判，保留为灰色参考列。
+ */
+const OUTCOMES = {
+  ANSWERED_FROM_KB: { text: '知识库作答', type: 'success' },
+  ANSWERED_FROM_CACHE: { text: '缓存作答', type: 'success' },
+  REFUSED_NO_EVIDENCE: { text: '无据拒答', type: 'warn' },
+  ANSWERED_OPEN: { text: '自由作答', type: 'info' },
+  TOOL_DATA: { text: '工具数据', type: 'info' },
+}
+function outcomeTag(o) {
+  return o ? (OUTCOMES[o] || { text: o, type: 'neutral' }) : { text: '—', type: 'neutral' }
+}
+
 const list = ref([])
 const page = reactive({ num: 1, size: 10, total: 0, totalPages: 0 })
 const loading = ref(false)
@@ -232,13 +247,14 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
       <div v-else-if="activeTab === 'rag'" class="table-wrap">
         <table class="data">
           <thead>
-            <tr><th>ID</th><th>用户消息</th><th>意图</th><th>会话类型</th><th>执行检索</th><th>语义/关键词/最终命中</th><th>TopK / 阈值 / 语义最高分</th><th>重排</th><th>耗时</th><th>时间</th></tr>
+            <tr><th>ID</th><th>用户消息</th><th>出口</th><th>预判</th><th>会话类型</th><th>执行检索</th><th>语义/关键词/最终命中</th><th>TopK / 阈值 / 语义最高分</th><th>重排</th><th>耗时</th><th>时间</th></tr>
           </thead>
           <tbody>
             <tr v-for="r in list" :key="r.id" class="clickable" title="点击查看完整 JSON" @click="openDetail(r, `RAG 决策 #${r.id}`)">
               <td class="mono">{{ r.id }}</td>
               <td class="cell-truncate" :title="r.userMessage">{{ truncate(r.userMessage, 26) }}</td>
-              <td><StatusTag :type="r.ragMode === 'KB' ? 'success' : 'neutral'" :text="r.ragMode" /></td>
+              <td><StatusTag :type="outcomeTag(r.answerOutcome).type" :text="outcomeTag(r.answerOutcome).text" /></td>
+              <td class="mono" style="font-size: 11.5px; color: var(--fg-faint)">{{ r.ragMode || '—' }}</td>
               <td class="mono" style="font-size: 11.5px">{{ r.sessionType }}</td>
               <td><StatusTag :type="r.retrievalExecuted ? 'info' : 'neutral'" :text="r.retrievalExecuted ? '是' : '否'" :dot="false" /></td>
               <td class="mono">{{ r.semanticHits }} / {{ r.keywordHits }} / <strong style="color: var(--accent)">{{ r.finalHits }}</strong></td>
