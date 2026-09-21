@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -78,7 +79,7 @@ class RedisReadinessProbeTest {
         // 逐项降级说明必须齐全, 否则运维仍不知道失去了什么
         assertTrue(out.contains("登录限流"), out);
         assertTrue(out.contains("语义缓存"), out);
-        assertTrue(out.contains("意图路由缓存"), out);
+        assertFalse(out.contains("意图"), "意图路由结果缓存已随 P3-7 B 批下线, 不得再声称被降级: " + out);
         assertTrue(out.contains("会话缓存"), out);
         assertTrue(out.contains("令牌黑名单"), out);
     }
@@ -96,7 +97,6 @@ class RedisReadinessProbeTest {
     @Test
     void disabledCachesOmittedFromDegradedList() {
         appProperties.getSemanticCache().setEnabled(false);
-        appProperties.getIntentCache().setEnabled(false);
         when(redis.hasKey(anyString())).thenThrow(new IllegalStateException("down"));
 
         probe.run(null);

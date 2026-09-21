@@ -21,7 +21,6 @@ public class AppProperties {
     private Cors cors = new Cors();
     private LogRetention logRetention = new LogRetention();
     private SemanticCache semanticCache = new SemanticCache();
-    private IntentCache intentCache = new IntentCache();
     private Ingestion ingestion = new Ingestion();
     private Concurrency concurrency = new Concurrency();
     private SessionTitle sessionTitle = new SessionTitle();
@@ -292,21 +291,6 @@ public class AppProperties {
         private int ttlHours = 1;
         /** 负缓存有效期(分钟): 检索零命中的问题短时间视为无答案, 防穿透反复打检索+模型 */
         private int missTtlMinutes = 30;
-    }
-
-    /** 意图路由结果缓存(app.intent-cache.*)：问题 → 路由结果(TOOL/KB/GENERAL) 的短 TTL 缓存 */
-    @Data
-    public static class IntentCache {
-        /** 是否启用 */
-        private boolean enabled = true;
-        /**
-         * 缓存有效期(分钟, 默认 60)。
-         *
-         * <p>时效性设计: 路由结果是"这个说法属于哪类", 本身宽松可容忍短时陈旧——
-         * TTL 负责让旧词表结果自然过期; 修改路由词表(关键字/同义词)后可调
-         * {@code DELETE /api/system/intent-cache}(管理员)按版本号立即失效, 不必等 TTL。
-         */
-        private int ttlMinutes = 60;
     }
 
     /** 文档解析防护(app.ingestion.*)：解析超时与解压炸弹预检(A2) */

@@ -46,11 +46,10 @@ public class RedisReadinessProbe implements ApplicationRunner {
                     failure, String.join("; ", degradedCapabilities()));
             return;
         }
-        log.info("Redis 自检通过: 登录限流后端={}, 语义缓存={}, 意图缓存={}, 会话缓存=启用, "
+        log.info("Redis 自检通过: 登录限流后端={}, 语义缓存={}, 会话缓存=启用, "
                         + "令牌黑名单降级口径={}",
                 environment.getProperty("app.auth.rate-limit-backend", "redis"),
                 appProperties.getSemanticCache().isEnabled() ? "启用" : "关闭",
-                appProperties.getIntentCache().isEnabled() ? "启用" : "关闭",
                 appProperties.getAuth().isBlacklistFailOpen() ? "放行(仅开发可接受)" : "拒绝(生产基线)");
     }
 
@@ -78,9 +77,6 @@ public class RedisReadinessProbe implements ApplicationRunner {
         list.add("登录限流→按未锁定放行(爆破防护暂缺)");
         if (appProperties.getSemanticCache().isEnabled()) {
             list.add("语义缓存→按未命中处理(每轮都走检索+模型)");
-        }
-        if (appProperties.getIntentCache().isEnabled()) {
-            list.add("意图路由缓存→按未命中走真实路由");
         }
         list.add("会话缓存→回退 MySQL 查询");
         list.add("令牌黑名单→" + (appProperties.getAuth().isBlacklistFailOpen()

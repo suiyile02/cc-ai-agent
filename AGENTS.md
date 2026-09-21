@@ -203,12 +203,13 @@ com.ai
     `rag_mode` 诊断标签。上传新文档**不再需要同步改词表**(这是 P3-7 的主要收益)。
   - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味): 出口记 `TOOL_DATA`, 收尾按出口
     与 `toolCalls` 双重排除写缓存。
-  - ⚠ **意图路由结果缓存**(`CachingIntentRouter` @Primary 装饰器): P3-7 A 批后它缓存的判定只剩
-    "是否工具轮"这一项成本短路, 价值已大幅降低, **列入 roadmap P3-7 B 批下线**; 以下是其现存机制:
-    问题→路由结果缓存 Redis
-    (`rag:intent:v{version}:{sha256}`, TTL 默认 60 分钟)。一致性/时效性: ① TTL 兜底旧词表结果自然过期;
-    ② 改路由词表后调 `DELETE /api/system/intent-cache`(@RequireAdmin)版本自增立即失效;
-    ③ Redis 异常一律按未命中处理走真实路由, 绝不影响对话。
+  - **意图路由结果缓存已删除**(P3-7 B 批): 旧 `CachingIntentRouter`(@Primary 装饰器)把"问题→路由结果"
+    缓存进 Redis(`rag:intent:v{version}:{sha256}`, TTL 60 分钟, 另有 `IntentCacheAdmin` +
+    `DELETE /api/system/intent-cache` 版本自增失效)。**删除理由**: 它缓存的判定在 A 批后只剩"是否工具轮",
+    而底层是对 69 个人工关键词(内部词表 58 + 工具词表 11, 见 `AppProperties.Rag`)做内存 `contains` 扫描(微秒级、确定性), 每次判定反而多付两次 Redis 往返;
+    并且它有一致性隐患——版本号跨重启存活, 改词表而忘记调失效接口时旧结论会在 TTL 内继续生效。
+    **不要再为路由结果加缓存**: 判据已换成检索分数, 缓存预判既无收益也会让审计里的"预判 vs 出口"对照失真。
+     Redis 不可用时的降级口径从此少一项(见"Redis 使用与降级约定")。
   - 演进规划: 后续可在规则引擎之上叠加"意图检索"(embedding 语义召回, 替代纯关键词泛化)与
     "LLM Judge 纠偏"(低置信二次确认), 见 `docs/optimization-roadmap.md` 路由分层方案。
 
@@ -243,10 +244,11 @@ com.ai
 
 ### Redis 使用与降级约定(强制)
 
-- **现有 5 个使用点**(全部经 `StringRedisTemplate` 直连, 项目**不用** Spring Cache 抽象/spring-session):
+- **现有 4 个使用点**(全部经 `StringRedisTemplate` 直连, 项目**不用** Spring Cache 抽象/spring-session):
   `RedisLoginAttemptLimiter`(`login:fail:*`/`login:lock:*`) · `SessionCacheService`(`session:meta:*`/`session:absent:*`)
-  · `SemanticAnswerCache`(`rag:answer:*`/`rag:miss:*`/`rag:kb:version`) · `CachingIntentRouter`(`rag:intent:*`)
+  · `SemanticAnswerCache`(`rag:answer:*`/`rag:miss:*`/`rag:kb:version`)
   · `TokenBlacklistService`(`jwt:black:*`)。键前缀必须沿用, 便于运维 grep 与按前缀清理。
+  (第 5 项 `CachingIntentRouter`/`rag:intent:*` 已随 P3-7 B 批删除, 见上一节。)
 - **读写两侧都必须自行 catch 并降级, 绝不允许 Redis 故障冒成业务 500**(`RedisConnectionFailureException`
   是 `DataAccessException`, 一旦漏出就被 `GlobalExceptionHandler` 兜底成 5001/HTTP 500——登录限流读侧
   曾犯此错, 有真实探针证据)。新增 Redis 使用点时必须同时覆盖读路径与写路径。
@@ -485,7 +487,7 @@ com.ai
 - **清理:** `mvn clean`
 - **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动
   (默认 `localhost:6379`, 可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖)——登录限流、会话缓存、
-  语义缓存、意图缓存、令牌黑名单都用它; 不可用时各侧按上述降级口径放行, 不影响登录与对话。
+  语义缓存、令牌黑名单都用它; 不可用时各侧按上述降级口径放行, 不影响登录与对话。
 - **建表:** 由启动期 `spring.sql.init` 自动执行(db/ 下脚本)。
 - **测试后必须停后端:** 每次运行/验证结束立即停止后端进程并确认 9090 端口已释放——
   Git Bash 的 `kill` 常杀不死 Windows 进程, 需用

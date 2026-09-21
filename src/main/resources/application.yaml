@@ -126,14 +126,11 @@ app:
     seed-enabled: true                        # 生产 profile 已关闭(不创建任何账号)
     # 仅播种时使用的演示口令; 生产请保持 seed-enabled=false, 或经 DEMO_ADMIN_PASSWORD 注入
     admin-password: ${DEMO_ADMIN_PASSWORD:admin123}
-  # ============ 语义缓存(P3-3): 相同 KB 问题的回答缓存, 命中跳过检索+模型调用 ============
+  # ============ 语义缓存(P3-3): 相同 KB 问题的回答缓存, 命中跳过上下文装配与模型调用(检索已先行) ============
   semantic-cache:
     enabled: true
     ttl-hours: 24            # 正缓存有效期 24h; 知识库文档变更会立即全部失效
-    miss-ttl-minutes: 30     # 负缓存(穿透防护): 检索零命中的问题 30 分钟内直接返回"未找到", 不再打检索+模型
-  intent-cache:
-    enabled: true
-    ttl-minutes: 60          # 意图路由结果缓存(问题→TOOL/KB/GENERAL); 改路由词表后可 DELETE /api/system/intent-cache 立即失效
+    miss-ttl-minutes: 30     # 负缓存(穿透防护): 无据可依的问题 30 分钟内直接返回固定拒答, 不再打模型
   # ============ 并发防护(B3): 单用户并发对话上限 ============
   concurrency:
     max-concurrent-per-user: 3    # 超并发返回 429/6010

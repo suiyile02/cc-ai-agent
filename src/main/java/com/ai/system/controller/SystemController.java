@@ -7,7 +7,6 @@ import com.ai.system.service.ToolCallLogService;
 import com.ai.common.DateParamUtils;
 import com.ai.common.PageResult;
 import com.ai.common.Result;
-import com.ai.rag.IntentCacheAdmin;
 import com.ai.rag.SemanticCacheAdmin;
 import com.ai.system.dto.ChatLogVO;
 import com.ai.system.dto.ContextLogVO;
@@ -24,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 系统管理接口(需求第 6 章)：对话日志 / 工具调用日志 / RAG 决策日志查询,
- * 以及语义缓存、意图路由缓存的运维清空(仅供管理员)。
+ * 以及语义缓存的运维清空(仅供管理员)。
  */
 @RestController
 @RequestMapping("/api/system")
@@ -36,7 +35,6 @@ public class SystemController {
     private final RagDecisionLogService ragDecisionLogService;
     private final ContextLogService contextLogService;
     private final SemanticCacheAdmin semanticCacheAdmin;
-    private final IntentCacheAdmin intentCacheAdmin;
 
     /**
      * 对话日志分页查询(6.1)。
@@ -153,17 +151,5 @@ public class SystemController {
     @RequireAdmin
     public Result<Long> clearSemanticCache() {
         return Result.ok(semanticCacheAdmin.evictAll());
-    }
-
-    /**
-     * 清空意图路由缓存(管理员)。路由结果默认 TTL 60 分钟自然过期; 修改路由词表
-     * (关键字/同义词)后调用此接口, 按版本号立即失效, 无需等 TTL。
-     *
-     * @return 统一响应, data 为失效后的路由版本号(-1 表示 Redis 不可用)
-     */
-    @DeleteMapping("/intent-cache")
-    @RequireAdmin
-    public Result<Long> clearIntentCache() {
-        return Result.ok(intentCacheAdmin.evictAll());
     }
 }

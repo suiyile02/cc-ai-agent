@@ -131,8 +131,10 @@
 
 ### P3-7 意图预判下线与四出口改造（触发条件：P3-6 完成定标 且 `kb-only` 成为默认）
 
-> **进度(2026-09-21)：A 批已实施**(出口层/检索先行/缓存准入迁移/审计 answer_outcome + 迁移脚本/`kb-only` 转默认);
-> B 批(意图路由缓存下线等纯删除项)**未做**; 统计型验收(无关类误答率、库内漏答率)仍待 P3-6 真实语料。
+> **进度(2026-09-22)：A 批 + B 批已实施**。A 批=出口层/检索先行/缓存准入迁移/审计 answer_outcome + 迁移脚本/`kb-only`
+> 转默认；B 批=意图路由结果缓存整体下线(删 `CachingIntentRouter`/`IntentCacheAdmin`/
+> `DELETE /api/system/intent-cache`/`AppProperties.IntentCache`/`app.intent-cache.*` yaml 段/探针降级清单条目,
+> Redis 使用点由 5 项减为 4 项)。**剩余**：统计型验收(无关类误答率、库内漏答率)仍待 P3-6 真实语料。
 > 实测已证: 全新主题文档**零配置改动**即可被问到(出口 ANSWERED_FROM_KB, 阈值前分 0.641);
 > 天气题 BM25 填满 5 段仍正确判 REFUSED_NO_EVIDENCE(分 0.271); 工具轮判 TOOL_DATA 未被误拒。
 
@@ -155,7 +157,7 @@
 - **连带改动(缺一不可，否则会出现静默错误)**：
   ① 语义缓存准入从 `route()==KB` 迁到"向量路过阈值"，否则闲聊回答被写入跨用户共享缓存；
   ② `CachingIntentRouter` 与 `IntentCacheAdmin`/`DELETE /api/system/intent-cache` 下线(它缓存的预判已不存在；
-     本次评估已判定其在规则引擎时代为负收益)；
+     **✅ 已于 2026-09-22 B 批完成**——连同 `AppProperties.IntentCache`、`app.intent-cache.*`、探针降级清单条目与单测一并删除)；
   ③ `rag_decision_log.rag_mode` 语义迁移：由"事前猜测的类别"改为"事后记录的出口"，建议取值
      `ANSWERED_FROM_KB`/`REFUSED_NO_EVIDENCE`/`ANSWERED_OPEN`/`PARTIAL`；不改列名但必须改注释与 `/api/system/rag-decisions` 说明，
      否则审计口径静默漂移(现有不变式"KB + retrieval_executed=false ⟺ 缓存命中"要同步重述)；
@@ -223,6 +225,43 @@
 
 注: 修复 @EnableScheduling 引入的 Executor 装配歧义(WebAuthConfig 显式 @Qualifier("taskScheduler"))。
 
+
+---
+
+## 已完成记录（2026-09-22, P3-7 B 批: 意图路由结果缓存整体下线)
+
+**问题**: A 批把"该不该检索/依据什么作答"交给检索结果后, `CachingIntentRouter` 缓存的预判只剩
+"是否工具轮"一项成本短路; 而被装饰的 `KeywordIntentRouter` 是对 69 个人工关键词做内存 `contains`
+扫描(微秒级、确定性、词表运行期不变)。缓存它 = 每次判定多付两次 Redis 往返(版本号 GET + 结果 GET),
+**净负收益**; 且版本号键跨重启存活, 改词表忘记调失效接口时旧结论会在 TTL 内继续生效(静默)。
+
+**变更**: 全部删除, 不留兼容层。
+
+| 位置 | 旧 | 新 | 性质 |
+|---|---|---|---|
+| `rag/service/CachingIntentRouter.java` | @Primary 装饰器 | 不存在 | 删除 |
+| `rag/IntentCacheAdmin.java` | 跨模块清空契约 | 不存在 | 删除 |
+| `SystemController.clearIntentCache` | `DELETE /api/system/intent-cache`(@RequireAdmin) | 端点移除, 字段/import 一并删 | 删除 |
+| `AppProperties.IntentCache` + 字段 | `app.intent-cache.{enabled,ttl-minutes}` | 不存在 | 删除 |
+| `application.yaml` | `intent-cache:` 三行块 | 不存在 | 删除 |
+| `RedisReadinessProbe` | 自检日志含"意图缓存=", 降级清单含一项 | 两处移除 | 收敛 |
+| `rag/IntentRouter.java`/`KeywordIntentRouter.java` | javadoc 称 GENERAL"跳过检索" | 改为"KB/GENERAL 一律检索, 只剩 TOOL 影响链路" | 纠正(A 批遗漏) |
+| `ChatPreparationService.resolveRagContext` | 形参 `boolean toolTurn`, 检索轮硬记 `RagMode.KB` | 形参 `RagMode route`, 审计 `rag_mode` 如实记录预判 | 恢复可观测性 |
+| `ChatPreparationService.publishDecision` | `retrievalExecuted = rag.mode()==KB && executed` | `retrievalExecuted = outcome.executed()` | **修 A 批遗漏 bug** |
+| `CachingIntentRouterTest` | 6 例 | 不存在 | 删除 |
+
+**运行时发现的 A 批遗漏(本次实测才暴露)**: 闲聊轮(预判 GENERAL)实际执行了检索、日志里 `semantic_max_score=0.2046`
+且 `final_hits=5`, 但 `retrieval_executed=false` —— 预判时代遗留的 `rag_mode==KB && executed` 取与把
+"真跑过的检索"记成"没跑"。单测此前只断言了 `semanticMaxScore`, 没断言该列, 故漏网; 现补
+`generalRouteStillRecordsRetrievalAsExecuted` 钉住。
+
+**为何保留 `rag_mode` 预判留痕**: 前端决策日志的"预判"列与"出口"列并排, 是用来量化词表猜错率的
+(P3-6/P3-7 验收数据)。若 `rag_mode` 恒为 KB, 这列即失效——故 B 批顺手把 A 批遗留的硬编码改回真实预判。
+
+**验证**: 全量单测 **232/232**(删 6 例)、`LayeredArchitectureTest` 11 条规则通过; 运行时确认路由不再读写
+`rag:intent:*`(存量键无人读取, TTL 内自然过期), 工具轮仍判 `TOOL_DATA`, 闲聊轮仍判 `REFUSED_NO_EVIDENCE`。
+Redis 使用点由 5 项减为 4 项, 已同步 `AGENTS.md`、`README.md`、`docs/flow-map.md`(架构图/端点表/键空间/降级总表)、
+`docs/method-map.md`(§3/§5/§7)。
 
 ---
 

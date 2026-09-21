@@ -20,7 +20,7 @@
 
 ## 2. 快速开始（依赖 MySQL + Qdrant + Redis）
 
-前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）、Redis（**compose 未纳管，需自行启动**，默认 `localhost:6379`，可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖；用于登录限流/会话缓存/语义缓存/意图缓存/令牌黑名单，全部为"异常即降级"设计，不起也能跑通登录与对话，只是失去缓存与限流）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
+前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）、Redis（**compose 未纳管，需自行启动**，默认 `localhost:6379`，可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖；用于登录限流/会话缓存/语义缓存/令牌黑名单，全部为"异常即降级"设计，不起也能跑通登录与对话，只是失去缓存与限流）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
 
 **仓库内不含任何口令/密钥默认值**（历史上放过 `123456` 与一个默认 JWT 密钥，均已移除）。本地启动前先准备环境变量：
 
@@ -161,7 +161,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ### 3.6 异常与降级（需求第 8 章）
 - `GlobalExceptionHandler` + `ErrorCode`（1001~5004）统一错误，业务错误返回语义化 HTTP 状态（参数 400 / 未找到 404 / 冲突 409 / 认证 401 / 无权 403 / 上游模型失败 502 / 不可用 503）；模型调用失败不向前端透传内部异常细节；
 - 降级策略：模型不可用 → `AI_NOT_CONFIGURED` 友好提示；向量库不可用 → RAG 自动降级为不注入上下文继续对话；入库失败 → 仅标记 `status=3`，不影响在线对话；删除失败 → 记录日志继续。
-- **Redis 不可用 → 一律降级，绝不影响可用性**：登录限流读写两侧捕获异常按"未锁定"放行（否则基础设施故障会变成登录接口 500/5001）、会话缓存回退 MySQL、语义/意图缓存按未命中、令牌黑名单按 `app.auth.blacklist-fail-open`（**生产基线为 false=拒绝**，由启动校验强制）。降级日志统一 WARN 且按 60 秒节流（`WarnThrottle`），启动时 `RedisReadinessProbe` 输出一条"当前处于降级态的能力清单"。口径与理由见 `AGENTS.md`「Redis 使用与降级约定」。
+- **Redis 不可用 → 一律降级，绝不影响可用性**：登录限流读写两侧捕获异常按"未锁定"放行（否则基础设施故障会变成登录接口 500/5001）、会话缓存回退 MySQL、语义缓存按未命中、令牌黑名单按 `app.auth.blacklist-fail-open`（**生产基线为 false=拒绝**，由启动校验强制）。降级日志统一 WARN 且按 60 秒节流（`WarnThrottle`），启动时 `RedisReadinessProbe` 输出一条"当前处于降级态的能力清单"。口径与理由见 `AGENTS.md`「Redis 使用与降级约定」。
 
 ## 4. 快速验证示例（curl）
 

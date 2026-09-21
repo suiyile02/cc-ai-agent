@@ -110,9 +110,12 @@ public class ChatPreparationService {
         // ① 检索先行: 出口只能由检索事实算出。词表不再预判"要不要检索"(GENERAL 也查)——
         //    这是 P3-7 的核心: 知识库内容能否被问到, 不再取决于有没有人记得改一份与文档无关的配置。
         //    意图判定每轮只做一次(旧实现在缓存准入与路由两处各做一遍)。
-        boolean toolTurn = intentRouter.route(retrievalQuery) == RagMode.TOOL;
+        //    预判结果仍随决策日志留痕(rag_mode 列), 用于对照"词表预判 vs 实际出口"的偏差——
+        //    这是 P3-6/P3-7 验收要看的数据, 不要因为"它不再决定链路"就把它写成常量。
+        RagMode route = intentRouter.route(retrievalQuery);
+        boolean toolTurn = route == RagMode.TOOL;
         long retrieveStart = System.currentTimeMillis();
-        RagContext rag = resolveRagContext(session, retrievalQuery, toolTurn);
+        RagContext rag = resolveRagContext(session, retrievalQuery, route);
         long retrieveMs = System.currentTimeMillis() - retrieveStart;
         ChatOutcome outcome = rag.chatOutcome();
 
@@ -189,11 +192,11 @@ public class ChatPreparationService {
      *
      * @param session     会话
      * @param userMessage 检索问题
-     * @param toolTurn    意图路由是否命中工具词表(仅作成本短路, 不是作答判据)
+     * @param route       意图路由预判(只有 TOOL 影响链路, KB/GENERAL 作为审计留痕)
      * @return RAG 上下文快照(含出口)
      */
-    private RagContext resolveRagContext(ChatSession session, String userMessage, boolean toolTurn) {
-        if (toolTurn) {
+    private RagContext resolveRagContext(ChatSession session, String userMessage, RagMode route) {
+        if (route == RagMode.TOOL) {
             // 工具类问题(查订单/物流)答案在业务库, 知识库检索必然查不到反而挤占上下文预算——
             // 跳过它是省一次 embedding, 不是判据; 出口记 TOOL_DATA, 严格模式下照样允许调工具
             log.debug("工具类问题, 跳过知识库检索(交给模型调工具): {}", userMessage);
@@ -210,7 +213,7 @@ public class ChatPreparationService {
                 appProperties.getRag().getSimilarityThreshold());
         ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, false,
                 appProperties.getChat().isKbOnly(), appProperties.getRag().getSimilarityThreshold());
-        return new RagContext(outcome.hits(), RagMode.KB, outcome, chatOutcome);
+        return new RagContext(outcome.hits(), route, outcome, chatOutcome);
     }
 
     /**
@@ -233,7 +236,9 @@ public class ChatPreparationService {
                 session.getSessionId(), session.getUserId(),
                 Strings.truncate(userMessage, 500),
                 rag.mode().name(), rag.chatOutcome().name(), session.getSessionType().name(),
-                rag.mode() == RagMode.KB && outcome.executed(),
+                // 是否执行检索 = 检索事实本身, 不能再与预判模式取与:
+                // P3-7 起 GENERAL 也检索, 沿用"KB && executed"会把真实执行过的检索记成"未执行"
+                outcome.executed(),
                 outcome.semanticCount(), outcome.keywordCount(), rag.hits().size(),
                 appProperties.getRag().getTopK(), appProperties.getRag().getSimilarityThreshold(),
                 // 未执行检索(工具轮/AGENT 会话)时必须记 null, 不能记 0.0——
