@@ -25,12 +25,14 @@ com.ai
 ├── aspect        全局切面层: 跨模块 AOP 统一管理(SelfOrAdminAspect 授权 · ToolCallLogAspect 工具日志)
 ├── config        全局配置层: AppProperties · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
 ├── prompt        提示词模板装配(PromptService, classpath:/prompts/*.st)
-├── rag           RAG 能力模块: 模块根=对外契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome/SourceVO)
+├── rag           RAG 能力模块: 模块根=对外契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome/
+│                 ChatOutcome/OutcomeResolver 契约面/SourceVO)
 │   └── service   实现: 编排 RagRetrievalService + 协作类(HybridRecaller/RrfFuser/RetrievalCandidate/
-│                 RerankStrategy×3+工厂/RagContextRenderer/DocumentMeta) · KeywordIndex · 两类缓存
+│                 RerankStrategy×3+工厂/RagContextRenderer/DocumentMeta) · KeywordIndex · 语义缓存
 ├── context       上下文管线模块: 模块根=契约(ConversationMemory/HistoryContext/AssembledPrompt/ContextComposition)
 │   ├── entity    ConversationSummary      ├── mapper  ConversationSummaryMapper
-│   └── service   ContextAssembler/ConversationMemoryService/ConversationSummarizer/QueryRewriter
+│   └── service   ContextAssembler/ConversationMemoryService/ConversationSummarizer/QueryRewriter/
+│                 ShortQueryExpander
 ├── chat          对话模块: controller/ChatController · service/ChatService · event/审计事件(值对象) · dto
 ├── knowledge     知识库模块: controller/service/entity/mapper/dto
 ├── user          用户鉴权模块: controller/service/entity/mapper/dto
@@ -146,7 +148,7 @@ com.ai
       (现有契约: `RagRetriever`←实现 `RagRetrievalService`、`IntentRouter`←实现 `KeywordIntentRouter`、
       `ConversationMemory`←实现 `ConversationMemoryService`、`SemanticCacheAdmin`←实现 `SemanticAnswerCache`)；仅模块内部使用的服务可直接用实现类，不做多余抽象。
     - **对话管线分工:** `chat/service/ChatService` 只做门面(会话校验/并发名额/请求链构建/同步与 SSE 输出编排)；
-      前置阶段(改写→缓存查询→路由检索→装配)统一在 `ChatPreparationService`，收尾阶段(记忆→摘要→审计→
+      前置阶段(标题→改写→短查询扩展→检索→出口判定→缓存查询→审计→装配)统一在 `ChatPreparationService`，收尾阶段(记忆→摘要→审计→
       缓存写入→来源落库)统一在 `ChatCompletionService`，来源文档名提取与"未找到"判定在 `ChatSourceDisplay`。
       **同步与流式必须共用同一份前置/收尾实现, 禁止在任一条管线里复制业务步骤。**
 
@@ -169,8 +171,14 @@ com.ai
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
 - **上传入口校验顺序(禁止跳过)**: 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
-- 检索链路: **一律检索**(RAG/HYBRID 会话, 工具轮除外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`)
+- 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
+  -> **一律检索**(RAG/HYBRID 会话, 工具轮除外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`)
   -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门, 详见 P3-7。
+- **三种分数只有一个能判相关性**(强制口径): `SourceVO.semanticScore`=语义路**原始余弦分**(出口判据用的就是它);
+  `SourceVO.keywordScore`=BM25 原始分; `SourceVO.score`=重排后的**融合分(相对名次)**。
+  融合分在"仅词面命中"时取 `kw/maxKw`, **榜首恒等于 1.0**, 与相关性无关——禁止拿它判断"是否匹配"或写进定标数据。
+  它由 `RetrievalCandidate.toDocument` 把两路原始分留进 metadata(`semantic_score`/`keyword_score`)后透出,
+  读取口径统一在 `DocumentMeta.semanticScore`(纯语义路直出未融合时 score 本身就是余弦分)。
 - **检索整段受 `app.rag.retrieve-timeout-ms`(默认 10s)保护**: 嵌入与向量库是外部网络调用,
   端点挂起会把对话拖住(实测单轮检索卡过 100s)。超时/异常降级为 `RetrievalOutcome.executedEmpty()`
   ——记为 **已执行、零命中**, 而不是 `none()`(未执行); 出口判定据此给 `ANSWERED_OPEN` 而非拒答,
@@ -180,7 +188,10 @@ com.ai
   `answer_outcome=ANSWERED_FROM_CACHE` 标识。仍然成立的约定: 缓存命中路径不产生 `context_log`(未装配上下文)。
 - **相似度阈值勿随意上调**: `similarity-threshold` 默认 0.45——实测该 embedding 模型分数量级偏低
   (正确 chunk 可能只有 0.5~0.6), 阈值 0.6 会误杀正确答案(案例: "加班调休"0.565 被过滤导致答非所问)。
-  调整前必须用 `/api/ai/rag/search` 以低阈值观察真实分数分布。
+  调整前必须用 `/api/ai/rag/search` 观察真实分数分布——该接口现在**走与对话同一条链路**
+  (短查询扩展 → 检索 → 出口判定), 参数留空即跟随对话配置, 响应直接给出"这轮交给对话会判哪个出口"
+  (`RagDebugVO.answerOutcome`), 不再出现"调试页查得到、对话判无据"的口径分叉。
+  实测短查询的量级差异很大: 裸词"产品"余弦 0.4097(不过阈值), 补全成"产品的定价和套餐有哪些？"得 0.7014。
   **但该值至今没有分布依据(只是踩了一例反例后定的), 且现有实测语料仅 16 点/约 5KB 不可外推**——
   定标计划见 `docs/optimization-roadmap.md` P3-6; 在它完成前, 禁止把任何"答/拒"判据建在这个阈值上。
 - **语义路阈值必须本地过滤, 不得下发向量库**(强制): 下发时低于阈值的分块永不返回, 日志里能看到的分数
@@ -287,7 +298,7 @@ com.ai
 - 运维清空: `DELETE /api/system/semantic-cache`(`@RequireAdmin`)→ 返回失效后的版本号。
   契约 `SemanticCacheAdmin`, 实现在 `SemanticAnswerCache`。
 
-### 多轮查询改写
+### 查询改写与短查询扩展
 
 - 改写基于 Spring AI 内置 `CompressionQueryTransformer`(spring-ai-rag 模块, 包名
   `org.springframework.ai.rag.preretrieval.query.transformation`), 把"最近 6 条历史 + 当前追问"
@@ -298,6 +309,18 @@ com.ai
 - 改写同步执行于提问路径, 受多重保护: 超时(`query-rewrite.timeout-ms`, 默认 30000)、
   **熔断**(连续失败≥2 次进入 60s 冷却, 冷却期内零等待回退原问题, 成功即复位)、结果等同原问题视为未改写。
 - 每次调用记录实际耗时(成功 INFO / 失败 WARN), 禁止删除——这是端点延迟标定的数据来源。
+- **短查询扩展(`ShortQueryExpander`, 改写之后、路由之前执行)**: 去空白后长度 <
+  `app.context.short-query.min-chars`(默认 6)的提问, 用一次带超时的模型调用补全成完整检索句
+  (超时/失败/空结果/与原句相同一律回退并 WARN 节流, 绝不影响对话)。
+  存在的理由是实测的分数断层: 裸词"产品"余弦 0.4097 判无据, 同一分块用完整句问得 0.52~0.70。
+  - 提示词必须**补出该词最可能指向的 2~3 个具体方面**, 不能只把句子补完整——
+    实测"产品是什么？"这种空泛补全反而降到 0.3503, 比不扩展更差(`prompts/short-query-expand.st` 已按此约束写)。
+  - AGENT 会话不扩展(靠工具作答); 扩展调用同样注入 `enable_thinking=false`。
+  - **扩展成功 = 该轮"已改写"**: `ChatPreparationService` 把 `RewriteResult.rewritten` 置 true,
+    语义缓存的读写据此全部排除。理由与工具轮禁写缓存同源——缓存条目跨用户共享,
+    拿扩写词检索出的答案挂到原始短词键("产品")上, 后来者会拿到按别的意图扩出来的内容。
+  - 决策日志的 `user_message` 仍记用户原话, 扩展后的问题只进检索与调试响应
+    (`RagDebugVO.retrievalQuery` + `expanded` 标记), 便于排查时区分两者。
 
 ### Spring AI 内置组件采用策略(2026-09 评审结论)
 
@@ -306,7 +329,7 @@ com.ai
   TikaDocumentReader+TokenTextSplitter(文档 ETL)·ChatClient/@Tool(基础装配)。
 - **保持自研(无内置或自研更强)**:滚动摘要(无内置组件)·Token 预算四段装配(ContextAssembler,
   augmenter 模板做不了程序化截断)·混合检索 RRF+融合重排(2.0 的 postretrieval 仅有接口无实现)·
-  意图路由(无内置)。
+  意图路由(无内置)·短查询扩展(内置 `MultiQueryExpander` 要 N 次检索且不改"空泛补全反而降分"这个问题)。
 - **可选路径(未迁移, 结论备查)**:
   - 官方 `spring-ai-starter-model-chat-memory-repository-jdbc`:SPI 与自研 DbChatMemoryRepository 同构
     (findConversationIds/findByConversationId/saveAll/deleteByConversationId), 支持 MySQL 方言与
@@ -390,7 +413,7 @@ com.ai
 
 ### Spring AI & RAG 提示词
 
-- System 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system/kb-only-system)。
+- 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system/kb-only-system，另有非 system 用途的 short-query-expand.st 短查询补全模板)。
 - 注入上下文前必须经重排或相似度阈值过滤。
 - **提示词选择矩阵**(`PromptService.systemFor`, 唯一选择点——同步与流式共用)：
 
@@ -458,14 +481,16 @@ com.ai
   `docs/optimization-roadmap.md`——含每项的现状实证、方案、验收标准与触发条件；
   实施前先读该文档, 完成后在"已完成记录"补行。
 - P0/P1/P2 与 2026-09-15 那批 P3 已全部落地, 明细与验收证据见 `docs/optimization-roadmap.md` 已完成记录。
-  **但 2026-09-21 新增的 `P3-6~P3-9` 是「待评估」项(阈值定标 / 预判下线与四出口 / 联网搜索工具 / 入库去重), 尚未实施**——
+  **但 `P3-6`(阈值定标)、`P3-8`(联网搜索)、`P3-9`(入库去重)、`P3-10`(融合重量纲与向量点缺 doc_id)仍是「待评估」项, 尚未实施**——
+  `P3-7`(预判下线 + 出口判定 + 意图缓存下线)与"检索口径统一 + 短查询扩展"已于 2026-09-22 落地。
   不要把"已全部落地"理解成 P3 目录已清空。
   关键架构变化: 登录限流契约化(`LoginAttemptLimiter` 接口, Redis 实现默认/memory 可回退,
   `app.auth.rate-limit-backend` 切换); 会话查询走 Redis 缓存(`SessionCacheService`, 异常降级 DB);
   记忆写回 append-only(`ChatMemoryAppender`, 严禁回退"全删全插"); KeywordIndex 用读写锁(avgLen 增量);
   Token 用量已采集落 chat_log.total_tokens; 上传有魔数校验; 工具日志脱敏; 日志按保留期定时清理;
-  语义缓存已实施(`SemanticAnswerCache`: 仅缓存未改写的 KB 命中回答, 知识库文档变更即版本失效,
-  命中跳过检索+模型调用; 知识库上传/删除/重处理代码必须调用 `semanticAnswerCache.evictAll()`)。
+  语义缓存已实施(`SemanticAnswerCache`: 仅缓存未改写/未扩展且出口为"知识库作答"的回答,
+  知识库文档变更即版本失效; P3-7 起命中只跳过装配与模型调用, 检索已先行; 知识库上传/删除/重处理
+  代码必须调用 `semanticAnswerCache.evictAll()`)。
 
 ## 测试策略
 

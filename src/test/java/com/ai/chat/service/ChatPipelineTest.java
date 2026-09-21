@@ -113,7 +113,7 @@ class ChatPipelineTest {
                 new ChatPreparationService.RagContext(
                         List.of(new Document("调休相关内容")), RagMode.KB, RetrievalOutcome.none(),
                         ChatOutcome.ANSWERED_FROM_KB),
-                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6)),
+                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6, 0.6, null)),
                 assembled, true, QUESTION, null, new AtomicInteger());
     }
 

@@ -128,7 +128,7 @@ class ChatCompletionServiceTest {
     void positiveHitsWritePositiveCache() {
         Document doc = Document.builder().text("调休相关内容").build();
         List<com.ai.rag.SourceVO> sources =
-                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6));
+                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6, 0.6, null));
         service.complete(session(), "用户问题",
                 prep(new RetrievalOutcome(List.of(doc), true, 1, 0, false, 0.0), sources),
                 "调休按 1:1 计算。", 10, 0L);
@@ -158,7 +158,7 @@ class ChatCompletionServiceTest {
     void toolCallTurnDoesNotWritePositiveCache() {
         Document doc = Document.builder().text("员工手册相关内容").build();
         List<com.ai.rag.SourceVO> sources =
-                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6));
+                List.of(new com.ai.rag.SourceVO("员工手册.md", 4L, 0, "片段", 0.6, 0.6, null));
         AtomicInteger toolCalls = new AtomicInteger(1);
 
         service.complete(session(), "用户问题",

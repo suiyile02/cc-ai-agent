@@ -138,7 +138,9 @@ public class RagRetrievalService implements RagRetriever {
         }
         return hits.stream()
                 .map(doc -> new SourceVO(DocumentMeta.fileName(doc), DocumentMeta.docId(doc),
-                        DocumentMeta.chunkIndex(doc), DocumentMeta.snippet(doc), DocumentMeta.similarity(doc)))
+                        DocumentMeta.chunkIndex(doc), DocumentMeta.snippet(doc),
+                        DocumentMeta.similarity(doc), DocumentMeta.semanticScore(doc),
+                        DocumentMeta.keywordScore(doc)))
                 .toList();
     }
 }

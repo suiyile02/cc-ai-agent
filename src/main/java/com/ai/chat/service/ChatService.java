@@ -3,8 +3,9 @@ package com.ai.chat.service;
 import com.ai.agent.BusinessTools;
 import com.ai.chat.dto.ChatResponse;
 import com.ai.chat.dto.ChatStreamEvent;
-import com.ai.rag.SourceVO;
+import com.ai.chat.dto.RagDebugVO;
 import com.ai.rag.RagRetriever;
+import com.ai.rag.RetrievalOutcome;
 import com.ai.chat.service.ChatPreparationService.PreparedChat;
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
@@ -16,7 +17,6 @@ import com.ai.session.SessionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -215,19 +215,25 @@ public class ChatService {
     }
 
     /**
-     * RAG 检索调试：直接返回命中的知识块(忽略意图路由, 用于调优 Top-K/阈值)。
+     * RAG 检索调试：走对话同一条链路(短查询扩展 → 混合检索 → 出口判定)并回显结果，
+     * 附带"这轮交给对话会判哪个出口"——调试页与对话不再有两套口径。
      *
      * @param question           查询问题
      * @param topK               Top-K(空则用配置默认)
-     * @param similarityThreshold 相似度阈值(空则用配置默认)
-     * @return 命中来源列表
+     * @param similarityThreshold 语义路余弦阈值(空则用 {@code app.rag.similarity-threshold}, 与对话一致)
+     * @param expandShort        是否允许短查询扩展
+     * @return 命中来源 + 各路计数 + 出口预测
      */
-    public List<SourceVO> debugRetrieve(String question, Integer topK, Double similarityThreshold) {
-        List<Document> hits = ragRetriever.retrieve(question,
-                topK == null ? appProperties.getRag().getTopK() : topK,
-                similarityThreshold == null ? appProperties.getRag().getSimilarityThreshold()
-                        : similarityThreshold);
-        return ragRetriever.toSources(hits);
+    public RagDebugVO debugRetrieve(String question, Integer topK, Double similarityThreshold,
+            boolean expandShort) {
+        ChatPreparationService.DebugSearch debug =
+                preparation.debugSearch(question, topK, similarityThreshold, expandShort);
+        RetrievalOutcome outcome = debug.outcome();
+        return new RagDebugVO(ragRetriever.toSources(outcome.hits()), debug.chatOutcome().name(),
+                debug.retrievalQuery(), debug.expanded(), outcome.executed(), outcome.degraded(),
+                debug.topK(), debug.threshold(), outcome.semanticCount(), outcome.keywordCount(),
+                outcome.executed() ? outcome.semanticMaxScore() : null, outcome.hits().size(),
+                appProperties.getChat().isKbOnly());
     }
 
     /**

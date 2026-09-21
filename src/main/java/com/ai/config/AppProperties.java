@@ -197,6 +197,8 @@ public class AppProperties {
         private Budget budget = new Budget();
         /** 多轮查询改写配置 */
         private QueryRewrite queryRewrite = new QueryRewrite();
+        /** 短查询扩展配置(补全成可检索的完整问题) */
+        private ShortQuery shortQuery = new ShortQuery();
         /** 历史滚动摘要配置 */
         private Summary summary = new Summary();
         /** 历史窗口配置 */
@@ -241,6 +243,30 @@ public class AppProperties {
                     "那", "它", "他", "她", "这个", "这些", "那些", "上面", "刚才",
                     "继续", "另外", "其中", "再", "也", "前面", "刚才说的", "该");
             /** 改写调用注入 enable_thinking=false(qwen3 类模型关闭思维链, 实测可大幅降低改写延迟) */
+            private boolean disableThinking = true;
+        }
+
+        /**
+         * 短查询扩展(app.context.short-query.*)：把"产品""报销"这类过短提问补全成可检索的完整问题。
+         *
+         * <p>存在的理由：embedding 对 2~4 字的裸词给出的余弦分显著偏低(实测"产品"0.410 vs
+         * 完整句"你们产品的定价和套餐分别是什么"0.720, 同一文档同一分块), 而出口判据要求向量路过阈值,
+         * 于是"库里明明有却答无据"。扩展只改检索用词, 不改用户原问题(对话与日志仍用原文)。
+         *
+         * <p><b>扩展成功的轮次等同"已改写"</b>：语义缓存的准入据此排除——缓存条目跨用户共享,
+         * 用扩写词检索出来的答案挂到原始短词键上会让后来者拿到跑题的回答。
+         */
+        @Data
+        public static class ShortQuery {
+            /** 扩展开关 */
+            private boolean enabled = true;
+            /** 触发阈值：问题去除空白后的字符数小于该值才扩展(默认 6, 即"产品""加班调休"这类) */
+            private int minChars = 6;
+            /** 扩展调用超时(ms), 超时/失败/结果空一律回退原问题 */
+            private long timeoutMs = 3000;
+            /** 扩展结果长度上限(模型啰嗦时截断, 避免把一整段解释喂给检索) */
+            private int maxChars = 60;
+            /** 扩展调用注入 enable_thinking=false(与改写同口径) */
             private boolean disableThinking = true;
         }
 

@@ -101,7 +101,7 @@ flowchart TD
 | 4 | `GET /api/auth/me` | JWT | `AuthController.me → AuthService.me` |
 | 5 | `POST /api/ai/chat` | JWT | `ChatController.chat → ChatService.chat` |
 | 6 | `POST /api/ai/chat/stream` | JWT | `ChatController.chatStream → ChatService.chatStream`（SSE） |
-| 7 | `POST /api/ai/rag/search` | JWT | `ChatController.ragSearch → ChatService.debugRetrieve` |
+| 7 | `POST /api/ai/rag/search` | JWT | `ChatController.ragSearch → ChatService.debugRetrieve → ChatPreparationService.debugSearch`（走对话同一条链：扩展→检索→出口判定，返回 `RagDebugVO`） |
 | 8 | `POST /api/knowledge/upload` | JWT（**无角色限制**，见 §22） | `KnowledgeController.upload → KnowledgeDocumentService.upload` |
 | 9 | `POST /api/knowledge/upload/batch` | JWT（同上） | `KnowledgeController.uploadBatch → uploadBatch` |
 | 10 | `GET /api/knowledge/documents` | JWT | `KnowledgeController.listDocuments → listDocuments` |
@@ -317,7 +317,11 @@ flowchart TD
     P2d -->|"超时/异常 ⚠ consecutiveFailures++"| P2b
     P2e --> P3
     P2b --> P3["retrievalQuery = 生效检索问题"]
-    P3 --> P3a["② 意图路由(每轮仅一次): route(retrievalQuery)<br/>**只用于判断是否工具轮**, 不再决定该不该检索"]
+    P3 --> P3r["①b ShortQueryExpander.expand(sessionType, retrievalQuery)<br/>去空白后 < short-query.min-chars(6) 才扩展；AGENT 会话跳过<br/>Timeouts.call(3s)；成功→ rewritten=true（排除语义缓存）"]
+    P3r -->|失败/超时/空/等同原句| P3a
+    P3r -->|扩展成功| P3q["retrievalQuery = 扩展后的完整问题<br/>（用户原话仍用于对话与日志）"]
+    P3q --> P3a
+    P3a["② 意图路由(每轮仅一次): route(retrievalQuery)<br/>**只用于判断是否工具轮**, 不再决定该不该检索"]
     P3a -->|TOOL| P7e["★跳过知识库检索(答案在业务库, 检索只会挤占预算)<br/>出口 = TOOL_DATA"]
     P3a -->|非 TOOL| P3b{"sessionType ∈ RAG/HYBRID?"}
     P3b -->|否(如 AGENT)| P7b["不检索; 出口 = ANSWERED_OPEN"]
@@ -469,6 +473,8 @@ flowchart TD
 `RerankStrategy` 实现，`RerankStrategyFactory` 按 `mode()` 自动收录，编排层零改动。
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
+
+**阈值只作用于语义一路**：`HybridRecaller` 用它过滤向量路候选，BM25 命中不受约束，融合后也没有第二道阈值过滤（`RagRetrievalService.mergeAndRerank` 只 `limit(topK)`）——调阈值不会改变返回条数，只会改变“语义过阈值数”与出口判定。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
 **阈值已在本地过滤而非下发向量库**（`HybridRecaller.recall`）：下发时低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
 分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**过滤前最大分**写入
 `rag_decision_log.semantic_max_score`，它是 P3-6 定标与 P3-7 相关性判据的唯一未截断观察值。
@@ -663,6 +669,7 @@ flowchart LR
 | 令牌黑名单 | Redis 不可用 | dev 放行 / prod 拒绝（`blacklist-fail-open`） | WARN（节流） | 同上 |
 | 登录限流 | Redis 不可用 | `isLocked→false`、`remainingLockMs→0`（★不冒成 500） | WARN（节流） | 同上；启动自检汇总 |
 | `QueryRewriter.transform` | 端点劣化/超时 | 熔断（连续 2 次失败 → 60s 冷却零等待）+ 回退原问题 | WARN | 成功即复位 |
+| `ShortQueryExpander.complete` | 端点劣化/超时/输出空或等同原句 | 回退原问题（刻意不做熔断：只在短查询上触发，最坏多等 3s） | WARN（`WarnThrottle` 节流） | 端点恢复 |
 | `ConversationSummarizer` | 摘要失败 | 保留旧摘要，下轮再触发；装配层用"窗口+预算"兜底 | WARN | 自动 |
 | `AuditListener` @Async 落库 | MySQL 抖动 | 只影响审计完整性，不影响回答 | WARN/ERROR | 重试下一轮 |
 | `FileStorageService.delete` | 文件占用/权限 | 尽力而为，DB 记录与向量已清理 | WARN | 手工清理 |
@@ -694,7 +701,7 @@ flowchart TD
         F1["用户/日期/UUID.ext（原始上传文件）"]
     end
     subgraph PR["classpath:/prompts"]
-        T1["base-system.st · rag-context.st（含 {{extraRule}} 占位）· general-system.st · kb-only-system.st"]
+        T1["base-system.st · rag-context.st（含 {{extraRule}} 占位）· general-system.st · kb-only-system.st · short-query-expand.st"]
     end
 ```
 

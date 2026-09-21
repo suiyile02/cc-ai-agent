@@ -35,13 +35,21 @@ record RetrievalCandidate(Document doc, Double sem, Double kw,
     }
 
     /**
-     * 候选 → 注入用 Document：把重排分数同时挂到 {@code score} 与 {@code metadata.rerank_score}。
+     * 候选 → 注入用 Document：把重排分数挂到 {@code score} 与 {@code metadata.rerank_score}，
+     * 同时把两路**原始分**留进 metadata——融合分是相对名次(单路榜首恒为 1.0)，只剩它就无法判断
+     * "这条到底是真相似还是仅词面命中"，检索调试与出口判据都需要能看到原始余弦分。
      *
      * @return 交给上下文渲染器的最终文档
      */
     Document toDocument() {
         Map<String, Object> md = new HashMap<>(doc.getMetadata());
         md.put("rerank_score", fusedScore);
+        if (sem != null) {
+            md.put("semantic_score", sem);
+        }
+        if (kw != null) {
+            md.put("keyword_score", kw);
+        }
         return Document.builder()
                 .id(doc.getId())
                 .text(doc.getText())
