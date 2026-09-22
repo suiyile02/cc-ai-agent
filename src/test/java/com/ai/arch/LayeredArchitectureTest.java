@@ -4,9 +4,11 @@ import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
+import com.ai.user.security.RequireAdmin;
 import org.springframework.web.bind.annotation.RestController;
 
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
@@ -23,7 +25,8 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
  *   <li>chat 是顶层编排模块: 除自身与 system(消费审计事件)外, 任何模块不得依赖它; </li>
  *   <li>模块的 dto 子包是内部细节, 不得被其它模块引用(跨模块契约一律放模块根包); </li>
  *   <li>entity 包内不得定义枚举(被共享的领域枚举属模块根包); </li>
- *   <li>审计表实体 system.entity 只有 system 与写入切面 aspect 可以触碰。</li>
+ *   <li>审计表实体 system.entity 只有 system 与写入切面 aspect 可以触碰; </li>
+ *   <li>知识库写方法（upload/delete/reprocess）必须标 @RequireAdmin。</li>
  * </ul>
  */
 @AnalyzeClasses(packages = "com.ai", importOptions = ImportOption.DoNotIncludeTests.class)
@@ -116,4 +119,24 @@ class LayeredArchitectureTest {
     static final ArchRule auditEntitiesShouldStayInSystem =
             noClasses().that().resideOutsideOfPackages("com.ai.system..", "com.ai.aspect..")
                     .should().dependOnClassesThat().resideInAPackage("com.ai.system.entity..");
+
+    /**
+     * 知识库的写操作（上传/删除/重处理）一律要 {@code @RequireAdmin}——知识库是全公司共享的
+     * RAG 内容源，任何登录用户能改就等于能往同事的答案里塞材料。
+     *
+     * <p>注解刻意放在 **Service 方法**上（与既有实现一致），因此这里也按 Service 方法校验；
+     * 新增写方法若漏标，本规则直接失败。注意 Spring AOP 不拦截自调用：
+     * {@code uploadBatch} 内部直调 {@code upload}，两个方法都必须各自带上注解，
+     * 否则批量入口会绕过校验（详见该方法 javadoc）。
+     *
+     * <p>范围刻意只到 {@code KnowledgeDocumentService}：同包的 {@code FileStorageService.delete}
+     * 是磁盘工具方法（由已受控的 {@code deleteDocument} 调用），不是对外授权面，纳入只会误报。
+     */
+    @ArchTest
+    static final ArchRule knowledgeWritesShouldRequireAdmin =
+            methods().that().arePublic()
+                    .and().areDeclaredInClassesThat().haveSimpleName("KnowledgeDocumentService")
+                    .and().haveNameMatching("(upload|delete|reprocess).*")
+                    .should().beAnnotatedWith(RequireAdmin.class)
+                    .as("知识库写操作必须标注 @RequireAdmin");
 }

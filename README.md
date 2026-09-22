@@ -254,7 +254,7 @@ docker-compose.yml          Qdrant+MySQL
 - **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
 - **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
 - **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 246 例（Mockito，含 ArchUnit 架构守护 11 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
+- **测试用例**：单元测试 247 例（Mockito，含 ArchUnit 架构守护 12 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
 
 ## 7. 常见问题
 

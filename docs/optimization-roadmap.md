@@ -244,6 +244,41 @@
 
 ---
 
+## 已完成记录（2026-09-22, 上传接口加管理员限制——收掉 P0 遗留的未设防写入面)
+
+**问题**: 知识库是全公司共享的 RAG 语料，但 `POST /api/knowledge/upload` 与 `/upload/batch` **只有 JWT**
+（`KnowledgeController` 上无任何 `@Require*`）——任何登录用户都能写入语料、消耗 Embedding 成本，
+并往同事的答案里注入任意内容（含诱导性材料）。删除/重处理早已挂 `@RequireAdmin`，上传是漏的那一半。
+
+**变更**（`KnowledgeDocumentService`）：
+
+| 方法 | 旧 | 新 |
+|---|---|---|
+| `upload(file,userId)` | 仅登录态 | `@RequireAdmin` + javadoc 写明理由 |
+| `uploadBatch(files,userId)` | 仅登录态 | **同样必须自带** `@RequireAdmin` |
+| `KnowledgeController` | 类注释未提鉴权 | 类 javadoc 写明"写操作全部挂 Service" |
+| `LayeredArchitectureTest` | 11 条规则 | 新增第 12 条：`KnowledgeDocumentService` 内 `upload*/delete*/reprocess*` 公有方法必须标 `@RequireAdmin` |
+
+**为什么两个方法都要标（关键陷阱）**: `uploadBatch` 内部是 `this.upload(...)` **自调用**，
+Spring AOP 不拦截自调用——只标 `upload` 时批量入口照样绕过；而且绕过后的 5002 会被批量循环里的
+`catch (BusinessException)` 吞成"每个文件失败但 HTTP 200"，前端完全看不出被拒。
+注解必须落在**进入循环之前的外层方法**上。
+
+**范围说明**: 规则刻意只覆盖 `KnowledgeDocumentService`。同包 `FileStorageService.delete(String)`
+是磁盘工具方法（由已受控的 `deleteDocument` 调用），第一次写成整包规则时被它误报一次——
+授权面是业务写操作，不是所有名字带 delete 的方法。
+
+**验证**: `LayeredArchitectureTest` 12/12 通过；运行时另起 9091 实例（**不碰用户自己跑着的 9090**）实测——
+普通用户单文件上传 `HTTP 403 code=5002 该操作需要管理员权限`、批量上传同样 403（证明自调用后门已堵）；
+临时提权为 ADMIN 后同一账号上传 `HTTP 200`，随后用管理员删除接口清掉全部 4 个验证文档
+（含误跑在旧实例上的 3 个），知识库文档数回到 14、`权限验证*` 残留 0，测试账号角色已改回 USER。
+
+**仍未做**: 上传配额（A3，按用户限流）——管理员同样可能被一个大文件拖满解析线程；
+以及"上传后默认状态即参与全公司检索"的审核位（如需人工审核再入库，属产品决策）。
+文档同步：AGENTS.md（管理动作/上传校验顺序）、flow-map（端点表 8-9、上传流程图、§22 偏差表 1-2 条已销项）。
+
+---
+
 ## 已完成记录（2026-09-22, 检索口径统一 + 短查询扩展)
 
 **问题(用户实测报告)**: 对话问"产品"答"知识库中未找到"，检索调试页却查得到、且显示"匹配度 1.00"。

@@ -102,8 +102,8 @@ flowchart TD
 | 5 | `POST /api/ai/chat` | JWT | `ChatController.chat → ChatService.chat` |
 | 6 | `POST /api/ai/chat/stream` | JWT | `ChatController.chatStream → ChatService.chatStream`（SSE） |
 | 7 | `POST /api/ai/rag/search` | JWT | `ChatController.ragSearch → ChatService.debugRetrieve → ChatPreparationService.debugSearch`（走对话同一条链：扩展→检索→出口判定，返回 `RagDebugVO`） |
-| 8 | `POST /api/knowledge/upload` | JWT（**无角色限制**，见 §22） | `KnowledgeController.upload → KnowledgeDocumentService.upload` |
-| 9 | `POST /api/knowledge/upload/batch` | JWT（同上） | `KnowledgeController.uploadBatch → uploadBatch` |
+| 8 | `POST /api/knowledge/upload` | `@RequireAdmin`（挂在 **Service** `KnowledgeDocumentService.upload`） | `KnowledgeController.upload → KnowledgeDocumentService.upload` |
+| 9 | `POST /api/knowledge/upload/batch` | `@RequireAdmin`（挂在 **Service**，**必须自带**：批量内部是 `this.upload(...)` 自调用，AOP 不拦截） | `KnowledgeController.uploadBatch → uploadBatch` |
 | 10 | `GET /api/knowledge/documents` | JWT | `KnowledgeController.listDocuments → listDocuments` |
 | 11 | `DELETE /api/knowledge/documents/{id}` | `@RequireAdmin`（挂在 **Service** `KnowledgeDocumentService:183`） | `KnowledgeController.deleteDocument → deleteDocument` |
 | 12 | `POST /api/knowledge/documents/{id}/reprocess` | `@RequireAdmin`（挂在 **Service** `:204`） | `KnowledgeController.reprocess → reprocess` |
@@ -233,7 +233,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    U0["POST /api/knowledge/upload (multipart file) — 仅 JWT, 任何登录用户可上传"] --> U1{"file == null 或 isEmpty?"}
+    U0["POST /api/knowledge/upload (multipart file) — @RequireAdmin: 非管理员 5002/403 直接拒绝"] --> U1{"file == null 或 isEmpty?"}
     U1 -->|是| U1E["1005 文件内容为空"]
     U1 -->|否| U2{"文件名为空?"}
     U2 -->|是| U2E["1001 参数错误"]
@@ -744,8 +744,8 @@ flowchart LR
 
 | # | 事实（代码为准） | 与既有描述/预期的差异 | 建议 |
 |---|---|---|---|
-| 1 | 上传与批量上传端点**只有 JWT**，`KnowledgeController` 上无任何 `@Require*` | 知识库是全公司共享语料，任何登录用户都能写入并消耗 Embedding 成本；`AGENTS.md` 只说"删除/重处理已挂 @RequireAdmin"（确实如此），未覆盖上传 | 若产品定位是"仅管理员维护语料"，给 `upload`/`uploadBatch` 加 `@RequireAdmin`；否则至少落地 roadmap A3 上传配额 |
-| 2 | `@RequireAdmin` 挂在 **Service 方法**（`KnowledgeDocumentService:183,204`），其它管理动作挂在 Controller（`SystemController:153,165`） | 风格不一致（切面对两者都生效，功能无差异），但从 Controller 看不出鉴权 | 统一到 Controller 层，或在 `AGENTS.md` 明确"允许挂 Service" |
+| 1 | ~~上传与批量上传端点**只有 JWT**~~ | **已修复（2026-09-22）**：`upload`/`uploadBatch` 均加 `@RequireAdmin`，非管理员 5002/403 | 遗留：上传配额（roadmap A3）仍未做——管理员也可能被单个大文件拖满 |
+| 2 | `@RequireAdmin` 挂在 **Service 方法**（`KnowledgeDocumentService` 的 upload/uploadBatch/deleteDocument/reprocess），其它管理动作挂在 Controller（`SystemController`） | 风格不一致（切面对两者都生效，功能无差异），但从 Controller 看不出鉴权 | **本批决定：知识库写操作统一挂 Service**——因为 `uploadBatch` 自调用 `upload`，挂 Controller 无法防"绕过外层直接调内层"的后续改法；由 `LayeredArchitectureTest#knowledgeWritesShouldRequireAdmin` 强制。新增管理动作仍建议挂 Controller，但同一模块内不得两种混用 |
 | 3 | ~~`AGENTS.md` 错误码行写"1001~5002, 用户相关 6001~6005"~~ | 与实际枚举不符 | **已校准（本批）**：按 `ErrorCode` 枚举实测重写 |
 | 4 | `README` §6 曾写"本期仅后端，前端为下一迭代" | 独立仓库 `ai-agent-web` 已存在（Vue3+Vite+Pinia，无组件库） | 本次已改为实况描述 |
 | 5 | `README` 写 e2e"52 项断言" | 脚本里 `check(` 出现 55 处（含定义），roadmap 09-18 记录为 53 | 未跑 e2e 前不下结论，待实测后统一数字 |
