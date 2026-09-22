@@ -33,7 +33,9 @@
 
 1. **MySQL**：`docs/seed/seed-mysql.sql` 可重复执行（先删 seed 标记数据再插入）：
    ```bash
-   docker exec -i ai-agent-mysql mysql -uroot -p123456 ai_agent_db < docs/seed/seed-mysql.sql
+   # 口令从环境/MYSQL_PWD 取, 不要写在命令行里(会进 shell history)
+   MYSQL_PWD="$MYSQL_ROOT_PASSWORD" docker exec -i ai-agent-mysql 
+     mysql -uroot ai_agent_db < docs/seed/seed-mysql.sql
    ```
 2. **Qdrant + knowledge_document**：启动应用后调用上传接口（推荐用 python 构造 multipart，
    Windows 下 curl 发中文文件名会 GBK 乱码，见下）：

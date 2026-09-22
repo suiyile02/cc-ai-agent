@@ -20,7 +20,8 @@ import java.math.BigDecimal;
 /**
  * 演示数据初始化：当员工/订单/用户表为空时写入示例业务数据，
  * 便于直接体验 Agent 工具调用与登录（管理员口令来自 {@code app.demo.admin-password}）。
- * 生产 profile 关闭播种（{@code app.demo.seed-enabled=false}），不会创建任何账号。
+ * 播种**默认关闭**（{@code app.demo.seed-enabled=false}）且口令无默认值：仓库不自带任何可用账号；
+ * 需要演示数据时显式开启并注入 {@code DEMO_ADMIN_PASSWORD}。
  */
 @Slf4j
 @Component
@@ -41,16 +42,24 @@ public class DemoDataInitializer implements ApplicationRunner {
     @Transactional
     public void run(ApplicationArguments args) {
         if (!appProperties.getDemo().isSeedEnabled()) {
-            log.info("演示数据播种已关闭(app.demo.seed-enabled=false), 跳过初始化");
+            log.info("演示数据播种已关闭(app.demo.seed-enabled=false): 不创建任何账号。"
+                    + "首个管理员请经 POST /api/auth/register 注册后把 sys_user.role 改为 ADMIN");
             return;
         }
-        seedUsers();
+        String adminPassword = appProperties.getDemo().getAdminPassword();
+        if (adminPassword == null || adminPassword.isBlank()) {
+            // 开了播种却没给口令: 绝不退回任何写死的默认值(那等于把口令放回仓库), 只播业务演示数据
+            log.warn("已开启播种但未提供 DEMO_ADMIN_PASSWORD, **跳过管理员创建**"
+                    + "(首个管理员请用 /api/auth/register 注册后置 role=ADMIN)");
+        } else {
+            seedUsers();
+        }
         seedEmployees();
         seedOrders();
     }
 
     /**
-     * 播种默认管理员(账号 admin, 口令取 {@code app.demo.admin-password}), 便于首次登录体验。
+     * 播种默认管理员(账号 admin, 口令取 {@code app.demo.admin-password}, 无默认值)。
      * 表内已有任何用户时跳过, 不覆盖既有数据。
      */
     private void seedUsers() {
@@ -65,7 +74,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         admin.setRole(UserContext.ROLE_ADMIN);
         admin.setStatus(1);
         sysUserMapper.insert(admin);
-        log.info("已初始化默认管理员(账号 admin, 初始密码见 README 演示说明), 请尽快修改密码");
+        log.info("已初始化默认管理员(账号 admin, 口令由 DEMO_ADMIN_PASSWORD 注入, 不入仓库), 请尽快修改密码");
     }
 
     /**

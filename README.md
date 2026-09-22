@@ -37,6 +37,7 @@ $env:DB_PASSWORD="你的本地口令"
 $env:DASHSCOPE_API_KEY="sk-xxxx"
 # JWT_SECRET 可留空(本地自动生成一次性密钥); 生产留空会拒绝启动
 mvn spring-boot:run       # 或打包运行
+#   本机要 X-User-Id 模拟登录时加: --spring-boot.run.arguments=--app.auth.dev-user-header-enabled=true
 mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```
 
@@ -72,7 +73,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 > 首次启动 Qdrant 自动建集合（需 Embedding 模型可用）；MySQL 表由启动期 `spring.sql.init` 幂等建表（脚本全部 `IF NOT EXISTS`，`continue-on-error` 已关闭）。
 >
-> **运行 profile**：默认（无 profile）= 安全基线（模拟登录头关闭、演示数据播种开启）；`dev` profile 额外开启 `X-User-Id` 模拟登录；`prod` profile 关闭演示数据播种。`/actuator/health` 可用于探针。
+> **运行 profile**：默认（无 profile）即安全基线——模拟登录头关闭、演示数据播种关闭、口令无默认值；`prod` profile 只是把这几项再显式钉一遍并收紧令牌黑名单口径（fail-closed）。**仓库内已删除 `application-dev.yaml`**：开发便利开关不再由配置文件提供，本机需要时显式传参（见「常用命令」）。`/actuator/health` 可用于探针。
 
 ## 3. 功能模块与接口
 
@@ -87,7 +88,8 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 - 登录后业务接口统一携带请求头：`Authorization: Bearer <token>`；未登录/凭证失效返回 code=6005(HTTP 401)。
 - 所有 `/api/**`（除 register/login）由 `AuthInterceptor` 鉴权，会话/知识库上传的“用户”取自登录态（不再手工传 userId）。
-- 开发便捷开关默认**关闭**：需要用 `X-User-Id` 请求头模拟登录时，以 dev profile 启动（`--spring.profiles.active=dev`）；默认管理员 admin/admin123 首次启动自动播种（可用 `app.demo.seed-enabled=false` 关闭，prod profile 默认关闭）。
+- 开发便捷开关默认**关闭**且仓库内不提供任何打开它的文件：本机要用 `X-User-Id` 模拟登录时，启动加 `--app.auth.dev-user-header-enabled=true`。
+- **不自带任何账号**：`app.demo.seed-enabled` 默认 false、`admin-password` 无默认值。首个管理员这样建：`POST /api/auth/register` 注册 → `UPDATE sys_user SET role='ADMIN' WHERE username='你的账号';` → 重新登录（角色写在 JWT claim 里，必须重登才生效）。要员工/订单等工具演示数据就执行 `docs/seed/seed-mysql.sql`；确实想让程序建管理员，则同时给 `app.demo.seed-enabled=true` 和 `DEMO_ADMIN_PASSWORD`（缺口令时只跳过建号并 WARN，绝不退回写死的口令）。
 - **角色与授权**：`sys_user.role`（ADMIN/USER，登录时写入 JWT `role` claim，重新登录后刷新）。授权规则"管理员或本人"由 `@RequireSelfOrAdmin` 注解 + `SelfOrAdminAspect` 切面统一实施——管理员可查全量；普通用户在系统日志接口传入的 `userId` 会被**强制改写为本人**（越权传他人 ID 只能看到自己的数据），非本人数据返回 HTTP 403（code=5002）。
 
 ### 3.1 知识库管理（需求第 2 章）
@@ -168,9 +170,12 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```bash
 BASE=http://localhost:9090
 
-# 0) 登录获取 Token(默认管理员 admin/admin123, 也可先 /api/auth/register 注册)
+# 0) 注册 + 提权为管理员(仓库不自带任何账号), 再登录取 Token
+curl -s -X POST $BASE/api/auth/register -H "Content-Type: application/json" \
+  -d '{"username":"'$MY_USER'","password":"'$MY_PASS'","nickname":"运维"}'
+#   提权(一次性, 用 mysql 客户端执行): UPDATE sys_user SET role='ADMIN' WHERE username='...';
 TOKEN=$(curl -s -X POST $BASE/api/auth/login -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' | jq -r .data.token)
+  -d '{"username":"'$MY_USER'","password":"'$MY_PASS'"}' | jq -r .data.token)
 AUTH="Authorization: Bearer $TOKEN"
 
 # 1) 创建会话(默认 HYBRID)

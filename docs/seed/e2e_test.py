@@ -2,11 +2,14 @@
 """
 端到端业务流程测试：覆盖注册/登录/会话/多轮对话(RAG+工具+记忆+流式)/知识库/系统日志授权/异常路径。
 前置：应用已启动(http://localhost:9090), MySQL/Qdrant 可用, DASHSCOPE_API_KEY 已配置。
+管理员用例需要显式注入账号(仓库不自带口令): set E2E_ADMIN_USER/E2E_ADMIN_PASSWORD;
+未注入时这些用例记为 WARN 跳过, 不判失败。
 运行：python docs/seed/e2e_test.py
 输出：逐项 PASS/FAIL/WARN 与汇总, 有 FAIL 时退出码为 1。
 """
 import http.client
 import json
+import os
 import time
 from urllib.parse import quote
 
@@ -103,9 +106,30 @@ check('注册参数校验返回 400', st == 400 and r.get('code') == 4001, f'htt
 st, r = req('GET', '/api/auth/me', token=E2E_TOKEN)
 check('GET /api/auth/me', st == 200 and r['data']['username'] == 'e2e_user', f'role={r["data"].get("role")}')
 
-ADMIN_TOKEN, ADMIN_USER = login('admin', 'admin123')
-check('admin 登录且角色为 ADMIN', ADMIN_TOKEN and ADMIN_USER.get('role') == 'ADMIN',
-      f'role={ADMIN_USER.get("role") if ADMIN_USER else "-"}')
+# 管理员账号: 仓库已不自带任何口令(播种默认关闭), 从环境变量取, 未提供则相关用例判 WARN 跳过
+ADMIN_USER_NAME = os.environ.get('E2E_ADMIN_USER', '')
+ADMIN_USER_PASS = os.environ.get('E2E_ADMIN_PASSWORD', '')
+HAS_ADMIN = bool(ADMIN_USER_NAME and ADMIN_USER_PASS)
+if HAS_ADMIN:
+    ADMIN_TOKEN, ADMIN_USER = login(ADMIN_USER_NAME, ADMIN_USER_PASS)
+    HAS_ADMIN = bool(ADMIN_TOKEN and (ADMIN_USER or {}).get('role') == 'ADMIN')
+    check('admin 登录且角色为 ADMIN', HAS_ADMIN,
+          f'role={(ADMIN_USER or {}).get("role", "-")}')
+if not HAS_ADMIN:
+    # 统一回落: 后续所有 @RequireAdmin 断言改走普通用户 token, 于是它们变成"被 403 拒绝"的负向断言,
+    # 由 skip_admin() 逐个标 WARN 而不是误报 FAIL。
+    ADMIN_TOKEN, ADMIN_USER = E2E_TOKEN, {}
+    warn('管理员用例跳过(未设 E2E_ADMIN_USER / E2E_ADMIN_PASSWORD 或该账号非 ADMIN)',
+         '清空语义缓存/知识库删除/全量日志等断言需要管理员; 先注册账号并置 role=ADMIN 再注入环境变量')
+
+
+def skip_admin(name, detail=''):
+    """无管理员时把该用例记为 WARN(不计失败); 有管理员时返回 False 让调用方继续正常断言。"""
+    if not HAS_ADMIN:
+        warn(name + '(需管理员, 本次跳过)', detail)
+        return True
+    return False
+
 TESTER_TOKEN, _ = login('tester', 'test123')
 check('tester 登录(种子用户)', bool(TESTER_TOKEN))
 
@@ -113,9 +137,13 @@ check('tester 登录(种子用户)', bool(TESTER_TOKEN))
 st, r = req('DELETE', '/api/system/semantic-cache', token=E2E_TOKEN)
 check('普通用户清空语义缓存被拒绝(403/5002)', st == 403 and r.get('code') == 5002,
       f'http={st} code={r.get("code")}')
-st, r = req('DELETE', '/api/system/semantic-cache', token=ADMIN_TOKEN)
-check('管理员清空语义缓存(冷缓存基线)', st == 200 and isinstance(r.get('data'), int) and r['data'] >= 0,
-      f"kbVersion={r.get('data')}")
+if not skip_admin('管理员清空语义缓存(冷缓存基线)'):
+    st, r = req('DELETE', '/api/system/semantic-cache', token=ADMIN_TOKEN)
+    check('管理员清空语义缓存(冷缓存基线)', st == 200 and isinstance(r.get('data'), int) and r['data'] >= 0,
+          f"kbVersion={r.get('data')}")
+else:
+    warn('冷缓存基线未建立', '本轮"流式增量≥2 / 上下文装配日志"断言可能因上一轮缓存命中而失真,'
+         '请先用管理员调 DELETE /api/system/semantic-cache')
 
 print('========== 2. 会话管理 ==========')
 st, r = req('POST', '/api/sessions', {'title': '【E2E】混合会话', 'sessionType': 'HYBRID'}, token=E2E_TOKEN)
@@ -123,18 +151,22 @@ SESSION_A = r['data']['sessionId']
 A_PK = r['data']['id']
 check('创建 HYBRID 会话', st == 200 and SESSION_A, f'sessionId={SESSION_A}')
 
-st, r = req('POST', '/api/sessions', {'title': '【E2E】管理员会话'}, token=ADMIN_TOKEN)
-B_PK = r['data']['id']
+B_PK = None
+if HAS_ADMIN:                          # 需要一个"他人(管理员)"会话来做越权断言
+    st, r = req('POST', '/api/sessions', {'title': '【E2E】管理员会话'}, token=ADMIN_TOKEN)
+    B_PK = (r.get('data') or {}).get('id')
 
 st, r = req('GET', '/api/sessions', token=E2E_TOKEN)
 check('会话列表按本人过滤', st == 200 and all(v['userId'] == E2E_ID for v in r['data']['records']),
       f"total={r['data']['total']}")
 
-st, r = req('PUT', f'/api/sessions/{B_PK}/archive', token=E2E_TOKEN)
-check('越权归档他人会话返回 403/5002', st == 403 and r.get('code') == 5002, f'http={st} code={r.get("code")}')
-
-st, r = req('DELETE', f'/api/sessions/{B_PK}', token=E2E_TOKEN)
-check('越权删除他人会话返回 403/5002', st == 403 and r.get('code') == 5002, f'http={st}')
+if B_PK:
+    st, r = req('PUT', f'/api/sessions/{B_PK}/archive', token=E2E_TOKEN)
+    check('越权归档他人会话返回 403/5002', st == 403 and r.get('code') == 5002, f'http={st} code={r.get("code")}')
+    st, r = req('DELETE', f'/api/sessions/{B_PK}', token=E2E_TOKEN)
+    check('越权删除他人会话返回 403/5002', st == 403 and r.get('code') == 5002, f'http={st}')
+else:
+    warn('越权归档/删除会话未测', '需要一个属于他人(管理员)的会话, 本次无管理员账号')
 
 print('========== 3. 多轮对话(RAG 检索 + 查询改写 + 工具 + 记忆) ==========')
 # 冷缓存基线(段 1 已清空语义缓存), 故本轮全部为"未命中"路径
@@ -210,12 +242,13 @@ check('普通用户传他人 userId 被强制改写', st == 200 and r['data']['t
       and all(v['userId'] == E2E_ID for v in r['data']['records']),
       f"total={r['data']['total']} all-self={all(v['userId'] == E2E_ID for v in r['data']['records'])}")
 
-st, r = req('GET', '/api/system/chat-logs?userId=1', token=ADMIN_TOKEN)
-check('管理员可查他人日志(全量)', st == 200 and r['data']['total'] > 0
-      and all(v['userId'] == 1 for v in r['data']['records']),
-      f"total={r['data']['total']}")
+if not skip_admin('管理员可查他人日志(全量)'):
+    st, r = req('GET', '/api/system/chat-logs?userId=1', token=ADMIN_TOKEN)
+    check('管理员可查他人日志(全量)', st == 200 and r['data']['total'] > 0
+          and all(v['userId'] == 1 for v in r['data']['records']),
+          f"total={r['data']['total']}")
 
-st, r = req('GET', f'/api/system/tool-call-logs?sessionId={SESSION_A}', token=ADMIN_TOKEN)
+st, r = req('GET', f'/api/system/tool-call-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
 rows = r['data']['records'] if st == 200 else []
 check('工具日志回填 session_id/user_id(ToolContext 修复)',
       st == 200 and len(rows) >= 1 and all(v['sessionId'] == SESSION_A and v['userId'] == E2E_ID for v in rows),
@@ -265,9 +298,11 @@ print('========== 7. 知识库管理 ==========')
 st, r = upload(E2E_TOKEN, '空文件测试.txt', '')
 check('空文件上传被拒(1005)', st == 400 and r.get('code') == 1005, f'http={st} code={r.get("code")}')
 # 清理历史运行的残留文档(同名项目管理规范), 保证基线干净
-lst_st, lst = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=50&fileName=' + quote('项目管理规范'), token=ADMIN_TOKEN)
-for v in ((lst.get('data') or {}).get('records') or []):
-    req('DELETE', f"/api/knowledge/documents/{v['id']}", token=ADMIN_TOKEN)
+if not skip_admin('清理历史残留文档'):
+    lst_st, lst = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=50&fileName=' + quote('项目管理规范'),
+                      token=ADMIN_TOKEN)
+    for v in ((lst.get('data') or {}).get('records') or []):
+        req('DELETE', f"/api/knowledge/documents/{v['id']}", token=ADMIN_TOKEN)
 time.sleep(2)
 before = qdrant_count()
 st, r = upload(E2E_TOKEN, '测试-项目管理规范.md',
@@ -296,25 +331,34 @@ check('重新入库(reprocess)', rec is not None and rec['status'] == 2, f"statu
 st, r = req('DELETE', f'/api/knowledge/documents/{DOC_E2E}', token=E2E_TOKEN)
 check('普通用户删除文档被授权拒绝(403/5002)', st == 403 and r.get('code') == 5002,
       f'http={st} code={r.get("code")}')
-st, r = req('DELETE', f'/api/knowledge/documents/{DOC_E2E}', token=ADMIN_TOKEN)
-after_delete = qdrant_count()
-for _ in range(5):                       # Qdrant 清理为异步生效, 轮询等待
-    if after_delete == before:
-        break
-    time.sleep(2)
+if not skip_admin('管理员删除文档且向量同步清理'):
+    st, r = req('DELETE', f'/api/knowledge/documents/{DOC_E2E}', token=ADMIN_TOKEN)
     after_delete = qdrant_count()
-st2, r2 = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20&fileName=' + quote('项目管理规范') + '', token=E2E_TOKEN)
-check('管理员删除文档且向量同步清理', st == 200 and after_delete == before
-      and r2['data']['total'] == 0, f'qdrant {after_upload}->{after_delete} (基线{before})')
+    for _ in range(5):                   # Qdrant 清理为异步生效, 轮询等待
+        if after_delete == before:
+            break
+        time.sleep(2)
+        after_delete = qdrant_count()
+    st2, r2 = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20&fileName=' + quote('项目管理规范'),
+                  token=E2E_TOKEN)
+    check('管理员删除文档且向量同步清理', st == 200 and after_delete == before
+          and r2['data']['total'] == 0, f'qdrant {after_upload}->{after_delete} (基线{before})')
+else:
+    warn('测试文档未清理', f'docId={DOC_E2E} 会留在库里, 下次运行前用管理员删除(或先跑清理)')
 
-st, r = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20', token=ADMIN_TOKEN)
-check('管理员查看全部文档(含 tester 上传)', st == 200
-      and any(v['fileName'] == '考勤与假期制度.md' for v in r['data']['records']),
-      f"total={r['data']['total']}")
+if not skip_admin('管理员查看全部文档(含 tester 上传)'):
+    st, r = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20', token=ADMIN_TOKEN)
+    check('管理员查看全部文档(含 tester 上传)', st == 200
+          and any(v['fileName'] == '考勤与假期制度.md' for v in r['data']['records']),
+          f"total={r['data']['total']}")
 
-st, r = req('POST', '/api/ai/rag/search', {'question': '年假有多少天', 'topK': 3, 'similarityThreshold': 0.3},
-            token=E2E_TOKEN)
-check('RAG 检索调试接口', st == 200 and r['data'], f"hits={len(r['data'] or [])}")
+st, r = req('POST', '/api/ai/rag/search', {'question': '年假有多少天', 'topK': 3, 'similarityThreshold': 0.3,
+                                           'expandShortQuery': False}, token=E2E_TOKEN)
+dbg = r.get('data') or {}
+check('RAG 检索调试接口(命中 + 出口预测)',
+      st == 200 and isinstance(dbg.get('sources'), list) and dbg.get('sources')
+      and dbg.get('answerOutcome') in ('ANSWERED_FROM_KB', 'REFUSED_NO_EVIDENCE', 'ANSWERED_OPEN', 'TOOL_DATA'),
+      f"hits={len(dbg.get('sources') or [])} outcome={dbg.get('answerOutcome')}")
 
 # 知识库变更(上传/删除)已使语义缓存失效: 重问段 6 命中过缓存的问题应重新装配并再落 context_log
 time.sleep(2)   # 同上: 等异步审计落库

@@ -2,7 +2,8 @@
 -- 测试数据种子(可重复执行: 先删除标记数据再插入)
 -- 范围: 测试用户 / 员工 / 订单 / 会话 / 四张日志表
 -- 知识库文档与 Qdrant 向量请走应用入库接口(见 docs/seed/README.md)
--- 复用方式: docker exec -i ai-agent-mysql mysql -uroot -p123456 ai_agent_db < docs/seed/seed-mysql.sql
+-- 复用方式(口令走 MYSQL_PWD 环境变量, 不写进命令行):
+--   MYSQL_PWD="$MYSQL_ROOT_PASSWORD" docker exec -i ai-agent-mysql mysql -uroot ai_agent_db < docs/seed/seed-mysql.sql
 -- =====================================================================
 
 -- 1. 测试用户(密码均为 test123, 与 admin 同一套哈希参数)
