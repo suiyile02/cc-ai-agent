@@ -289,14 +289,27 @@ check('缓存命中跳过上下文装配(无新增 context_log)', st == 200 and 
       f'{CTX_BEFORE_HIT} -> {CTX_AFTER_HIT}')
 time.sleep(1.5)   # 决策日志同为异步落库
 st, r = req('GET', f'/api/system/rag-decisions?sessionId={SESSION_A}&ragMode=KB', token=E2E_TOKEN)
-hit_rows = [v for v in (r['data']['records'] if st == 200 else []) if not v['retrievalExecuted']]
-check('缓存命中在决策日志留痕(KB 且未检索)', st == 200 and len(hit_rows) >= 1,
-      f'KB未检索行={len(hit_rows)} (最新: finalHits={hit_rows[0]["finalHits"] if hit_rows else "-"})')
+# P3-7 起缓存命中由一等出口标识(旧不变式"KB+未检索⟺命中"已作废: 检索现在先于缓存执行)
+cache_rows = [v for v in (r['data']['records'] if st == 200 else [])
+              if v.get('answerOutcome') == 'ANSWERED_FROM_CACHE']
+check('缓存命中在决策日志留痕(answer_outcome=ANSWERED_FROM_CACHE)', len(cache_rows) >= 1,
+      '缓存行=%s (executed=%s finalHits=%s)' % (len(cache_rows),
+      cache_rows[0]['retrievalExecuted'] if cache_rows else '-',
+      cache_rows[0]['finalHits'] if cache_rows else '-'))
+if cache_rows:
+    check('缓存命中轮次仍如实记录"检索已执行但注入 0 段"',
+          cache_rows[0]['retrievalExecuted'] is True and cache_rows[0]['finalHits'] == 0,
+          'exec=%s final=%s' % (cache_rows[0]['retrievalExecuted'], cache_rows[0]['finalHits']))
 
 print('========== 7. 知识库管理 ==========')
 # 空文件上传应被友好拒绝(1005), 不产生文档记录
 st, r = upload(E2E_TOKEN, '空文件测试.txt', '')
-check('空文件上传被拒(1005)', st == 400 and r.get('code') == 1005, f'http={st} code={r.get("code")}')
+check('普通用户上传先被角色闸拦(5002 优先于内容校验)', st == 403 and r.get('code') == 5002,
+      f'http={st} code={r.get("code")}')
+if HAS_ADMIN:
+    st, r = upload(ADMIN_TOKEN, '空文件测试.txt', '')
+    check('[管理员] 空文件被友好拒绝(1005)', st == 400 and r.get('code') == 1005,
+          f'http={st} code={r.get("code")}')
 # 清理历史运行的残留文档(同名项目管理规范), 保证基线干净
 if not skip_admin('清理历史残留文档'):
     lst_st, lst = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=50&fileName=' + quote('项目管理规范'),
@@ -305,7 +318,8 @@ if not skip_admin('清理历史残留文档'):
         req('DELETE', f"/api/knowledge/documents/{v['id']}", token=ADMIN_TOKEN)
 time.sleep(2)
 before = qdrant_count()
-st, r = upload(E2E_TOKEN, '测试-项目管理规范.md',
+UPLOAD_TOKEN = ADMIN_TOKEN if HAS_ADMIN else E2E_TOKEN
+st, r = upload(UPLOAD_TOKEN, '测试-项目管理规范.md',
                '# 项目管理规范\n\n## 代码评审\n所有合并请求必须至少一名同事评审通过。\n\n## 发布流程\n发布窗口为每周三与周五, 需提前创建发布单。\n')
 DOC_E2E = r['data']['docId'] if st == 200 and r.get('data') else None
 check('上传知识文档', st == 200 and DOC_E2E, f'docId={DOC_E2E}')
@@ -320,9 +334,12 @@ after_upload = qdrant_count()
 check('Qdrant 向量点数与分块一致', after_upload == before + (rec['chunkCount'] if rec else 0),
       f'{before} -> {after_upload}')
 
-st, r = req('POST', f'/api/knowledge/documents/{DOC_E2E}/reprocess', token=E2E_TOKEN)
-check('普通用户 reprocess 被授权拒绝(403/5002)', st == 403 and r.get('code') == 5002,
-      f'http={st} code={r.get("code")}')
+if DOC_E2E:
+    st, r = req('POST', f'/api/knowledge/documents/{DOC_E2E}/reprocess', token=E2E_TOKEN)
+    check('普通用户 reprocess 被授权拒绝(403/5002)', st == 403 and r.get('code') == 5002,
+          f'http={st} code={r.get("code")}')
+else:
+    warn('reprocess 越权用例跳过', '未取得 docId(上传环节失败)')
 time.sleep(8)
 st, r = req('GET', '/api/knowledge/documents?pageNum=1&pageSize=20&fileName=' + quote('项目管理规范'), token=E2E_TOKEN)
 rec = next((v for v in r['data']['records'] if v['id'] == DOC_E2E), None) if st == 200 else None
@@ -368,7 +385,8 @@ st, r = req('POST', '/api/ai/chat', {'sessionId': SESSION_A, 'message': Q1_QUEST
 _, r2 = req('GET', f'/api/system/context-logs?sessionId={SESSION_A}', token=E2E_TOKEN)
 check('知识库变更后语义缓存联动失效(重新装配)', st == 200 and bool(r['data']['content'])
       and r2['data']['total'] > CTX_BEFORE_KBCHANGE,
-      f"context_log {CTX_BEFORE_KBCHANGE} -> {r2['data']['total']}")
+      f"context_log {CTX_BEFORE_KBCHANGE} -> {r2['data']['total']}"
+      + ('' if DOC_E2E else ' [注: 本轮上传失败, 未发生知识库变更, 该断言不可信]'))
 
 print('========== 8. 会话生命周期与异常路径 ==========')
 st, r = req('POST', '/api/sessions', {'title': '【E2E】待归档', 'sessionType': 'RAG'}, token=E2E_TOKEN)
