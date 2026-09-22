@@ -22,6 +22,9 @@ import java.util.List;
 /**
  * 知识库管理接口(需求第 2 章)：上传 / 列表 / 删除 / 重新处理。
  * Controller 只做请求映射与参数绑定，业务逻辑在 {@link KnowledgeDocumentService}。
+ *
+ * <p>写操作（上传/批量上传/删除/重处理）全部在 Service 方法上标 {@code @RequireAdmin}
+ * ——知识库是全公司共享的 RAG 内容源；列表查询对所有人开放。
  */
 @RestController
 @RequestMapping("/api/knowledge")

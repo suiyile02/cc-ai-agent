@@ -169,7 +169,7 @@ com.ai
 ### 向量化与 RAG 数据规范
 
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
-- **上传入口校验顺序(禁止跳过)**: 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
+- **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
   -> **一律检索**(RAG/HYBRID 会话, 工具轮除外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`llm`/`none`)
@@ -387,7 +387,11 @@ com.ai
   失败全表扫, 撞库(大量不同用户名)时退化成 O(n²) 自伤; 阈值不放宽到"每次都扫"。
 - 角色: `sys_user.role`(ADMIN/USER, 默认 USER), 登录时写入 JWT `role` claim; `UserContext.CurrentUser.isAdmin()` 判定。
 - 授权: "管理员或本人"类查询用 `@RequireSelfOrAdmin(userIdParam = "...")` 注解 + `SelfOrAdminAspect` 切面统一强制改写 userId 参数, 数据隔离由 Service 层 userId 过滤完成; 越权/无角色返回 `AUTH_FAILED`(5002, HTTP 403)。
-- 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库文档删除/重处理(影响全公司共享 RAG 内容的操作必须管理员), 新增管理类操作时同样挂载。
+- 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库**上传 / 批量上传 / 删除 / 重处理**(凡能改动全公司共享 RAG 内容的操作一律管理员; 任何登录用户可上传 = 能往同事的答案里塞任意材料)。新增管理类操作时同样挂载。
+  ⚠ **注解标在 Service 方法上，而 Spring AOP 不拦截自调用**: `uploadBatch` 内部直调 `this.upload(...)`，
+  只标 `upload` 会让批量入口成为绕过校验的后门，且越权的 5002 会被批量循环的
+  `catch (BusinessException)` 降级成"每个文件失败但 HTTP 200"。因此**同一批写方法必须各自都带注解**
+  (已由 `LayeredArchitectureTest#knowledgeWritesShouldRequireAdmin` 钉住，新增写方法漏标即测试失败)。
 - 日志归属: 四张日志表均含 `user_id`(tool_call_log 经 Spring AI `toolContext` 透传回填), 查询接口一律按"管理员或本人"过滤。
 - JWT: `JwtTokenProvider` 签发 HS256；请求带 `Authorization: Bearer <token>`。
 - **凭据规则(强制, 因仓库将公开)**: 仓库内**不得**出现任何真实或示例口令/密钥的默认值——

@@ -59,12 +59,15 @@ public class KnowledgeDocumentService {
 
     /**
      * 上传文档：校验格式/大小/非空 → 保存文件 → 建记录(待处理) → 触发异步入库。
+     * 仅管理员可执行({@link RequireAdmin})——上传即改写全公司共享的 RAG 内容，
+     * 普通用户能上传就等于能往同事的答案里塞任意材料（含诱导性内容）。
      *
      * @param file   multipart 文件
      * @param userId 上传人 ID(登录态)
      * @return 上传结果(docId/fileName/status=0)
-     * @throws BusinessException 文件为空/文件名/格式/大小不合法
+     * @throws BusinessException 文件为空/文件名/格式/大小不合法, 或非管理员(5002, HTTP 403)
      */
+    @RequireAdmin
     @Transactional
     public KnowledgeUploadVO upload(MultipartFile file, Long userId) {
         // 判空: 0 字节文件(空文档)直接拒绝, 避免进入解析管线后报"解析不出有效文本"的原始错误
@@ -112,11 +115,17 @@ public class KnowledgeDocumentService {
      * 批量上传文档：逐文件走单文件校验与入库, **单个文件失败不影响其它文件**。
      * 每个文件的结果独立返回(成功 docId / 失败原因), 便于前端逐条提示。
      *
+     * <p>必须**自己也带** {@link RequireAdmin}：本方法内部是 `this.upload(...)` 直接调用，
+     * Spring AOP 不拦截自调用，只标在 {@code upload} 上会让批量入口成为绕过管理员校验的后门；
+     * 且越权的 5002 会被下面的 {@code catch(BusinessException)} 降级成"每个文件都失败但 HTTP 200"，
+     * 前端看不出被拒。标在本方法上才能在进入循环前就整体拒绝。
+     *
      * @param files  多文件(multipart 字段名 files)
      * @param userId 上传人 ID(登录态)
      * @return 逐文件上传结果列表(顺序与入参一致)
-     * @throws BusinessException 未选择任何文件
+     * @throws BusinessException 未选择任何文件, 或非管理员(5002, HTTP 403)
      */
+    @RequireAdmin
     public List<com.ai.knowledge.dto.BatchUploadResultVO> uploadBatch(
             MultipartFile[] files, Long userId) {
         if (files == null || files.length == 0) {
