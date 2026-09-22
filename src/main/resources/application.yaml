@@ -108,19 +108,21 @@ app:
     # (每次重启后旧 token 失效, 便于本地开发); 生产(profile=prod)留空直接拒绝启动。
     jwt-secret: ${JWT_SECRET:}
     token-expire-hours: 168                   # 7 天
-    # 开发便捷开关(默认关闭!): 允许用 X-User-Id 请求头模拟登录, 存在身份伪造风险,
-    # 仅在本地开发时激活 dev profile(--spring.profiles.active=dev)开启
+    # 开发便捷开关(默认关闭, 仓库内不再提供任何打开它的配置文件): 允许用 X-User-Id 请求头模拟登录,
+    # 存在身份伪造风险。本机调试需要时显式传参: --app.auth.dev-user-header-enabled=true
     dev-user-header-enabled: false
     # 登录失败限流存储后端: redis=多实例统一计数(默认, Redis 不可用时按未锁定放行) | memory=单实例进程内计数
     rate-limit-backend: redis
     # 令牌黑名单在 Redis 异常时的口径: true=放行(保可用) | false=拒绝(保安全, 生产必须 false,
     # 由 SecurityConfigValidator 在 prod 启动期强制)
     blacklist-fail-open: true
-  # ============ 演示数据播种(仅空表生效) ============
+  # ============ 演示数据播种(默认关闭: 仓库不再自带任何可用口令/账号) ============
+  # 首个管理员: 用开放的 POST /api/auth/register 注册, 再把 sys_user.role 改成 ADMIN;
+  # 员工/订单等工具演示数据需要时执行 docs/seed/seed-mysql.sql。
   demo:
-    seed-enabled: true                        # 生产 profile 已关闭(不创建任何账号)
-    # 仅播种时使用的演示口令; 生产请保持 seed-enabled=false, 或经 DEMO_ADMIN_PASSWORD 注入
-    admin-password: ${DEMO_ADMIN_PASSWORD:admin123}
+    seed-enabled: false                       # true 会按下面的口令自动建出 admin 账号, 仅刻意演示时开
+    # 仅播种时使用的口令; 留空则拒绝播种而不是退回某个写死的口令
+    admin-password: ${DEMO_ADMIN_PASSWORD:}
   # ============ 语义缓存(P3-3): 相同 KB 问题的回答缓存, 命中跳过上下文装配与模型调用(检索已先行) ============
   semantic-cache:
     enabled: true

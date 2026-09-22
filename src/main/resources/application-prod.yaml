@@ -1,6 +1,11 @@
 # ============================================================
 # 生产环境基线(显式激活: --spring.profiles.active=prod)
 # 上线前必须通过环境变量注入: JWT_SECRET / DASHSCOPE_API_KEY / DB_* / QDRANT_*
+#   (REDIS_PASSWORD 同理——本文件刻意不写它: 留空即无密码连 Redis)
+#
+# ⚠ 仓库内已不存在 application-dev.yaml: 开发便利开关不再由配置文件提供,
+#   本机需要时显式传参(见 README「常用命令」)。dev profile 名仍保留给 SecurityConfigValidator
+#   判定"非 prod"用。
 # ============================================================
 app:
   auth:
@@ -10,7 +15,7 @@ app:
     # 该项由 SecurityConfigValidator 强制: prod 下配成 true 直接拒绝启动。
     blacklist-fail-open: false
   demo:
-    seed-enabled: false             # 禁用演示数据播种(默认管理员等)
+    seed-enabled: false             # 双保险: 缺省已关闭, 生产绝不自动建账号
 
 logging:
   level:

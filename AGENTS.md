@@ -406,9 +406,9 @@ com.ai
   改凭据注入方式时必须同时验证 IDE 里的点启动, 不能只验命令行。`jwt-secret` 留空时: 非生产由 `JwtTokenProvider` 生成一次性随机密钥(重启即失效, 仅限本地),
   **生产留空/过短/含占位符特征(`change-me`/`dev-secret`/`your-`/`replace-me`)则由
   `SecurityConfigValidator` 拒绝启动**。演示管理员口令来自 `app.demo.admin-password`
-  (生产 `app.demo.seed-enabled=false`, 不创建任何账号)。`docker-compose.yml` 的端口**只绑 `127.0.0.1`**
+  (播种**默认全局关闭** `app.demo.seed-enabled=false`, 且 `admin-password` 无默认值——留空时 `DemoDataInitializer` 跳过建号并 WARN, **绝不退回任何写死口令**; 首个管理员由注册后置 role=ADMIN)。`docker-compose.yml` 的端口**只绑 `127.0.0.1`**
   (Qdrant 无 API Key 时暴露到局域网等于开放读写向量库)。
-- 拦截器 `AuthInterceptor` 保护 `/api/**`，通过 `UserContext` 暴露当前用户；`X-User-Id` 模拟登录默认关闭, 仅 dev profile 开启, 严禁生产开启。
+- 拦截器 `AuthInterceptor` 保护 `/api/**`，通过 `UserContext` 暴露当前用户；`X-User-Id` 模拟登录默认关闭, **且仓库内无任何配置文件打开它**(dev profile 文件已删除)——本机需要时只能显式传 `--app.auth.dev-user-header-enabled=true`, 严禁在生产这样启动。
 
 ### 统一返回值格式规范
 
@@ -513,8 +513,9 @@ com.ai
 
 - **本地一次性准备:** 模块根目录建 `application-local.yaml`(已 gitignore)写 `DB_PASSWORD: "你的口令"`——
   这一条同时服务于 IDEA 点启动与命令行, 之后不必再管环境变量。`cp .env.example .env` **只为 docker compose 服务**。
-- **开发:** `mvn spring-boot:run`(安全基线) / `mvn spring-boot:run -Dspring-boot.run.profiles=dev`(开启模拟登录头)。
+- **开发:** `mvn spring-boot:run` 就是安全基线(不建任何账号、模拟登录头关闭)。本机要 `X-User-Id` 模拟登录时显式传参: `mvn spring-boot:run -Dspring-boot.run.arguments=--app.auth.dev-user-header-enabled=true`——**仓库内已删除 `application-dev.yaml`, 不提供任何"一键打开危险开关"的文件**。
   在 IDEA 里直接 Run 同样可用(靠 `application-local.yaml`)。`JWT_SECRET` 本地可留空(自动随机密钥)。
+- **首个管理员:** 播种默认关闭(`app.demo.seed-enabled=false`)且口令无默认值 → 用 `/api/auth/register` 注册后 `UPDATE sys_user SET role='ADMIN'`, 再重新登录(角色在 JWT claim 里)。演示业务数据走 `docs/seed/seed-mysql.sql`。
 - **测试:** `mvn test`（`AiAgentApplicationTests` 连本地 MySQL; 有 `application-local.yaml` 即可, 否则需 `DB_PASSWORD=<口令>`）
 - **清理:** `mvn clean`
 - **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动

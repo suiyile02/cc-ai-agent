@@ -165,8 +165,9 @@ public class AppProperties {
         /** Token 有效期(小时) */
         private long tokenExpireHours = 168;
         /**
-         * 开发便捷开关(默认关闭, 仅 dev profile 开启): true 时允许用 X-User-Id 请求头
-         * 模拟登录(未携带 Token 时)。生产环境必须保持 false, 否则存在身份伪造风险。
+         * 开发便捷开关(默认关闭, **仓库内不提供任何打开它的配置文件**): true 时允许用 X-User-Id
+         * 请求头模拟登录(未携带 Token 时)。本机调试需要时显式传 --app.auth.dev-user-header-enabled=true;
+         * 生产环境必须保持 false, 否则存在身份伪造风险。
          */
         private boolean devUserHeaderEnabled = false;
         /**
@@ -178,10 +179,14 @@ public class AppProperties {
     /** 演示数据播种(app.demo.*) */
     @Data
     public static class Demo {
-        /** 是否在启动时播种演示数据(管理员/员工/订单, 仅空表时生效); 生产 profile 关闭 */
-        private boolean seedEnabled = true;
-        /** 播种默认管理员时使用的初始口令(仅演示; 生产应关闭播种或用 DEMO_ADMIN_PASSWORD 注入) */
-        private String adminPassword = "admin123";
+        /**
+         * 是否在启动时播种演示数据(管理员/员工/订单, 仅空表时生效)。
+         * **默认 false**——仓库自带可用口令是泄漏面；需要时显式开启，且必须同时注入
+         * {@link #adminPassword}（留空时 {@code DemoDataInitializer} 会跳过播种并提示）。
+         */
+        private boolean seedEnabled = false;
+        /** 播种默认管理员的初始口令(无默认值; 只在刻意开启播种时经 DEMO_ADMIN_PASSWORD 注入) */
+        private String adminPassword = "";
     }
 
     /** 跨域配置(app.cors.*)：对接前端(Vue3)时放行的来源 */
