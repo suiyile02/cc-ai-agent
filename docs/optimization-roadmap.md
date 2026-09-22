@@ -244,6 +244,16 @@
 
 ---
 
+## 已完成记录（2026-09-22, E3① 改写熔断并发修复 + B2 单轮工具调用上限 + 补登记检索服务重构)
+
+| 项 | 变更 | 验收证据 |
+|---|---|---|
+| E3① 改写熔断并发 | `QueryRewriter.consecutiveFailures` 由普通 `int` 改 `AtomicInteger`(并发 `++` 丢计数、熔断可能永不触发)——`incrementAndGet()`/`set(0)` | 全量回归通过(QueryRewriterTest 熔断用例不变) |
+| B2 工具调用上限 | 新增 `ErrorCode.TOOL_CALL_LIMIT(6009, 429)` + `app.chat.max-tool-calls-per-turn`(默认 8, 0=关闭); `ToolCallLogAspect` 复用既有 `toolCalls` 计数, 超限**不执行工具**直接抛错(Spring AI 回传模型收尾作答), 落一条 FAILED 审计 | 单测 `exceedsLimitThrowsToolCallLimitAndSkipsExecution`: 上限 2 时第 3 次抛 6009、`proceed()` 未调用、审计 FAILED; 运行时: 一次对话调 2 工具(queryOrder/queryEmployee)均 SUCCESS 回答完整, 正常路径不受限 |
+| 补登记重构 | **RagRetrievalService 已重构为 146 行门面**(此前 532 行): 检索/重排/渲染拆为 `HybridRecaller`/`RrfFuser`/`RetrievalCandidate`/`ScoreFusionReranker`/`RrfOrderReranker`/`LlmReranker`/`RerankStrategyFactory`/`RagContextRenderer`/`DocumentMeta`——即"第二批结构治理", 此前未在 roadmap 登记 | agents.md 已登记; 全量 248/248 通过 |
+
+---
+
 ## 已完成记录（2026-09-22, 上传接口加管理员限制——收掉 P0 遗留的未设防写入面)
 
 **问题**: 知识库是全公司共享的 RAG 语料，但 `POST /api/knowledge/upload` 与 `/upload/batch` **只有 JWT**
@@ -634,7 +644,7 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
 - **验收**: 调低配额后第 N+1 次上传 429; 次日计数自动归零(TTL 到期)。
 - **工作量**: 2~3 小时。
 
-## 批次 B: 配额与稳定性（✅ B3/B4 已实施 2026-09-16; B1/B2 待实施）
+## 批次 B: 配额与稳定性（✅ B3/B4 已实施 2026-09-16; B2 已实施 2026-09-22; B1 待实施）
 
 ### B3 单用户并发对话信号量（✅ 已实施）
 - 实现: 新增 `chat/service/ChatConcurrencyGuard`(Caffeine per-user Semaphore,
@@ -658,7 +668,7 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
 - **验收**: 调低配额后超额对话 429; Redis 键按日滚动; ADMIN 不受限。
 - **工作量**: 半天~1 天。
 
-### B2 单轮工具调用次数上限
+### B2 单轮工具调用次数上限（✅ 已实施 2026-09-22）
 - **现状**: Agent 工具循环次数完全由模型决定, 模型异常时可无限连环调用。
 - **方案**: `ChatService.buildSpec` 的 toolContext 增加可变计数容器(AtomicInteger);
   `ToolCallLogAspect` 每次拦截时自增, 超过上限(默认 8)抛 `BusinessException(TOOL_CALL_LIMIT)`

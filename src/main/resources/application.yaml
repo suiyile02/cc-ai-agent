@@ -22,10 +22,6 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/ai_agent_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&createDatabaseIfNotExist=true}
     username: ${DB_USERNAME:root}
-    # 口令不提供默认值(仓库即凭据来源是泄漏根因)。三种注入方式任选:
-    #   ① 本地/IDEA: 模块根目录建 application-local.yaml 写 DB_PASSWORD(见上方 spring.config.import, 已 gitignore)
-    #   ② 命令行: export DB_PASSWORD=你的本地口令(IDEA 运行配置不继承 shell 变量, 别用这条走 IDE)
-    #   ③ 生产: 部署平台注入环境变量
     password: ${DB_PASSWORD:}
     # 虚拟线程放大并发请求数, 默认 10 连接会成为瓶颈(对话+审计+摘要并发抢连接)
     hikari:
@@ -94,8 +90,6 @@ app:
     similarity-threshold: 0.45            # 相似度阈值(实测该 embedding 模型分数偏低, 0.6 会误杀正确 chunk, 如"加班调休"0.565)
     context-max-chars: 8000               # 注入上下文的最大字符数
     auto-rebuild-index: true              # 启动时自动重建关键词索引(从 Qdrant 读回分块, 不重新向量化)
-    # internal-keywords: [...]            # 意图路由关键词表(缺省内置企业词表, 见 AppProperties, 可在此覆盖)
-    # tool-keywords: [...]                # 工具类问题词表(订单/物流/快递等, 缺省见 AppProperties): 命中即跳过检索交给工具调用
     hybrid-enabled: true                  # 混合检索: 语义向量 + 关键词(BM25) 多路召回; false=仅语义检索
     rerank-mode: score                    # 重排: score=分数融合 | llm=大模型重排(失败回退score) | none=仅RRF排序
     retrieve-timeout-ms: 10000            # 检索整段预算(嵌入+向量库+关键词+重排); 超时按"已执行零命中"降级, 避免慢端点把对话拖到上百秒
@@ -106,6 +100,7 @@ app:
     disable-thinking: true       # 关闭主对话思维链: 修复 qwen3 长思考整段静默 >60s 撞 okhttp 超时被重置; 同时大幅提速
     stream-include-usage: true   # 流式请求索取 usage(否则 chat_log.total_tokens 恒为空); 网关不认该字段时置 false
     stream-idle-timeout-ms: 20000  # 流式静默超时: 模型 20s 无增量即主动终止降级(早于 okhttp 60s read timeout)
+    max-tool-calls-per-turn: 8   # 单轮工具调用次数上限(B2): 超限抛 6009 回传模型收尾, 防模型无限连环调工具
     kb-only: true                  # 严格知识库模式: true=只依据知识库资料/工具结果作答, 无关或无命中时按固定口径友好拒答
                                    # (提示词级软约束, 不保证零编造; AGENT 会话不受影响) 见 prompts/kb-only-system.st
   auth:
@@ -139,9 +134,9 @@ app:
   session-title:
     enabled: true
     fallback-chars: 24       # 兜底标题=问题前 24 字(同步写库, 零等待, 模型不可用也有标题)
-    model-enabled: true      # 关闭则一直停留在截断版, 完全不产生模型开销
+    model-enabled: true      # 是否开启模型改写
     max-chars: 30            # 精修标题上限(模型不守规矩时的硬截断保护)
-    timeout-ms: 8000         # 精修调用超时; 与本轮回答并行, 超时仅保留兜底标题
+    timeout-ms: 8000         # 精修调用超时;
   # ============ 文档解析防护(A2): 解析超时 + 解压炸弹预检 ============
   ingestion:
     parse-timeout-ms: 120000       # 单文档解析超时(超时置 status=3)

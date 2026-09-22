@@ -1,5 +1,8 @@
 package com.ai.aspect;
 
+import com.ai.common.BusinessException;
+import com.ai.common.ErrorCode;
+import com.ai.config.AppProperties;
 import com.ai.system.entity.ToolCallLog;
 import com.ai.system.service.ToolCallLogService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,17 +20,21 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * {@link ToolCallLogAspect} 单元测试：切面对 toolContext 里"本轮工具调用计数"的自增——
- * 该计数是对话收尾阶段禁止工具轮次写语义缓存的唯一数据源, 断了就会退回跨用户串答案的缺陷。
+ * 该计数是对话收尾阶段禁止工具轮次写语义缓存的唯一数据源, 断了就会退回跨用户串答案的缺陷;
+ * 以及 B2 单轮工具调用次数上限(超限抛 TOOL_CALL_LIMIT 且不再执行工具)。
  */
 class ToolCallLogAspectTest {
 
     private final ToolCallLogService logService = mock(ToolCallLogService.class);
-    private final ToolCallLogAspect aspect = new ToolCallLogAspect(logService, new ObjectMapper());
+    private final AppProperties appProperties = new AppProperties();
+    private final ToolCallLogAspect aspect =
+            new ToolCallLogAspect(logService, new ObjectMapper(), appProperties);
 
     /** 构造一个 @Tool 注解替身(切面只读 name) */
     private Tool toolAnnotation() {
@@ -103,5 +110,28 @@ class ToolCallLogAspectTest {
         aspect.around(joinPoint(context, "b"), toolAnnotation());
 
         assertEquals(2, counter.get());
+    }
+
+    @Test
+    void exceedsLimitThrowsToolCallLimitAndSkipsExecution() throws Throwable {
+        appProperties.getChat().setMaxToolCallsPerTurn(2);
+        AtomicInteger counter = new AtomicInteger();
+        Map<String, Object> context = Map.of("sessionId", "s1", "toolCalls", counter);
+        aspect.around(joinPoint(context, "a"), toolAnnotation());
+        aspect.around(joinPoint(context, "b"), toolAnnotation());
+
+        // 第 3 次超限: 抛 TOOL_CALL_LIMIT, 不再执行工具本体
+        ProceedingJoinPoint pjp = joinPoint(context, "c");
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> aspect.around(pjp, toolAnnotation()));
+        assertEquals(ErrorCode.TOOL_CALL_LIMIT, e.getErrorCode());
+        assertEquals(3, counter.get(), "超限的那次也计数(供语义缓存闸门判定工具轮)");
+        verify(pjp, never()).proceed();
+
+        // 超限同样落一条 FAILED 审计日志(前 2 次各落一条 SUCCESS)
+        ArgumentCaptor<ToolCallLog> saved = ArgumentCaptor.forClass(ToolCallLog.class);
+        verify(logService, org.mockito.Mockito.atLeast(3)).save(saved.capture());
+        var all = saved.getAllValues();
+        assertEquals("FAILED", all.get(all.size() - 1).getStatus());
     }
 }

@@ -20,9 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 工具调用日志切面(需求 4.4)：对 @Tool 方法环绕记录入参/出参/耗时/状态到 tool_call_log。
  *
  * <p>顺带维护 toolContext 里的本轮工具调用计数(键 {@code toolCalls})——对话收尾阶段据此
- * 决定是否跳过语义缓存写入。
- *
- * <p>说明：会话 ID 未透传到工具上下文时置空，可后续通过 ToolContext 传递补全。
+ * 决定是否跳过语义缓存写入; 并执行**单轮工具调用次数上限**(B2, {@code app.chat.max-tool-calls-per-turn},
+ * 超限抛 {@code TOOL_CALL_LIMIT} 由 Spring AI 回传模型令其收尾作答, 不真正执行工具)。
  */
 @Slf4j
 @Aspect
@@ -32,14 +31,16 @@ public class ToolCallLogAspect {
 
     private final ToolCallLogService toolCallLogService;
     private final ObjectMapper objectMapper;
+    private final com.ai.config.AppProperties appProperties;
 
     /**
      * 环绕增强：执行前记录入参, 成功后记录出参与状态 SUCCESS, 异常记录 FAILED 并继续抛出。
+     * 超上限时跳过工具执行、直接抛 {@code TOOL_CALL_LIMIT}。
      *
      * @param pjp  连接点(被拦截的 @Tool 方法)
      * @param tool 方法上的 @Tool 注解(可取工具名/描述)
      * @return 目标方法返回值(透传)
-     * @throws Throwable 目标方法异常(透传)
+     * @throws Throwable 目标方法异常(透传); 超上限抛 BusinessException(TOOL_CALL_LIMIT)
      */
     @Around("@annotation(tool)")
     public Object around(ProceedingJoinPoint pjp, Tool tool) throws Throwable {
@@ -63,14 +64,21 @@ public class ToolCallLogAspect {
             if (userId instanceof Number uid) {
                 entry.setUserId(uid.longValue());
             }
-            // 本轮工具调用计数: 语义缓存写入侧据此判定"回答含实时业务数据", 非零则不缓存
-            // (跨用户共享的缓存一旦存进个性化/实时答案即为串味事故)
-            if (toolContext.getContext().get("toolCalls") instanceof AtomicInteger counter) {
-                counter.incrementAndGet();
-            }
         }
 
         try {
+            // 本轮工具调用计数 + 次数上限拦截(B2): 超限不执行工具, 直接抛错回传模型
+            // (计数同时供收尾判定"回答含实时业务数据"→禁止写语义缓存)
+            if (toolContext != null && toolContext.getContext() != null
+                    && toolContext.getContext().get("toolCalls") instanceof AtomicInteger counter) {
+                int max = appProperties.getChat().getMaxToolCallsPerTurn();
+                if (max > 0 && counter.incrementAndGet() > max) {
+                    throw new com.ai.common.BusinessException(
+                            com.ai.common.ErrorCode.TOOL_CALL_LIMIT,
+                            "单轮工具调用次数已达上限(" + max + "), 已终止本轮工具调用");
+                }
+            }
+
             Object result = pjp.proceed();
             entry.setStatus("SUCCESS");
             entry.setOutputResult(SensitiveDataMasker.mask(toJson(result)));
