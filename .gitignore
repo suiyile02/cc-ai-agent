@@ -39,3 +39,7 @@ logs/
 *.log
 .env
 application-local.yaml
+
+### Python 缓存(e2e 脚本会产生) ###
+__pycache__/
+*.pyc
