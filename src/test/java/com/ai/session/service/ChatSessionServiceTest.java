@@ -147,4 +147,37 @@ class ChatSessionServiceTest {
         assertEquals("sid-1", service.detail(1L, 9L).sessionId());
         assertThrows(BusinessException.class, () -> service.detail(1L, 8L));
     }
+
+    /**
+     * R3 回归：详情/历史消息也不能读已归档(含软删)的会话。
+     *
+     * <p>列表按 status=1 过滤，但详情走的是主键直查——不校验状态就等于"从列表消失的会话
+     * 仍可被枚举出来读取"，删除后记忆已清空而内容仍可见。
+     */
+    @Test
+    void closedSessionCannotBeReadById() {
+        when(sessionMapper.selectById(1L)).thenReturn(session(9L, ChatSession.STATUS_CLOSED));
+
+        BusinessException detail = assertThrows(BusinessException.class, () -> service.detail(1L, 9L));
+        assertEquals(ErrorCode.SESSION_NOT_FOUND, detail.getErrorCode(), "已关闭会话应表现为不存在");
+
+        assertThrows(BusinessException.class, () -> service.listMessages(1L, 9L));
+        assertThrows(BusinessException.class, () -> service.rename(1L, "改已归档", 9L));
+    }
+
+    /** 归档与删除都收敛到同一个终态常量(避免两处各写一个字面量 0 而漂移)。 */
+    @Test
+    void archiveAndDeleteBothCloseTheSession() {
+        ChatSession owned = session(9L, ChatSession.STATUS_ACTIVE);
+        when(sessionMapper.selectById(1L)).thenReturn(owned);
+
+        service.archive(1L, 9L);
+        assertEquals(ChatSession.STATUS_CLOSED, owned.getStatus().intValue());
+
+        ChatSession another = session(9L, ChatSession.STATUS_ACTIVE);
+        when(sessionMapper.selectById(2L)).thenReturn(another);
+        service.delete(2L, 9L);
+        assertEquals(ChatSession.STATUS_CLOSED, another.getStatus().intValue());
+        verify(sessionCache, org.mockito.Mockito.atLeastOnce()).evict("sid-1");
+    }
 }

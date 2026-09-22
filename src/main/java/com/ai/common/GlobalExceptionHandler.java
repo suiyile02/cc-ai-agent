@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
@@ -98,6 +100,22 @@ public class GlobalExceptionHandler {
         log.warn("上传文件过大：{}", e.getMessage());
         return ResponseEntity.status(ErrorCode.FILE_TOO_LARGE.getHttpStatus())
                 .body(Result.fail(ErrorCode.FILE_TOO_LARGE));
+    }
+
+    /**
+     * multipart 请求缺必填部件（如批量上传一个文件都没选）。
+     *
+     * <p>必须单独处理：它原本落到兜底 {@code Exception} 分支变成 5001/HTTP 500，
+     * 而"没选文件"是用户输入问题，不该报系统内部错误。
+     *
+     * @param e 缺部件异常
+     * @return 统一失败响应(4001, HTTP 400)
+     */
+    @ExceptionHandler({MissingServletRequestPartException.class, MultipartException.class})
+    public ResponseEntity<Result<Void>> handleMultipart(Exception e) {
+        log.warn("multipart 请求缺少必填部件：{}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(Result.fail(ErrorCode.PARAM_ERROR, "请选择至少一个文件后再上传"));
     }
 
     /**

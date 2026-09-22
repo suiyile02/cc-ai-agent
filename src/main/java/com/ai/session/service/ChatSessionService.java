@@ -51,7 +51,7 @@ public class ChatSessionService {
         session.setUserId(userId);
         session.setTitle(title);
         session.setSessionType(type == null ? SessionType.HYBRID : type);
-        session.setStatus(1);
+        session.setStatus(ChatSession.STATUS_ACTIVE);
         sessionMapper.insert(session);
         log.info("创建会话: sessionId={}, type={}, userId={}",
                 session.getSessionId(), session.getSessionType(), userId);
@@ -70,7 +70,7 @@ public class ChatSessionService {
         Page<ChatSession> mpPage = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<ChatSession> qw = new LambdaQueryWrapper<ChatSession>()
                 .eq(ChatSession::getUserId, userId)
-                .eq(ChatSession::getStatus, 1) // 已归档/已删除(status=0)不出现在列表
+                .eq(ChatSession::getStatus, ChatSession.STATUS_ACTIVE) // 已归档/已删除不出现在列表
                 .orderByDesc(ChatSession::getCreatedAt)
                 .orderByDesc(ChatSession::getId); // 同秒创建的会话排序稳定(次级排序键)
         sessionMapper.selectPage(mpPage, qw);
@@ -129,7 +129,7 @@ public class ChatSessionService {
     @Transactional
     public void archive(Long id, Long userId) {
         ChatSession session = requireOwned(id, userId);
-        session.setStatus(0);
+        session.setStatus(ChatSession.STATUS_CLOSED);
         sessionMapper.updateById(session);
         sessionCache.evict(session.getSessionId());
     }
@@ -155,7 +155,7 @@ public class ChatSessionService {
     }
 
     /**
-     * 删除会话：软删(status=0)并清理该会话记忆。
+     * 删除会话：软删(status=0)并清理该会话记忆。归档与删除同为 status=0，区别只在是否清记忆。
      *
      * @param id     会话主键
      * @param userId 操作人(校验归属)
@@ -163,7 +163,7 @@ public class ChatSessionService {
     @Transactional
     public void delete(Long id, Long userId) {
         ChatSession session = requireOwned(id, userId);
-        session.setStatus(0);
+        session.setStatus(ChatSession.STATUS_CLOSED);
         sessionMapper.updateById(session);
         sessionCache.evict(session.getSessionId());
         try {
@@ -201,10 +201,7 @@ public class ChatSessionService {
             }
             sessionCache.put(session);
         }
-        if (session == null) {
-            throw new BusinessException(ErrorCode.SESSION_NOT_FOUND);
-        }
-        if (session.getStatus() == null || session.getStatus() != 1) {
+        if (!Integer.valueOf(ChatSession.STATUS_ACTIVE).equals(session.getStatus())) {
             throw new BusinessException(ErrorCode.SESSION_NOT_FOUND, "会话不存在或已归档");
         }
         if (userId == null || !session.getUserId().equals(userId)) {
@@ -214,17 +211,23 @@ public class ChatSessionService {
     }
 
     /**
-     * 获取会话并校验归属当前用户。
+     * 获取**进行中**的会话并校验归属当前用户。
+     *
+     * <p>状态与归属都要查：只查归属会让已归档/软删(status=0)的会话仍能按主键被 {@code detail}
+     * 读回（列表已过滤掉它，详情却可枚举），也使"删除后记忆已清空、内容却仍可取"这种不一致长期存在。
      *
      * @param id     会话主键
      * @param userId 用户 ID
      * @return 会话实体
-     * @throws BusinessException 不存在(3001)或无权限(5002)
+     * @throws BusinessException 不存在或已归档(3001)、无权限(5002)
      */
     private ChatSession requireOwned(Long id, Long userId) {
         ChatSession session = sessionMapper.selectById(id);
         if (session == null) {
             throw new BusinessException(ErrorCode.SESSION_NOT_FOUND);
+        }
+        if (!Integer.valueOf(ChatSession.STATUS_ACTIVE).equals(session.getStatus())) {
+            throw new BusinessException(ErrorCode.SESSION_NOT_FOUND, "会话不存在或已归档");
         }
         if (!session.getUserId().equals(userId)) {
             throw new BusinessException(ErrorCode.AUTH_FAILED, "无权操作他人会话");
