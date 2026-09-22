@@ -127,6 +127,13 @@ public class AppProperties {
          */
         private boolean streamIncludeUsage = true;
         /**
+         * 单轮工具调用次数上限(B2, 默认 8)：Agent 工具循环次数原由模型自主决定,
+         * 模型异常时可无限连环调用烧 Token。ToolCallLogAspect 每调用一次自增计数,
+         * 超过上限即抛 {@code TOOL_CALL_LIMIT(6009)}, Spring AI 把该错误回传模型令其收尾作答。
+         * 0=关闭该限制(不推荐)。
+         */
+        private int maxToolCallsPerTurn = 8;
+        /**
          * 流式静默超时毫秒(默认 20s): 相邻两个增量间隔超过该值(或首增量迟迟不来)即主动终止本轮
          * 并降级为友好提示, 早于上游 okhttp 的 60s read timeout 触发。
          *

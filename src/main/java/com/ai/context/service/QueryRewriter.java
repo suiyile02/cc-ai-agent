@@ -40,8 +40,9 @@ public class QueryRewriter {
     /** 压缩查询转换器: 生产路径按 ChatClient 可用性惰性构建; 测试可直接注入 mock */
     private final CompressionQueryTransformer transformer;
 
-    /** 熔断状态: 连续失败次数与冷却截止时间 */
-    private int consecutiveFailures = 0;
+    /** 熔断状态: 连续失败次数(E3①: 并发请求线程自增, 用 AtomicInteger 防丢计数)与冷却截止时间 */
+    private final java.util.concurrent.atomic.AtomicInteger consecutiveFailures =
+            new java.util.concurrent.atomic.AtomicInteger();
     private volatile long breakerOpenUntil = 0;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -105,7 +106,7 @@ public class QueryRewriter {
             Query standalone = Timeouts.call(() -> transformer.transform(
                     Query.builder().text(userMessage).history(history).build()), cfg.getTimeoutMs());
             long elapsed = System.currentTimeMillis() - start;
-            consecutiveFailures = 0;
+            consecutiveFailures.set(0);
             String rewritten = standalone == null ? null : standalone.text();
             if (rewritten == null || rewritten.isBlank() || rewritten.trim().equals(userMessage.trim())) {
                 log.info("查询改写完成但结果等同原问题: {}ms", elapsed);
@@ -115,10 +116,9 @@ public class QueryRewriter {
             return new RewriteResult(rewritten.trim(), true);
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - start;
-            consecutiveFailures++;
-            if (consecutiveFailures >= BREAKER_FAIL_THRESHOLD) {
+            if (consecutiveFailures.incrementAndGet() >= BREAKER_FAIL_THRESHOLD) {
                 breakerOpenUntil = System.currentTimeMillis() + BREAKER_COOLDOWN_MS;
-                consecutiveFailures = 0;
+                consecutiveFailures.set(0);
                 log.warn("查询改写连续失败进入熔断({}ms 冷却), 期间直接回退原始问题: 耗时 {}ms, 原因 {}",
                         BREAKER_COOLDOWN_MS, elapsed, e.getMessage());
             } else {

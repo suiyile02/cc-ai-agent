@@ -214,6 +214,9 @@ com.ai
     `rag_mode` 诊断标签。上传新文档**不再需要同步改词表**(这是 P3-7 的主要收益)。
   - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味): 出口记 `TOOL_DATA`, 收尾按出口
     与 `toolCalls` 双重排除写缓存。
+  - **单轮工具调用次数上限(B2)**: `ToolCallLogAspect` 复用 `toolCalls` 计数,
+    超过 `app.chat.max-tool-calls-per-turn`(默认 8, 0=关闭)不执行工具、直接抛 `TOOL_CALL_LIMIT(6009)`,
+    Spring AI 回传模型令其收尾作答——防模型异常时无限连环调工具烧 Token。
   - **意图路由结果缓存已删除**(P3-7 B 批): 旧 `CachingIntentRouter`(@Primary 装饰器)把"问题→路由结果"
     缓存进 Redis(`rag:intent:v{version}:{sha256}`, TTL 60 分钟, 另有 `IntentCacheAdmin` +
     `DELETE /api/system/intent-cache` 版本自增失效)。**删除理由**: 它缓存的判定在 A 批后只剩"是否工具轮",
