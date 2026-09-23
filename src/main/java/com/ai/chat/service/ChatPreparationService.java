@@ -123,7 +123,7 @@ public class ChatPreparationService {
         //    这是 P3-7 的核心: 知识库内容能否被问到, 不再取决于有没有人记得改一份与文档无关的配置。
         //    意图判定每轮只做一次(旧实现在缓存准入与路由两处各做一遍)。
         //    预判结果仍随决策日志留痕(rag_mode 列), 用于对照"词表预判 vs 实际出口"的偏差——
-        //    这是 P3-6/P3-7 验收要看的数据, 不要因为"它不再决定链路"就把它写成常量。
+        // 成本优化 先进行关键字匹配是否要调用工具,要调用工具则少走一次调大模型进行向量化检索
         RagMode route = intentRouter.route(retrievalQuery);
         boolean toolTurn = route == RagMode.TOOL;
         long retrieveStart = System.currentTimeMillis();
@@ -134,6 +134,7 @@ public class ChatPreparationService {
         // ② 语义缓存查询: 条目跨用户共享, 所以只在"确有知识库依据"或"确将拒答"的轮次参与
         boolean cacheEligible = cacheEligible(session, rw);
         long cacheStart = System.currentTimeMillis();
+        // 正缓存查询
         SemanticAnswerCache.CachedAnswer cached = cacheEligible && outcome == ChatOutcome.ANSWERED_FROM_KB
                 ? semanticAnswerCache.get(retrievalQuery) : null;
         // 负缓存(穿透防护)只可能出现在"本轮确实无据可依"时——检索先行已经知道有没有证据,
@@ -220,9 +221,11 @@ public class ChatPreparationService {
         if (!ragSession) {
             return RagContext.empty();
         }
+        // 混合检索
         RetrievalOutcome outcome = ragRetriever.retrieveOutcome(
                 userMessage, appProperties.getRag().getTopK(),
                 appProperties.getRag().getSimilarityThreshold());
+        // 出口判定( 决定是由大模型自由发挥, 还是严格按照内部知识库/数据库作答)
         ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, false,
                 appProperties.getChat().isKbOnly(), appProperties.getRag().getSimilarityThreshold());
         return new RagContext(outcome.hits(), route, outcome, chatOutcome);
