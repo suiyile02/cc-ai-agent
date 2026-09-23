@@ -3,6 +3,7 @@
 > 状态约定：`待评估` = 需触发条件满足后再实施；每项包含「现状 → 方案 → 验收标准」。
 > **2026-09-15 更新：P1-1~P1-5、P2-1~P2-4、P3(Redis 限流+会话缓存) 已全部实施并验收通过**, 明细见文末"已完成记录"。
 > P0 已完成项（JWT 启动校验 / 登录失败限流 / 连接池）见本文末尾"已完成记录"。
+> **2026-09-24: "配置分段重构第三批"(各模块改注入独立 *Props bean)已决定不做**, 理由见文末同名记录——不要重议。
 > 评估时间：2026-09 基于代码实证扫描（非推测）。
 
 ---
@@ -207,6 +208,52 @@
   MySQL 唯一索引允许多行 NULL，故给存量表加索引不会因 14 条 NULL 失败。
 - **边界(明确不做)**：内容相似度/语义去重。同一份制度导出成 PDF 与 DOCX 会得到不同 hash 而放行。
 - **验收**：同名不同内容不误拒、改名同内容仍判重、批量中重复项不影响其它文件入库、并发同内容双传只有一个成功。
+
+---
+
+## 决定不做（2026-09-24, 配置分段重构"第三批": 各模块改注入独立 *Props bean）
+
+**原计划**: 第 1 批把 `AppProperties` 按段拆到 `config/props/*Props` 后, 第三批拟把散落的
+`appProperties.getRag().getXxx()` 改为各模块直接 `@Resource RagProps`, 约 40 生产 + 25 测试文件。
+
+**决定不做的理由(勿重议)**:
+1. **痛点已在第 1 批消除**: 当初想做是因为"373 行配置堆一个类里很乱"; 现在改配置只开对应一个 `*Props`
+   文件、`AppProperties` 只剩分组, 剩下的"换注入方式"纯属风格收敛, 不解决任何真实问题。
+2. **前提已不成立且有反作用**: 第 1 批刻意**不给** `*Props` 加 `@ConfigurationProperties`(它们靠聚合根
+   嵌套绑定)。要单独注入就得二选一——A) 给每段补前缀注解 → 与 `app` 前缀**双写同一份配置**, 两个实例值可能
+   不同步, 正是本项目最防的"漂移"; B) 拆掉聚合根 → 65 文件机械大改。两条成本都 > 收益。
+3. **footprint 比预估更分散**: 实测 40 个生产文件引用 `AppProperties`, 只有 8 个已在用 `import props`
+   (第 1 批改类型名带出的), 全量迁移是一次高风险大 PR。
+
+**若将来触发条件变化**(例如出现"某段配置需要独立于 app 前缀复用"或"多 profile 各绑不同子集"), 再评估;
+届时优先选 A 之前先确认不会双写。
+
+---
+
+## 已完成记录（2026-09-23, 配置分段重构第 1 批 + rerank api 模式第 2 批）
+
+对应提交 `fe6ba38`(第 1 批) 与 `cf98bb1`(第 2 批)。细节以 AGENTS.md「配置」「向量化与 RAG」两节为准, 此处只登记要点与验证。
+
+**第 1 批 — 默认值单一来源 = Java + 严格绑定**:
+- `AppProperties` 各段搬到 `config/props/*Props`(一一对应前缀), 聚合根只做分组, 既有 `getRag()` 等调用点零改动。
+- `application.yaml` 从 190 行业务配置瘦到"环境注入项 + 安全基线 + 成本闸门"; 删无实现的 `spring.ai.openai.rerank`。
+- `@ConfigurationProperties(ignoreUnknownFields=false)`(Boot 4 默认 true 会静默忽略未知键)。**当场抓到一个真死配置**:
+  `app.auth.rate-limit-backend` 无对应字段(`@ConditionalOnProperty` 装配期开关)。天生不该有字段的键走
+  `AppProperties.EXEMPT_UNKNOWN_KEYS` 逐条登记 + `AppPropertiesExemptKeysAdvisor` 只放行清单点名的 unbound 记录(非吞异常)。
+- 守卫测试 `AppPropertiesBindingGuardTest`: 每个 `app.*` 键须能走到字段否则报孤儿 / 豁免清单不得过期否则报假旋钮 /
+  集合名单一来源 + 安全基线生效值。**反向验证过**: 把 `kb-only` 改成 `kb-only-typo` 会让启动与测试双双变红。
+
+**第 2 批 — api 重排模式 + 阈值判定移到重排之后**:
+- `DashScopeReranker`(mode=`api`)用 JDK HttpClient 直连 DashScope 文本排序(Spring AI 2.0.1 OpenAI 模块无 rerank 抽象,
+  且该接口非 OpenAI 兼容格式); 失败一律 WARN 节流回退 score。`RagProps` 增 base-url/model/api-key/timeout/candidates。
+- 阈值过滤从"召回即过滤"改到"重排之后": 让重排看到全量候选(第 6 名那种低余弦分但答得上的段落才有机会进上下文)。
+  出口结论不变(`OutcomeResolver` 读未截断的 `semanticMaxScore`); 过滤器读 `DocumentMeta.semanticScore` 而非 `doc.getScore()`。
+- 实测(公共端点, 同一 Key): `qwen3.7-text-rerank`/`gte-rerank-v2` 可用, `gte-rerank`(v1) AccessDenied;
+  该接口会**间歇性**抛 `InvalidParameter: Required body invalid`(同一条请求体前一秒失败后两次成功)——见 `DashScopeReranker` 类注释。
+
+**验证**: 两批各自 `mvn test` 全绿(253→264, 含 12 条 ArchUnit); 实启确认严格绑定下正常启动、
+`--app.auth.rate-limit-backend=memory` 仍能切限流实现、`--app.rag.rerank-mode=api` 正常启动健康 UP。
+rerank 完整链路用本地 echo 服务验过(URL/鉴权头/请求体/index 回填/两路分数共存), 未把真实密钥带出本机。
 
 ---
 
