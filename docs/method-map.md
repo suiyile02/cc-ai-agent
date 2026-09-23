@@ -208,7 +208,8 @@
 |---|---|---|
 | `loadHistory(sessionId,historyTokenBudget)` | 取窗口消息并做 Token 收敛（前置摘要段）；**请求路径零 LLM** | 装配器 |
 | `append(sessionId,user,assistant)` | 写回一轮（**append-only**，`ChatMemoryAppender`；与摘要裁剪同用 per-session 锁） | 收尾 |
-| `summarizeIfNeededAsync(sessionId)` | `@Async(auditExecutor)`：超阈值则生成摘要并裁剪 | 收尾 |
+| `summarizeIfNeededAsync(sessionId)` | `@Async(auditExecutor)`：超阈值则生成摘要并裁剪；成功 INFO 带**触发判据**(条数/Token 哪个过线, 如`触发=[条数 22>20]`)，触发生成失败补 WARN(原为静默 return) | 收尾 |
+| `triggerReason(size,cfg,countTrigger,tokenTrigger)` | 组装"本轮为何触发摘要"的可读串(包私有, 便于单测钉死文案) | `summarizeIfNeededAsync` |
 | `messageCount(sessionId)` | 走 `COUNT(*)`（`ChatMemoryCounter`），不反序列化历史 | 改写触发判定 |
 | `recentMessages(sessionId,limit)` | 最近 N 条（改写参考） | `QueryRewriter` |
 | `summaryOf` / `readSummary` / `writeSummary` | 摘要读写（upsert） | 装配、裁剪、会话回显 |
