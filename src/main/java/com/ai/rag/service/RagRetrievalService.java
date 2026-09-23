@@ -78,13 +78,18 @@ public class RagRetrievalService implements RagRetriever {
     /**
      * 检索执行体（被 {@link #retrieveOutcome} 包在限时调用内）。
      *
+     * <p>顺序是 <b>召回 → 融合 → 重排 → 阈值过滤 → Top-K</b>：阈值刻意排在重排之后。
+     * 判"有没有依据"用的是语义路最大分({@code semanticMaxScore}, 见
+     * {@link com.ai.rag.OutcomeResolver}), 它与过滤时机无关, 所以出口结论不变；变的是注入内容——
+     * 重排得以看到全部候选，第 6 名那种"余弦分低但确实答得上"的段落才有机会被捞进上下文。
+     *
      * @param query     检索问题
      * @param topK      最终注入 Top-K
      * @param threshold 语义路相似度阈值
      * @return 检索结果
      */
     private RetrievalOutcome doRetrieve(String query, int topK, double threshold) {
-        HybridRecaller.Recall recall = recaller.recall(query, topK, threshold);
+        HybridRecaller.Recall recall = recaller.recall(query, topK);
         if (recall.nothingUsable()) {
             log.warn("向量库与关键词索引均不可用(未配置 Embedding 或未入库)，RAG 降级为空上下文");
             return RetrievalOutcome.none();
@@ -93,8 +98,35 @@ public class RagRetrievalService implements RagRetriever {
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
                 : mergeAndRerank(query, recall, topK);
-        return new RetrievalOutcome(hits, true, recall.semantic().size(), recall.keyword().size(),
+        return new RetrievalOutcome(filterByThreshold(hits, threshold), true,
+                countPassed(recall.semantic(), threshold), recall.keyword().size(),
                 false, recall.semanticMaxScore());
+    }
+
+    /**
+     * 阈值过滤: 只看语义路的余弦分, 没有该分的候选一律保留。
+     *
+     * <p><b>读 metadata 而非 {@code doc.getScore()}</b>: 重排之后 {@code score} 已被融合分/模型相关度分
+     * 占用(不同策略不同量纲), 语义原始分只挂在 {@code semantic_score} 上——读错字段等于阈值失效。
+     *
+     * <p>"无余弦分"只有两种来源——纯 BM25 命中(词面命中不代表语义相关, 但它已由重排竞争过名次),
+     * 或向量库实现没回填分数。后者若按 0 处理会把整路清零, 因此这里选择保留(与原实现同口径)。
+     */
+    static List<Document> filterByThreshold(List<Document> hits, double threshold) {
+        return hits.stream().filter(d -> {
+            Double semantic = DocumentMeta.semanticScore(d);
+            return semantic == null || semantic >= threshold;
+        }).toList();
+    }
+
+    /** 语义路过阈条数(仅审计计数)。 */
+    private static int countPassed(List<Document> semantic, double threshold) {
+        return (int) semantic.stream()
+                .filter(d -> {
+                    Double s = DocumentMeta.similarity(d);
+                    return s == null || s >= threshold;
+                })
+                .count();
     }
 
     /**

@@ -44,7 +44,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 > 跑 `mvn test` 同理需要能连上 MySQL——建了 `application-local.yaml` 就直接 `mvn test`，不必再设环境变量。若你沿用了仓库里曾出现过的 `123456`，**请先改掉本机 MySQL 口令**——那个值已随历史提交公开。
 
 启动后：
-- 应用端口 **9090**；Qdrant 控制台 http://localhost:6333/dashboard
+- 应用端口 **9090**；Qdrant 控制台 http://localhost:6334/dashboard
 - 示例业务数据自动初始化（员工：张三/李四/王五；订单：SO20260101xxx）
 
 > 切换大模型只需环境变量：`AI_BASE_URL`、`AI_CHAT_MODEL`、`AI_EMBEDDING_MODEL`、`DASHSCOPE_API_KEY`。
@@ -111,7 +111,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `POST /api/ai/rag/search` | RAG 检索调试：**走对话同一条链**（短查询扩展→检索→出口判定），返回命中块（含余弦分/BM25 分/融合名次）与"这轮交给对话会判哪个出口"；`topK`/`similarityThreshold` 留空即跟随对话配置 |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **短查询扩展**（`ShortQueryExpander`：去空白后不足 6 字的提问先补全成完整检索句——裸词"产品"余弦仅 0.41 会被判无据，补全后可达 0.52~0.70；扩展成功的轮次视为"已改写"，不参与语义缓存读写）→ **检索**（RAG/HYBRID 会话一律执行，工具轮除外；不再由关键词表预判"该不该查"）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `llm` 大模型重排(失败回退 score) / `none` 仅 RRF）→ **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **短查询扩展**（`ShortQueryExpander`：去空白后不足 6 字的提问先补全成完整检索句——裸词"产品"余弦仅 0.41 会被判无据，补全后可达 0.52~0.70；扩展成功的轮次视为"已改写"，不参与语义缓存读写）→ **检索**（RAG/HYBRID 会话一律执行，工具轮除外；不再由关键词表预判"该不该查"）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `api` 专用重排模型(DashScope 文本排序，配 `app.rag.rerank-base-url`+`rerank-model`，失败回退 score) / `llm` 对话大模型排序(失败回退 score) / `none` 仅 RRF → **相似度阈值过滤**(刻意排在重排之后：让重排看到全量候选，低余弦分但答得上的段落才有机会进上下文；出口判据读未截断的最大分，故结论不受影响) → **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
 
 ### 3.2.1 严格知识库模式（`app.chat.kb-only`，**默认开启**）
 

@@ -51,7 +51,7 @@ class HybridRecallerTest {
 
         ArgumentCaptor<SearchRequest> sent = ArgumentCaptor.forClass(SearchRequest.class);
 
-        recaller.recall("年假几天", 5, 0.45);
+        recaller.recall("年假几天", 5);
 
         org.mockito.Mockito.verify(store).similaritySearch(sent.capture());
         assertEquals(0.0, sent.getValue().getSimilarityThreshold(),
@@ -59,16 +59,19 @@ class HybridRecallerTest {
     }
 
     @Test
-    void subThresholdChunkIsFilteredOutButItsScoreIsStillRecorded() {
+    void recallKeepsSubThresholdChunksSoRerankCanSeeEveryCandidate() {
         VectorStore store = mock(VectorStore.class);
         when(store.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(chunk("低于阈值的分块", 0.42)));
         HybridRecaller recaller = recaller(store, emptyKeywordIndex());
 
-        HybridRecaller.Recall recall = recaller.recall("年假几天", 5, 0.45);
+        HybridRecaller.Recall recall = recaller.recall("年假几天", 5);
 
-        assertTrue(recall.semantic().isEmpty(), "0.42 未过 0.45 阈值, 不得进入注入集合");
-        assertEquals(0.42, recall.semanticMaxScore(), 1e-9);
+        // 阈值过滤已从召回阶段移走(改到重排之后): 这一层必须原样交出候选,
+        // 否则"余弦分偏低但确实答得上"的段落连被重排捞一次的机会都没有
+        assertEquals(1, recall.semantic().size(), "召回层不得按阈值丢弃候选");
+        assertEquals(0.42, recall.semanticMaxScore(), 1e-9,
+                "最大分照常记录——出口判据与 P3-6 定标都读这个未截断的观察值");
     }
 
     @Test
@@ -78,9 +81,9 @@ class HybridRecallerTest {
                 .thenReturn(List.of(chunk("高相关", 0.61), chunk("次相关", 0.50)));
         HybridRecaller recaller = recaller(store, emptyKeywordIndex());
 
-        HybridRecaller.Recall recall = recaller.recall("年假几天", 5, 0.45);
+        HybridRecaller.Recall recall = recaller.recall("年假几天", 5);
 
-        assertEquals(2, recall.semantic().size(), "两块都过阈值, 行为与改造前一致");
+        assertEquals(2, recall.semantic().size(), "两路结果原样透传");
         assertEquals(0.61, recall.semanticMaxScore(), 1e-9);
     }
 
@@ -90,7 +93,7 @@ class HybridRecallerTest {
         when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
         HybridRecaller recaller = recaller(store, emptyKeywordIndex());
 
-        HybridRecaller.Recall recall = recaller.recall("今天天气", 5, 0.45);
+        HybridRecaller.Recall recall = recaller.recall("今天天气", 5);
 
         assertEquals(0.0, recall.semanticMaxScore(), 1e-9);
     }
@@ -101,7 +104,7 @@ class HybridRecallerTest {
         when(store.similaritySearch(any(SearchRequest.class))).thenThrow(new RuntimeException("连接被重置"));
         HybridRecaller recaller = recaller(store, emptyKeywordIndex());
 
-        HybridRecaller.Recall recall = recaller.recall("年假几天", 5, 0.45);
+        HybridRecaller.Recall recall = recaller.recall("年假几天", 5);
 
         assertTrue(recall.semantic().isEmpty());
         assertEquals(0.0, recall.semanticMaxScore(), 1e-9);

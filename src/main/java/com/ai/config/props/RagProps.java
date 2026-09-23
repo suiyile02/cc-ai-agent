@@ -33,10 +33,41 @@ public class RagProps {
     private boolean hybridEnabled = true;
     /**
      * 重排模式：score=分数融合重排(默认, 语义相似度+BM25 归一化加权)；
-     * llm=调用大模型重排(需要模型可用, 失败自动回退 score)；
+     * api=调用专用重排模型(DashScope 文本排序接口, 失败自动回退 score)；
+     * llm=让对话大模型排序(需要模型可用, 失败自动回退 score)；
      * none=只做 RRF 排序、不做分数融合。
      */
     private String rerankMode = "score";
+    /**
+     * 重排服务地址({@code rerank-mode=api} 时使用), <b>填到 host(可带前缀)、不含排序路径</b>。
+     *
+     * <p>默认写阿里云百炼<b>公共</b>端点; 个人/企业专属 MaaS 实例的域名不通用, 需在
+     * application.yaml 或环境变量里覆盖。排序路径 {@value #RERANK_PATH} 由代码补齐
+     * (已含该路径时不重复拼接, 所以整条 URL 直接填这里也能用)。
+     */
+    private String rerankBaseUrl = "https://dashscope.aliyuncs.com";
+    /** 重排服务完整路径(与 base-url 拼接; DashScope 文本排序接口的固定路径)。 */
+    public static final String RERANK_PATH = "/api/v1/services/rerank/text-rerank/text-rerank";
+    /** 重排模型名(qwen3.7-text-rerank / gte-rerank 等同接口不同模型均可) */
+    private String rerankModel = "qwen3.7-text-rerank";
+    /**
+     * 重排接口密钥。留空时复用 {@code spring.ai.openai.api-key}(同一 DashScope 账号通常同键),
+     * 独立计费/独立权限的实例才需要单独注入。仓库内不放任何默认值。
+     */
+    private String rerankApiKey = "";
+    /**
+     * 重排调用超时毫秒(默认 3s)。
+     *
+     * <p>刻意给得短: 重排是"锦上添花"的一环, 超时即回退 score 融合, 不该把整轮对话拖慢。
+     * 它同时受 {@link #retrieveTimeoutMs} 的整段预算约束。
+     */
+    private long rerankTimeoutMs = 3000;
+    /**
+     * 送重排模型的候选条数上限(默认 10)。
+     *
+     * <p>按条计费且延迟随条数增长; 排在后面的候选本来也进不了 Top-K, 多送只是花钱。
+     */
+    private int rerankCandidates = 10;
     /**
      * 单次检索阶段超时毫秒(整段预算: 嵌入 + 向量库 + 关键词 + 重排, 默认 10s)。
      *
