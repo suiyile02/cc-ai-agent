@@ -49,13 +49,14 @@ public class ChatCompletionService {
      */
     public void complete(ChatSession session, String userMessage,
             ChatPreparationService.PreparedChat prep, String answer, Integer usage, long startMs) {
+        // 写回记忆/触发摘要/发布完成事件/写入语义缓存
         memoryService.append(session.getSessionId(), userMessage, answer);
         memoryService.summarizeIfNeededAsync(session.getSessionId());
         List<String> sourceNames = ChatSourceDisplay.sourceNames(prep.sources());
         publishCompleted(session, userMessage, answer, sourceNames,
                 System.currentTimeMillis() - startMs, prep.rw(), prep.rag().mode(),
                 prep.assembled() == null ? null : prep.assembled().composition(), usage);
-        // 写入语义缓存: 正缓存(本轮有知识库依据、问题未改写、回答非"未找到") +
+        // 写入语义缓存: 正缓存 只有"独立原始问题(未经过改写/扩展) + 真查到知识库依据 + 没走工具"的回答才进缓存
         // 负缓存(本轮判定为"无据可依"的拒答, 用于重复无据问题省一次模型调用)。
         // 本轮调用过工具 → 回答含业务库实时数据(员工联系方式/订单状态), 且缓存条目跨用户共享,
         // 因此正/负缓存一律不写(否则他人同问即命中这条带他人数据的答案)。

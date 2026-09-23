@@ -32,9 +32,11 @@ public final class OutcomeResolver {
         if (toolTurn) {
             return ChatOutcome.TOOL_DATA;
         }
+        // 无检索或降级检索，一律开放域应答
         if (outcome == null || !outcome.executed() || outcome.degraded()) {
             return ChatOutcome.ANSWERED_OPEN;
         }
+        // 判断向量库是否检索到内容
         boolean grounded = !outcome.hits().isEmpty()
                 && outcome.semanticCount() > 0
                 && outcome.semanticMaxScore() >= threshold;
