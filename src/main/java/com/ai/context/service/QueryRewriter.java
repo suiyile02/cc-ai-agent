@@ -2,6 +2,7 @@ package com.ai.context.service;
 
 import com.ai.common.Timeouts;
 import com.ai.config.AppProperties;
+import com.ai.config.props.ContextProps;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
 import com.ai.session.SessionType;
@@ -77,7 +78,7 @@ public class QueryRewriter {
      * @return 改写结果; 不满足触发条件或失败时返回原始问题(rewritten=false)
      */
     public RewriteResult rewrite(String sessionId, SessionType sessionType, String userMessage) {
-        AppProperties.Context.QueryRewrite cfg = appProperties.getContext().getQueryRewrite();
+        ContextProps.QueryRewrite cfg = appProperties.getContext().getQueryRewrite();
         if (!cfg.isEnabled() || sessionType == SessionType.AGENT
                 || userMessage == null || userMessage.isBlank()) {
             return new RewriteResult(userMessage, false);

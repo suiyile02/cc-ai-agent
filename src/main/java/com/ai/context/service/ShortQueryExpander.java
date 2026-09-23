@@ -2,6 +2,7 @@ package com.ai.context.service;
 
 import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;
+import com.ai.config.props.ContextProps;
 import com.ai.config.ChatClientProvider;
 import com.ai.prompt.PromptService;
 import com.ai.session.SessionType;
@@ -63,7 +64,7 @@ public class ShortQueryExpander {
      * @return 扩展结果; 不满足触发条件或任何失败均返回原问题(expanded=false)
      */
     public ExpandResult expand(SessionType sessionType, String query) {
-        AppProperties.Context.ShortQuery cfg = appProperties.getContext().getShortQuery();
+        ContextProps.ShortQuery cfg = appProperties.getContext().getShortQuery();
         if (!cfg.isEnabled() || sessionType == SessionType.AGENT || blank(query)) {
             return new ExpandResult(query, false);
         }

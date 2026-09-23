@@ -4,6 +4,7 @@ import com.ai.context.HistoryContext;
 
 import com.ai.common.TokenCounter;
 import com.ai.config.AppProperties;
+import com.ai.config.props.ContextProps;
 import com.ai.memory.ChatMemoryAppender;
 import com.ai.memory.ChatMemoryCounter;
 import com.ai.context.entity.ConversationSummary;
@@ -123,7 +124,7 @@ public class ConversationMemoryService implements ConversationMemory {
         }
         try {
             // 获取滚动摘要配置
-            AppProperties.Context.Summary cfg = appProperties.getContext().getSummary();
+            ContextProps.Summary cfg = appProperties.getContext().getSummary();
             List<Message> snapshot;
             String existing;
             synchronized (lockFor(sessionId)) {

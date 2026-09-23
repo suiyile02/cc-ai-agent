@@ -1,6 +1,7 @@
 package com.ai.system.service;
 
 import com.ai.config.AppProperties;
+import com.ai.config.props.LogRetentionProps;
 import com.ai.system.mapper.ChatLogMapper;
 import com.ai.memory.mapper.ChatMemoryRecordMapper;
 import com.ai.system.mapper.ContextLogMapper;
@@ -37,7 +38,7 @@ public class LogCleanupScheduler {
      */
     @Scheduled(cron = "${app.log-retention.cron:0 0 3 * * ?}")
     public void cleanup() {
-        AppProperties.LogRetention cfg = appProperties.getLogRetention();
+        LogRetentionProps cfg = appProperties.getLogRetention();
         if (!cfg.isEnabled()) {
             return;
         }
