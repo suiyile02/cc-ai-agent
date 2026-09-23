@@ -144,6 +144,7 @@
 | `RerankStrategy`（接口） | `mode()` / `rerank(query,candidates)` | 重排策略契约；D3 接模型时新增实现即可 | 工厂 |
 | `ScoreFusionReranker` | `rerank(...)` | `score` 模式：语义 0.6 + BM25 归一 0.4；单路直取该路分 | 工厂 / LLM 回退 |
 | `LlmReranker` | `rerank(...)` / `buildPrompt` / `parseOrder` | `llm` 模式：模型排 ≤10 条；异常/解析失败回退 score | 工厂 |
+| `DashScopeReranker` | `rerank(...)` / `requestBody` / `parseResults` | `api` 模式：直连 DashScope 文本排序 REST（Spring AI 无 rerank 抽象，故用 JDK HttpClient）。按 `output.results[].index` 找回候选、以 `relevance_score` 为最终分；密钥缺失/非 2xx/结构不符一律 WARN 回退 score | 工厂 |
 | `RrfOrderReranker` | `rerank(...)` | `none` 模式：保持 RRF 顺序并赋相对顺位分（首位 1.0） | 工厂 |
 | `RerankStrategyFactory` | `current()` | 按 `app.rag.rerank-mode` 取策略；未知值 WARN 回退 score | 编排 |
 | `RagContextRenderer` | `render(hits,tokenBudget)` | Token 预算 + 字符上限双重约束的上下文渲染（含注入防护标记） | 编排 |

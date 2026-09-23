@@ -25,8 +25,10 @@ class RerankStrategyFactoryTest {
         AppProperties props = new AppProperties();
         props.getRag().setRerankMode(mode);
         ChatClientProvider clientProvider = mock(ChatClientProvider.class);
-        return new RerankStrategyFactory(
-                List.of(score, rrfOrder, new LlmReranker(clientProvider, score)), props);
+        // 与生产装配同构: Spring 收集所有 RerankStrategy Bean, 这里手工列出四种实现
+        return new RerankStrategyFactory(List.of(score, rrfOrder,
+                new LlmReranker(clientProvider, score),
+                new DashScopeReranker(props, score, new com.fasterxml.jackson.databind.ObjectMapper(), "")), props);
     }
 
     private RetrievalCandidate candidate(String id, Double sem, Double kw) {
@@ -36,6 +38,8 @@ class RerankStrategyFactoryTest {
 
     @Test
     void resolvesConfiguredMode() {
+        assertInstanceOf(DashScopeReranker.class, factory("api").current(),
+                "api 模式必须解析到专用重排模型实现");
         assertInstanceOf(LlmReranker.class, factory("llm").current());
         assertInstanceOf(RrfOrderReranker.class, factory("none").current());
         assertInstanceOf(ScoreFusionReranker.class, factory("score").current());

@@ -14,9 +14,15 @@ import java.util.List;
 /**
  * 多路召回：语义向量路 + 关键词 BM25 路。
  *
- * <p>语义路的相似度阈值**在本地过滤而非交给向量库**：向量库一旦先过滤, 低于阈值的分块就永不返回,
- * 决策日志里能看到的分数全部 ≥阈值, 分布被从底部截断——拿它定标必然得出"阈值还能再提高"的错误结论。
- * 本地过滤与原实现等价(过阈值者必然是排名最前的那批), 但额外得到"过滤前最大分"。
+ * <p><b>本类不做阈值过滤</b>(两路都按原样返回), 阈值判定统一放到重排之后, 由
+ * {@link RagRetrievalService} 收口。两个理由:
+ * <ol>
+ *   <li><b>定标需要未截断的分数</b>: 一旦先按阈值过滤, 决策日志里能看到的分数全部 ≥阈值,
+ *       分布被从底部截断——拿它定标必然得出"阈值还能再提高"的错误结论;</li>
+ *   <li><b>重排必须看到全量候选</b>: 阈值是"字面/向量距离"判断, 排在第 6 位的低余弦分块完全可能是
+ *       唯一真正回答问题的段落(短查询、跨词表说法时尤其如此)。先过滤再重排等于让它失去了被捞回来的机会,
+ *       "调试页查得到、对话却答无据"的观感正来自这里。</li>
+ * </ol>
  *
  * <p>单一路失败只丢那一路（WARN 后返回空列表），不影响另一路与整体对话可用性。
  */
@@ -28,9 +34,9 @@ class HybridRecaller {
     /**
      * 两路召回结果与可用性标记。
      *
-     * @param semantic        语义路命中（已过阈值, 按相似度降序）
+     * @param semantic        语义路命中（**未经阈值过滤**, 按相似度降序）
      * @param keyword         关键词路命中（已按 BM25 降序）
-     * @param semanticMaxScore 语义路**过滤前**的最大相似度; 该路无分数可得时为 0
+     * @param semanticMaxScore 语义路的最大相似度; 该路无分数可得时为 0
      * @param vectorAvailable 向量库是否可用
      * @param keywordAvailable 关键词索引是否非空
      */
@@ -51,31 +57,25 @@ class HybridRecaller {
      * 执行两路召回。是否启用关键词路由 {@code app.rag.hybrid-enabled} 决定；
      * 关键词召回宽度取 {@code max(topK*2, 10)}，把收敛交给后续重排。
      *
-     * @param query     检索问题
-     * @param topK      最终注入条数（用于推算关键词路召回宽度）
-     * @param threshold 语义路相似度阈值
+     * <p>参数表里没有阈值: 召回阶段刻意与阈值无关(见类注释), 阈值判定在重排之后收口。
+     *
+     * @param query 检索问题
+     * @param topK  最终注入条数（用于推算关键词路召回宽度）
      * @return 两路结果与可用性标记
      */
-    Recall recall(String query, int topK, double threshold) {
+    Recall recall(String query, int topK) {
         VectorStore vectorStore = vectorStoreProvider.getIfAvailable();
         boolean keywordAvailable = !keywordIndex.isEmpty();
-        // 以 0 阈值召回: 让低于阈值的分数也能被观察到(定标依据), 阈值判定交给下面本地过滤
+        // 以 0 阈值召回: 低于阈值的分数也要能被观察到(定标依据), 且重排要看全量候选
         List<Document> raw = vectorStore == null
                 ? List.of() : semanticHits(vectorStore, query, topK);
         double semanticMaxScore = raw.stream().map(DocumentMeta::similarity)
                 .filter(java.util.Objects::nonNull)
                 .mapToDouble(Double::doubleValue).max().orElse(0.0);
-        List<Document> semantic = raw.stream()
-                // 分数不可得(null)时不作判定, 保留该候选——避免某个向量库实现不回填分数时整路清零
-                .filter(d -> {
-                    Double s = DocumentMeta.similarity(d);
-                    return s == null || s >= threshold;
-                })
-                .toList();
         boolean hybrid = appProperties.getRag().isHybridEnabled();
         List<Document> keyword = hybrid && keywordAvailable
                 ? keywordHits(query, Math.max(topK * 2, 10)) : List.of();
-        return new Recall(semantic, keyword, semanticMaxScore, vectorStore != null, keywordAvailable);
+        return new Recall(raw, keyword, semanticMaxScore, vectorStore != null, keywordAvailable);
     }
 
     /** 语义向量路（异常降级为空的该路结果）；阈值不在此处下发, 见 {@link #recall} */
