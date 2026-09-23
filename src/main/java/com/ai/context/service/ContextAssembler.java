@@ -7,6 +7,7 @@ import com.ai.context.HistoryContext;
 import com.ai.prompt.PromptService;
 import com.ai.common.TokenCounter;
 import com.ai.config.AppProperties;
+import com.ai.config.props.ContextProps;
 import com.ai.session.entity.ChatSession;
 import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagRetriever;
@@ -53,10 +54,10 @@ public class ContextAssembler {
      */
     public AssembledPrompt assemble(ChatSession session, String userMessage,
             List<Document> ragHits, ChatOutcome outcome, boolean rewritten) {
-        AppProperties.Context cfg = appProperties.getContext();
+        ContextProps cfg = appProperties.getContext();
         // 获取会话的 Token 默认预算配置
         int total = Math.max(0, cfg.getModelMaxTokens() - cfg.getReservedForAnswer());
-        AppProperties.Context.Budget budget = cfg.getBudget();
+        ContextProps.Budget budget = cfg.getBudget();
         int ragBudget = (int) (total * budget.getRag());
         int historyBudget = (int) (total * budget.getHistory());
         int userBudget = (int) (total * budget.getUser());

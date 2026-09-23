@@ -80,7 +80,8 @@
 
 | 类 | 方法 | 作用 |
 |---|---|---|
-| `AppProperties` | `@ConfigurationProperties("app")` 的嵌套段：`Rag`/`Storage`/`Chat`/`Auth`/`Demo`/`Cors`/`Context(+Budget/QueryRewrite/Summary/History)`/`LogRetention`/`SemanticCache`/`Ingestion`/`Concurrency`/`SessionTitle` | 全项目配置的唯一载体（含默认值与注释） |
+| `AppProperties` | 聚合根，只做分组：`rag`/`storage`/`chat`/`auth`/`demo`/`cors`/`context`/`logRetention`/`semanticCache`/`ingestion`/`concurrency`/`sessionTitle` | 各段实体在 `config/props/` 下按前缀一文件（`RagProps` ↔ `app.rag.*`…），**默认值的唯一来源**；`ignoreUnknownFields=false` 让 yaml 里绑不上的 `app.*` 键直接启动失败 |
+| `AppProperties.EXEMPT_UNKNOWN_KEYS` | 常量清单 | 登记"装配期开关"（bean 创建前就被 `@ConditionalOnProperty` 消费、天生不该有字段）的例外键；由 `AppPropertiesExemptKeysAdvisor` 在绑定收尾时逐条放行，`AppPropertiesBindingGuardTest` 反向校验清单不过期 |
 | `AsyncConfig` | `ingestionExecutor()` | 入库线程池 5/20/队列100 + `CallerRunsPolicy`（队列满由提交线程执行，不静默丢任务） |
 | | `sessionTitleExecutor()` | 标题精修 1/2/队列50 + **`AbortPolicy`**（唯一不回填请求线程的池：丢弃只损失"标题好看度"，回填则给对话凭空加几秒；拒绝由 `refineAsync` 捕获 WARN） |
 | | `auditExecutor()` | 审计与滚动摘要线程池（与入库解耦；同时消除多 TaskExecutor 的注入歧义） |

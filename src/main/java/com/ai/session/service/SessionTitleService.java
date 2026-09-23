@@ -3,6 +3,7 @@ package com.ai.session.service;
 import com.ai.common.Strings;
 import com.ai.common.Timeouts;
 import com.ai.config.AppProperties;
+import com.ai.config.props.SessionTitleProps;
 import com.ai.config.ChatClientProvider;
 import com.ai.session.entity.ChatSession;
 import com.ai.session.mapper.ChatSessionMapper;
@@ -294,7 +295,7 @@ public class SessionTitleService {
         return null;
     }
 
-    private AppProperties.SessionTitle config() {
+    private SessionTitleProps config() {
         return appProperties.getSessionTitle();
     }
 }

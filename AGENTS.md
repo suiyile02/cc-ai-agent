@@ -23,7 +23,7 @@ com.ai
 │                 · GlobalExceptionHandler · 工具类(Strings/MessageTextRenderer/Timeouts/DateParamUtils)
 │                 · Token 计量(TokenCounter 接口 / JtokTokenCounter 精确实现 / HeuristicTokenCounter 备用)
 ├── aspect        全局切面层: 跨模块 AOP 统一管理(SelfOrAdminAspect 授权 · ToolCallLogAspect 工具日志)
-├── config        全局配置层: AppProperties · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
+├── config        全局配置层: AppProperties(聚合根) + props/*Props(各段实体与默认值) · 异步池 · ChatClient 装配 · MVC/跨域 · MyBatis-Plus 装配 · 种子数据
 ├── prompt        提示词模板装配(PromptService, classpath:/prompts/*.st)
 ├── rag           RAG 能力模块: 模块根=对外契约(RagRetriever/IntentRouter/RagMode/RetrievalOutcome/
 │                 ChatOutcome/OutcomeResolver 契约面/SourceVO)
@@ -90,7 +90,16 @@ com.ai
 
 - **Spring AI:** 优先直接使用 `ChatClient`，不创建多余包装层。
 - **MyBatis-Plus:** 优先 `BaseMapper` + `LambdaQueryWrapper`，不手写 XML；只在复杂 SQL 时自定义 @Select/XML。
-- **配置:** 保持 `application.yaml` 整洁，只保留用到的配置。
+- **配置(默认值单一来源 = Java):** 各段配置与其默认值只在 `config/props/*Props` 里写一次,
+  `application.yaml` 只保留两类键——①环境相关需经环境变量注入的(端点/口令/集合名/模型标签/CORS 来源),
+  ②安全基线与成本闸门(`kb-only`/`dev-user-header-enabled`/`seed-enabled`/各类超时与上限)。
+  **新增配置项时不要顺手往 yaml 抄一份默认值**(那正是历史上"Java 与 yaml 四处漂移"的成因:
+  `model-label`、`semantic-cache.ttl-hours`、`session-title.model-enabled`、`query-rewrite.timeout-ms`
+  都各说过两套数字)。改业务调参直接改 props 类的字段初值。
+- **严格绑定不许放宽:** `AppProperties` 开了 `ignoreUnknownFields=false`(Boot 4 默认为 true, 会静默忽略
+  绑不上的键)。yaml 里出现拼错/已删除的 `app.*` 键时**启动即失败**, 这是刻意的; 若某键天生不该有字段
+  (bean 创建前就被 `@ConditionalOnProperty` 消费的装配期开关), 走 `AppProperties.EXEMPT_UNKNOWN_KEYS`
+  登记, 而不是关掉严格绑定。
 - **单一事实来源(SSOT):** 同一件事禁止在两处独立配置——Qdrant 集合名以 `app.rag.collection-name`
   为唯一事实来源, `spring.ai.vectorstore.qdrant.collection-name` 引用 `${app.rag.collection-name}`;
   新增配置遇到"框架与业务代码各读一份"时, 同样让一方引用另一方。
@@ -220,7 +229,7 @@ com.ai
   - **意图路由结果缓存已删除**(P3-7 B 批): 旧 `CachingIntentRouter`(@Primary 装饰器)把"问题→路由结果"
     缓存进 Redis(`rag:intent:v{version}:{sha256}`, TTL 60 分钟, 另有 `IntentCacheAdmin` +
     `DELETE /api/system/intent-cache` 版本自增失效)。**删除理由**: 它缓存的判定在 A 批后只剩"是否工具轮",
-    而底层是对 69 个人工关键词(内部词表 58 + 工具词表 11, 见 `AppProperties.Rag`)做内存 `contains` 扫描(微秒级、确定性), 每次判定反而多付两次 Redis 往返;
+    而底层是对 69 个人工关键词(内部词表 58 + 工具词表 11, 见 `config/props/RagProps`)做内存 `contains` 扫描(微秒级、确定性), 每次判定反而多付两次 Redis 往返;
     并且它有一致性隐患——版本号跨重启存活, 改词表而忘记调失效接口时旧结论会在 TTL 内继续生效。
     **不要再为路由结果加缓存**: 判据已换成检索分数, 缓存预判既无收益也会让审计里的"预判 vs 出口"对照失真。
      Redis 不可用时的降级口径从此少一项(见"Redis 使用与降级约定")。

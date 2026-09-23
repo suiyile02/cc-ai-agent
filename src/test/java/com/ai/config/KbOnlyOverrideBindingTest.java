@@ -11,13 +11,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code app.chat.kb-only=true} 时的端到端绑定与生效验证。
+ * {@code app.chat.kb-only} 的<b>覆盖路径</b>验证(键名 → 字段 → 实际生效)。
  *
- * <p>用非默认值断言，才能真正证明键名绑到了字段（默认值 false 与"绑定失败留在 false"无法区分）；
- * 并顺带确认 Spring 注入的 {@link PromptService} 在该配置下确实选出严格模板。
+ * <p>用非默认值 false 覆盖才能证明"这个键真的还能绑到字段上、并且能改变行为"——默认值已是 true,
+ * 只断言 true 无法区分"绑定成功"与"绑定失败停在别处"。它同时是严格绑定开关的回归哨兵: 若将来有人
+ * 把 kb-only 改名而忘了改 yaml, {@code AppPropertiesBindingGuardTest} 会在启动期就报出来, 本测试则
+ * 会从"覆盖不再生效"的角度再报一次。仓库默认值本身由 {@link KbOnlyDefaultBindingTest} 守。
  */
 @SpringBootTest(properties = "app.chat.kb-only=false")
-class KbOnlyEnabledBindingTest {
+class KbOnlyOverrideBindingTest {
 
     @Resource
     private AppProperties appProperties;
