@@ -177,4 +177,19 @@ class ConversationMemoryServiceTest {
         verify(summarizer).summarize(any(), anyList());
         verify(repository).saveAll(eq("s1"), anyList());
     }
+
+    /**
+     * 触发原因串是本轮改动的全部价值所在(日志要能回答"为什么这轮摘要了"), 直接钉死文案。
+     */
+    @Test
+    void triggerReasonNamesTheTriggeredCriterion() {
+        var cfg = appProperties.getContext().getSummary();
+        cfg.setTriggerMessages(20);
+        cfg.setTriggerTokens(3000);
+
+        assertEquals("条数 21>20", service.triggerReason(21, cfg, true, false), "仅条数命中");
+        assertEquals("Token>3000", service.triggerReason(5, cfg, false, true), "仅 Token 命中");
+        assertEquals("条数 21>20, Token>3000", service.triggerReason(21, cfg, true, true),
+                "两者都命中时都要出现且顺序稳定");
+    }
 }

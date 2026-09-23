@@ -127,10 +127,15 @@ public class ConversationMemoryService implements ConversationMemory {
             ContextProps.Summary cfg = appProperties.getContext().getSummary();
             List<Message> snapshot;
             String existing;
+            // 触发判据(供成功/失败两处日志复用, 回答"这一轮为什么触发了摘要")
+            int historySize;
+            boolean countTrigger;
+            boolean tokenTrigger;
             synchronized (lockFor(sessionId)) {
                 List<Message> all = new ArrayList<>(memoryRepository.findByConversationId(sessionId));
-                boolean countTrigger = all.size() > cfg.getTriggerMessages();
-                boolean tokenTrigger = cfg.getTriggerTokens() > 0
+                historySize = all.size();
+                countTrigger = all.size() > cfg.getTriggerMessages();
+                tokenTrigger = cfg.getTriggerTokens() > 0
                         && tokenCounter.count(all) > cfg.getTriggerTokens();
                 if (!cfg.isEnabled() || all.size() <= cfg.getKeepRecentMessages()
                         || (!countTrigger && !tokenTrigger)) {
@@ -140,10 +145,15 @@ public class ConversationMemoryService implements ConversationMemory {
                 int keep = Math.min(cfg.getKeepRecentMessages(), all.size());
                 snapshot = new ArrayList<>(all.subList(0, all.size() - keep));
             }
+            String triggerReason = triggerReason(historySize, cfg, countTrigger, tokenTrigger);
 
             ConversationSummarizer.SummaryResult result = summarizer.summarize(existing, snapshot);
             if (!result.updated()) {
-                return; // 摘要失败: 保留现状(含全量历史), 下轮写回后再次触发
+                // 已判定要摘要却生成失败: 保留现状(含全量历史), 下轮写回后再触发。
+                // 不补这行就完全静默——排查"某轮为何没摘要成"时是盲区(降级须可见约定)。
+                log.warn("会话摘要已触发但生成未更新(保留全量历史, 下轮再试): sessionId={}, 触发=[{}]",
+                        sessionId, triggerReason);
+                return;
             }
 
             synchronized (lockFor(sessionId)) {
@@ -152,14 +162,39 @@ public class ConversationMemoryService implements ConversationMemory {
                 writeSummary(sessionId, result.summary());
                 memoryRepository.saveAll(sessionId,
                         new ArrayList<>(all.subList(all.size() - keep, all.size())));
-                log.info("会话摘要已更新并裁剪历史: sessionId={}, 摘要 {} tok, 保留 {} 条消息",
-                        sessionId, tokenCounter.count(result.summary()), keep);
+                log.info("会话摘要已更新并裁剪历史: sessionId={}, 触发=[{}], 摘要 {} tok, 保留 {} 条消息",
+                        sessionId, triggerReason, tokenCounter.count(result.summary()), keep);
             }
         } catch (Exception e) {
             log.warn("异步滚动摘要失败(保留现状, 下轮再触发): {}", e.getMessage());
         } finally {
             summarizing.remove(sessionId);
         }
+    }
+
+    /**
+     * 组装"本轮为何触发摘要"的可读说明: 条数阈值与 Token 阈值哪个(或都)命中, 各带上实际值与阈值,
+     * 便于从日志直接判断是刚过线还是远超(定标 trigger-messages / trigger-tokens 时的现场依据)。
+     *
+     * @param historySize  触发时的历史消息条数
+     * @param cfg          摘要配置(提供阈值)
+     * @param countTrigger 是否因条数超阈值触发
+     * @param tokenTrigger 是否因 Token 超阈值触发
+     * @return 人读判据串, 形如 "条数 21>20" / "Token 3200>3000" / 两者以 ", " 连接
+     */
+    String triggerReason(int historySize, ContextProps.Summary cfg,
+                         boolean countTrigger, boolean tokenTrigger) {
+        StringBuilder sb = new StringBuilder();
+        if (countTrigger) {
+            sb.append("条数 ").append(historySize).append('>').append(cfg.getTriggerMessages());
+        }
+        if (tokenTrigger) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append("Token>").append(cfg.getTriggerTokens());
+        }
+        return sb.toString();
     }
 
     /**
