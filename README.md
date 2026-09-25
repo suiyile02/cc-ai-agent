@@ -247,24 +247,3 @@ docker-compose.yml          Qdrant+MySQL
 > 全量流程与逐方法说明（Markdown/Mermaid，可随代码一起 review）见 [docs/flow-map.md](docs/flow-map.md)（20 张图：全景、启动装配、鉴权横切、认证用例、知识库上传与状态机、对话前置/同步/流式、混合检索、上下文装配、缓存写入闸门、工具与切面、审计落库、会话与记忆、前端映射、降级总表、存储键空间、线程模型、e2e 对照、偏差清单）与 [docs/method-map.md](docs/method-map.md)（133 个类逐方法作用与调用方）。
 
 > 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（标题→改写→短查询扩展→检索→出口判定→语义缓存查询→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
-
-## 6. 已知简化与后续路线（非阻塞项）
-
-- **前端**：已提供独立仓库 `../ai-agent-web`（Vue 3.5 + Vite 7 + Pinia + axios，自写样式无组件库；5 个视图：登录 / 对话 / 知识库 / 检索调试 / 系统日志），调用面与 §3 端点一一对应（见 `docs/flow-map.md` §17）。后端仍是主交付物，前端未纳入本仓库的构建与测试。
-- **存量数据库升级**：本版本新增 `sys_user.role` 与 `tool_call_log`/`rag_decision_log`/`context_log` 的 `user_id` 列。已有库需手动执行一次 `db/upgrade/2026-09-authorization.sql`（MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，无法随启动脚本幂等执行）；新库由建表脚本直接生效。
-- **表/列注释补齐**：脚本已为 11 张表补齐表注释、66 个缺注释列补齐列注释。已有库执行一次 `db/upgrade/2026-09-column-comments.sql`（该脚本由 existing 库的真实结构生成，仅追加 `COMMENT`，不改类型/可空/默认值；重复执行无害）。**已知历史差异（脚本刻意未动）**：`employee`/`orders`/`sys_user`/`rag_decision_log` 的 `created_at`/`updated_at` 仍是早期 Hibernate 建表遗留的 `datetime(6) NULL`（无默认值），而建表脚本声明为 `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`；如需对齐需另行评估（涉及 NOT NULL 变更，须先确认存量无 NULL 值）。
-- **chat_log.total_tokens**：已采集（从模型响应 `getMetadata().getUsage()` 取总量，配合 `TokenCounter` 的上下文预算审计 `context_log`）；模型不返回 usage 时该列为空。
-- **删除文档**：物理删除记录 + 按 `doc_id` 过滤检索出向量点后精确清理（向量库不可用时记录日志并继续），文件删除尽力而为。
-- **表范围**：核心 5 张表见 `db/create_table.sql`；扩展表 `employee` / `orders` / `sys_user` / `rag_decision_log` / `conversation_summary` / `context_log` 见 `db/schema-mysql-extra.sql`，由启动期 `spring.sql.init` 幂等执行建表（仅 MySQL）。
-- **关键词召回索引(KeywordIndex)为进程内存实现**：与外部 Qdrant 向量库相互独立，入库/删除/重处理自动同步增删；应用重启后由 `KeywordIndexRebuilder` 从 Qdrant payload 自动重建（不重新向量化，秒级完成），可用 `app.rag.auto-rebuild-index=false` 关闭。
-- **重排模式**：默认 `score`(纯计算)；`llm` 模式每轮额外调用一次模型对候选排序(失败自动回退 score)，请注意额外成本与延迟。
-- **Qdrant 维度/量化**：由 Spring AI 自动管理集合；海量数据建议按需求第 9 章启用 HNSW 调参与 Scalar Quantization。
-- **测试用例**：单元测试 247 例（Mockito，含 ArchUnit 架构守护 12 条规则）用 `mvn test` 运行；端到端脚本 `docs/seed/e2e_test.py` 覆盖 52 项断言（注册/登录→会话→多轮对话含工具与改写→SSE→日志授权→语义缓存命中与失效→知识库增删→异常路径），需应用已启动且 MySQL/Qdrant/Redis 可用。脚本段 1 会清空语义缓存建立冷基线，可重复执行。
-
-## 7. 常见问题
-
-- **401/403/404**：检查 `DASHSCOPE_API_KEY`、`AI_BASE_URL`、模型名（qwen-plus 是否开通）；百炼控制台核实。
-- **上传后状态一直为 1 或变 3**：查看 `knowledge_document.error_message`；多为 Embedding 未配置/额度不足/文件解析失败。列表接口已返回 errorMessage。
-- **问答答“未找到相关信息”**：先看 `/api/ai/rag/search` 响应里的 `answerOutcome` 与 `semanticMaxScore`——该接口与对话同一条链，它判"无据拒答"就是对话的真实结论。常见三种原因：① 库里确实没有（`keywordCount` 与 `semanticCount` 都很低）；② 问题太短导致余弦偏低（关掉 `expandShortQuery` 对比即可看出扩展有没有生效）；③ 阈值高于真实分布（`semanticMaxScore` 略低于 `similarityThreshold`，见 roadmap P3-6）。⚠ 命中列表里的 `score` 是融合相对名次（仅词面命中的榜首恒 1.0），**不能当相似度看**，判相关性只看 `semanticScore`。
-- **切换向量库维度不一致**：同一 Embedding 模型产出的维度必须一致；换模型请清空旧集合/旧库再入库。
-- **登录与对话都正常，但缓存全不命中/限流好像失效**：看启动日志的 `Redis 自检失败(不可用)` 一行，它会列出当前处于降级态的能力清单；运行期同类降级为 WARN（60 秒一条）。Redis 未启动时应用按设计继续服务，这不是故障。
