@@ -64,11 +64,17 @@ public class RagRetrievalService implements RagRetriever {
             RetrievalOutcome outcome = timeoutMs > 0
                     ? Timeouts.call(() -> doRetrieve(query, topK, threshold), timeoutMs)
                     : doRetrieve(query, topK, threshold);
+            long cost = System.currentTimeMillis() - start;
+            io.micrometer.core.instrument.Metrics
+                    .timer(com.ai.observability.ChatMetrics.RETRIEVAL)
+                    .record(cost, java.util.concurrent.TimeUnit.MILLISECONDS);
             log.info("RAG 检索完成: {}ms, 语义 {} + 关键词 {} -> 最终 {} 段",
-                    System.currentTimeMillis() - start, outcome.semanticCount(),
+                    cost, outcome.semanticCount(),
                     outcome.keywordCount(), outcome.hits().size());
             return outcome;
         } catch (Exception e) {
+            io.micrometer.core.instrument.Metrics
+                    .counter(com.ai.observability.ChatMetrics.RETRIEVAL_DEGRADED).increment();
             log.warn("RAG 检索超时/失败(预算 {}ms, 实际 {}ms), 本轮降级为空上下文: {}",
                     timeoutMs, System.currentTimeMillis() - start, e.getMessage());
             return RetrievalOutcome.executedEmpty();

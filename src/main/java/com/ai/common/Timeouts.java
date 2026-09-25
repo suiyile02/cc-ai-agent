@@ -1,5 +1,6 @@
 package com.ai.common;
 
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -52,7 +53,19 @@ public final class Timeouts {
             java.lang.System.err.println("[Timeouts] LLM 并发调用 inFlight=" + inFlight + ", peak=" + peak);
         }
         try {
-            Future<T> future = VIRTUAL.submit(task::get);
+            // MDC 传播: 虚拟线程是另一个线程, 提交前快照当前 traceId, 任务内恢复、结束清理——
+            // 改写/摘要/检索的限时日志因此都带请求 traceId(一处改, 所有限时调用受益)
+            Map<String, String> mdc = org.slf4j.MDC.getCopyOfContextMap();
+            Future<T> future = VIRTUAL.submit(() -> {
+                if (mdc != null) {
+                    org.slf4j.MDC.setContextMap(mdc);
+                }
+                try {
+                    return task.get();
+                } finally {
+                    org.slf4j.MDC.clear();
+                }
+            });
             try {
                 return future.get(timeoutMs, TimeUnit.MILLISECONDS);
             } catch (TimeoutException e) {

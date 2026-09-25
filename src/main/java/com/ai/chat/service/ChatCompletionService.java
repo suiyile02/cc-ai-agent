@@ -56,12 +56,19 @@ public class ChatCompletionService {
         publishCompleted(session, userMessage, answer, sourceNames,
                 System.currentTimeMillis() - startMs, prep.rw(), prep.rag().mode(),
                 prep.assembled() == null ? null : prep.assembled().composition(), usage);
+        // 可观测性埋点: 出口分布(回答质量画像) + Token 成本
+        ChatOutcome outcome = prep.rag().chatOutcome();
+        io.micrometer.core.instrument.Metrics.counter(com.ai.observability.ChatMetrics.OUTCOME,
+                "outcome", outcome.name()).increment();
+        if (usage != null && usage > 0) {
+            io.micrometer.core.instrument.Metrics
+                    .counter(com.ai.observability.ChatMetrics.MODEL_TOKENS).increment(usage);
+        }
         // 写入语义缓存: 正缓存 只有"独立原始问题(未经过改写/扩展) + 真查到知识库依据 + 没走工具"的回答才进缓存
         // 负缓存(本轮判定为"无据可依"的拒答, 用于重复无据问题省一次模型调用)。
         // 本轮调用过工具 → 回答含业务库实时数据(员工联系方式/订单状态), 且缓存条目跨用户共享,
         // 因此正/负缓存一律不写(否则他人同问即命中这条带他人数据的答案)。
         int toolCalls = prep.toolCalls().get();
-        ChatOutcome outcome = prep.rag().chatOutcome();
         if (toolCalls > 0) {
             log.info("本轮发生 {} 次工具调用, 跳过语义缓存写入: session={}, question={}",
                     toolCalls, session.getSessionId(), prep.retrievalQuery());
@@ -85,6 +92,8 @@ public class ChatCompletionService {
      */
     public void completeCached(ChatSession session, String userMessage,
             ChatPreparationService.PreparedChat prep, long startMs) {
+        io.micrometer.core.instrument.Metrics.counter(com.ai.observability.ChatMetrics.OUTCOME,
+                "outcome", com.ai.rag.ChatOutcome.ANSWERED_FROM_CACHE.name()).increment();
         memoryService.append(session.getSessionId(), userMessage, prep.cachedAnswer().content());
         memoryService.summarizeIfNeededAsync(session.getSessionId());
         publishCompleted(session, userMessage, prep.cachedAnswer().content(),

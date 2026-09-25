@@ -424,6 +424,13 @@ com.ai
   (Qdrant 无 API Key 时暴露到局域网等于开放读写向量库)。
 - 拦截器 `AuthInterceptor` 保护 `/api/**`，通过 `UserContext` 暴露当前用户；`X-User-Id` 模拟登录默认关闭, **且仓库内无任何配置文件打开它**(dev profile 文件已删除)——本机需要时只能显式传 `--app.auth.dev-user-header-enabled=true`, 严禁在生产这样启动。
 
+### 可观测性(一期: traceId + Prometheus 指标)
+
+- **traceId 全链路**: `common/TraceIdFilter`(最高优先级 Filter)为每个请求透传/生成 `X-Request-Id` 写入 MDC 并回写响应头; 日志 pattern 含 `[%X{traceId}]`——**任何线程打的日志必须带 traceId**, 排查时拿响应头一条 grep 串全链路。
+- **异步段 MDC 传播(禁止遗漏)**: `@Async` 线程池用 `common/MdcTaskDecorator`(audit/ingestion/session-title 三池已挂); 限时调用统一走 `Timeouts.call`(内部已做快照/恢复); 流式前置(boundedElastic)在 `ChatService.chatStream` 手动捕获。**新增异步路径必须同步加 MDC 传播**。
+- **业务指标**(`observability/ChatMetrics` 集中定义指标名): 出口分布 `chat.outcome`(五出口)、Token 成本 `chat.model.tokens`、缓存命中 `semcache.hit/miss/negative`、检索耗时与降级 `rag.retrieval(_degraded)`、工具调用 `tool.calls`、流式静默超时 `chat.stream.idleTimeout`。经 `/actuator/prometheus` 暴露(需 `micrometer-registry-prometheus`)。
+- **埋点原则**: 只在入口/收尾等"结果确定"处插 1~2 行(全项目集中 5 个类), 中间过程靠日志+traceId; 指标/过滤器任何一环故障不得影响对话主流程。
+
 ### 统一返回值格式规范
 
 - 所有 Controller 返回 `Result<T>` 或 `Result<PageResult<T>>`，禁止直接返回 Entity。

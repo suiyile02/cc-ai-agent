@@ -104,7 +104,18 @@ public class ChatService {
         long start = System.currentTimeMillis();
 
         // 前置阶段：准备会话、用户消息、工具、检索结果与提示
-        Mono<PreparedChat> prepare = Mono.fromCallable(() -> preparation.prepare(session, userMessage))
+        // (boundedElastic 是另一个线程: 提交前快照 traceId, 前置日志因此带请求 traceId)
+        Map<String, String> mdc = org.slf4j.MDC.getCopyOfContextMap();
+        Mono<PreparedChat> prepare = Mono.fromCallable(() -> {
+                    if (mdc != null) {
+                        org.slf4j.MDC.setContextMap(mdc);
+                    }
+                    try {
+                        return preparation.prepare(session, userMessage);
+                    } finally {
+                        org.slf4j.MDC.clear();
+                    }
+                })
                 .subscribeOn(Schedulers.boundedElastic());
 
         Flux<ChatStreamEvent> flux;
@@ -180,6 +191,10 @@ public class ChatService {
                         finishStream(session, userMessage, prep, collected, start, usageHolder)))
                 .onErrorResume(e -> {
                     boolean idle = e instanceof java.util.concurrent.TimeoutException;
+                    if (idle) {
+                        io.micrometer.core.instrument.Metrics
+                                .counter(com.ai.observability.ChatMetrics.STREAM_IDLE_TIMEOUT).increment();
+                    }
                     String tip = idle
                             ? "【系统提示】模型长时间未生成内容(可能正在深度思考)，已终止本轮，请重试或简化问题。"
                             : "【系统提示】回答生成中断，请稍后重试。";

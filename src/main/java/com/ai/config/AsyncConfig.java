@@ -28,6 +28,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(20);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("doc-ingestion-");
+        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到异步入库
         // 队列满时由提交线程自己执行(降级为同步入库), 不静默丢弃任务
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
@@ -48,6 +49,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("audit-");
+        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到异步审计
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
@@ -71,6 +73,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("session-title-");
+        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到标题精修
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         return executor;

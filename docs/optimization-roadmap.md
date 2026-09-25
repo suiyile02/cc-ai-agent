@@ -291,6 +291,23 @@ rerank 完整链路用本地 echo 服务验过(URL/鉴权头/请求体/index 回
 
 ---
 
+## 已完成记录（2026-09-26, 可观测性闭环一期: traceId 全链路 + Prometheus 业务指标)
+
+补齐 C1(MDC traceId) 与指标层: **日志→指标→(告警规则在 Grafana 侧)闭环建成**。
+
+| 层 | 变更 | 验收证据 |
+|---|---|---|
+| 追踪 | 新增 `common/TraceIdFilter`(最高优先级 Filter: 透传/生成 `X-Request-Id` 写 MDC + 回写响应头 + 请求后清理); yaml 日志 pattern 加 `[%X{traceId}]` | 运行时: 响应头返回 `X-Request-Id=9fdc8ee8-455`, 日志 2 行(检索/前置)同带该编号 |
+| 异步 MDC 传播 | 新增 `common/MdcTaskDecorator` 挂到 audit/ingestion/session-title 三池; `Timeouts.call` 提交虚拟线程前快照/任务内恢复; `ChatService.chatStream` 前置 Mono 手动捕获 | 同步全链路 + 异步审计/改写/检索/流式前置日志均带 traceId |
+| 指标 | pom +`micrometer-registry-prometheus`; yaml 暴露 `prometheus` 端点 + `metrics.tags.application`; 新增 `observability/ChatMetrics` 集中指标名 | `/actuator/prometheus` 实测出现: `chat_outcome_total{outcome="ANSWERED_FROM_KB"} 1`、`chat_model_tokens_total 2381`、`semcache_miss_total 1`、`rag_retrieval_seconds_count 1` |
+| 埋点 | 出口计数(`ChatCompletionService` 三收尾)、Token 成本、缓存 hit/miss/negative(`SemanticAnswerCache`)、检索 Timer+降级计数(`RagRetrievalService`)、工具调用量/失败率(`ToolCallLogAspect`)、流式静默超时(`ChatService`) | 未触发的计数器(hit/degraded/tool/idle)按 Micrometer 语义首触才出现, 单测已锁逻辑 |
+
+**告警规则(Grafana 侧, 不改代码)**: 检索降级率>5%、模型失败率、缓存命中率环比骤降、5xx 率、JVM 内存——规则清单见交付说明。
+
+**回归**: 单测 265/265。二期(可选): logback JSON 格式接 ELK/Loki、Qdrant HealthIndicator、OTel 分布式(多服务时)。
+
+---
+
 ## 已完成记录（2026-09-22, E3① 改写熔断并发修复 + B2 单轮工具调用上限 + 补登记检索服务重构)
 
 | 项 | 变更 | 验收证据 |
@@ -730,7 +747,7 @@ okhttp 的 60s read timeout, 流被客户端主动 CANCEL。第一轮(24.5s)恰�
 
 ## 批次 C: 可观测与代码质量（约 1 天）
 
-### C1 MDC traceId 全链路
+### C1 MDC traceId 全链路（✅ 已实施 2026-09-26, 见可观测性闭环一期完成记录）
 - **现状**: 一次对话的改写/检索/工具/审计日志无法串联。
 - **方案**: `OncePerRequestFilter` 生成 traceId(优先透传 `X-Request-Id`)写入 MDC 并回写响应头;
   日志 pattern 追加 `%X{traceId}`; 异步段(boundedElastic/事件监听)在任务提交处复制 MDC 上下文。
