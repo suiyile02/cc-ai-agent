@@ -148,6 +148,10 @@ app:
     acquire-timeout-ms: 1000
 
 logging:
+  # [%X{traceId}] 由 TraceIdFilter 写入 MDC——一次请求在任何线程打的日志都带同一编号,
+  # 排查时拿响应头 X-Request-Id 一条 grep 串起全链路
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSS+08:00} %highlight(%-5p) [%X{traceId:-}] [%thread] %logger{36} : %m%n"
   level:
     com.ai: info
     org.springframework.ai: warn
@@ -157,12 +161,15 @@ logging:
 # 说明: MyBatis-Plus 为 Boot4 手工装配(见 MybatisPlusConfig), 不读取 mybatis-plus.* yaml 配置;
 # 关键项(驼峰映射/banner/审计填充/分页插件)均在该配置类中显式声明。
 
-# ================= 运维端点 =================
+# ================= 运维端点与可观测性 =================
 management:
   endpoints:
     web:
       exposure:
-        include: health,info     # 仅暴露健康检查与基本信息
+        include: health,info,metrics,prometheus   # prometheus 端点供 Grafana/Prometheus 抓取
+  metrics:
+    tags:
+      application: ai-agent    # 所有指标打应用标签, 多应用/多环境区分
   endpoint:
     health:
       probes:

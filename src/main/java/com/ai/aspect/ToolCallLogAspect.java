@@ -89,6 +89,10 @@ public class ToolCallLogAspect {
             throw e;
         } finally {
             entry.setDurationMs((int) (System.currentTimeMillis() - start));
+            io.micrometer.core.instrument.Metrics.counter(
+                    com.ai.observability.ChatMetrics.TOOL_CALLS,
+                    "tool", toolName, "status", entry.getStatus() == null ? "UNKNOWN" : entry.getStatus()
+            ).increment();
             try {
                 toolCallLogService.save(entry);
             } catch (Exception ex) {
