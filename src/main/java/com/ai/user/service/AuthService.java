@@ -10,6 +10,10 @@ import com.ai.user.dto.RegisterRequest;
 import com.ai.user.dto.UserVO;
 import com.ai.user.entity.SysUser;
 import com.ai.user.mapper.SysUserMapper;
+import com.ai.user.security.JwtTokenProvider.TokenPayload;
+import com.ai.user.security.LoginAttemptLimiter;
+import com.ai.user.security.LoginContext;
+import com.ai.user.security.TokenBlacklistService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,8 +28,8 @@ public class AuthService {
 
     private final SysUserMapper userMapper;
     private final JwtTokenProvider tokenProvider;
-    private final com.ai.user.security.LoginAttemptLimiter loginAttemptLimiter;
-    private final com.ai.user.security.TokenBlacklistService tokenBlacklistService;
+    private final LoginAttemptLimiter loginAttemptLimiter;
+    private final TokenBlacklistService tokenBlacklistService;
 
     /**
      * 注册新用户并返回自动登录态。
@@ -57,7 +61,7 @@ public class AuthService {
      * @throws BusinessException 用户名/密码错误(6003)或账号被禁用(6004)
      */
     @Transactional(readOnly = true)
-    public AuthVO login(com.ai.user.security.LoginContext ctx) {
+    public AuthVO login(LoginContext ctx) {
         LoginRequest request = ctx.request();
         // 登录失败限流: 锁定期内直接拒绝(不查库不比对, 防暴力破解)
         if (loginAttemptLimiter.isLocked(request.username().trim(), ctx.clientIp())) {
@@ -84,7 +88,7 @@ public class AuthService {
      * @param remaining 令牌剩余有效期毫秒
      */
     @Transactional(readOnly = true)
-    public void logout(com.ai.user.security.JwtTokenProvider.TokenPayload payload, long remaining) {
+    public void logout(TokenPayload payload, long remaining) {
         tokenBlacklistService.ban(payload.jti(), remaining);
     }
 

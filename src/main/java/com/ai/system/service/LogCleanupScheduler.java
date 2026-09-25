@@ -2,8 +2,13 @@ package com.ai.system.service;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.LogRetentionProps;
-import com.ai.system.mapper.ChatLogMapper;
+import com.ai.memory.entity.ChatMemoryRecord;
 import com.ai.memory.mapper.ChatMemoryRecordMapper;
+import com.ai.system.entity.ChatLog;
+import com.ai.system.entity.ContextLog;
+import com.ai.system.entity.RagDecisionLog;
+import com.ai.system.entity.ToolCallLog;
+import com.ai.system.mapper.ChatLogMapper;
 import com.ai.system.mapper.ContextLogMapper;
 import com.ai.system.mapper.RagDecisionLogMapper;
 import com.ai.system.mapper.ToolCallLogMapper;
@@ -43,17 +48,17 @@ public class LogCleanupScheduler {
             return;
         }
         LocalDateTime cutoff = LocalDateTime.now().minusDays(cfg.getRetentionDays());
-        int chatLog = chatLogMapper.delete(new LambdaQueryWrapper<com.ai.system.entity.ChatLog>()
-                .lt(com.ai.system.entity.ChatLog::getCreatedAt, cutoff));
-        int toolLog = toolCallLogMapper.delete(new LambdaQueryWrapper<com.ai.system.entity.ToolCallLog>()
-                .lt(com.ai.system.entity.ToolCallLog::getCreatedAt, cutoff));
-        int ragLog = ragDecisionLogMapper.delete(new LambdaQueryWrapper<com.ai.system.entity.RagDecisionLog>()
-                .lt(com.ai.system.entity.RagDecisionLog::getCreatedAt, cutoff));
-        int ctxLog = contextLogMapper.delete(new LambdaQueryWrapper<com.ai.system.entity.ContextLog>()
-                .lt(com.ai.system.entity.ContextLog::getCreatedAt, cutoff));
+        int chatLog = chatLogMapper.delete(new LambdaQueryWrapper<ChatLog>()
+                .lt(ChatLog::getCreatedAt, cutoff));
+        int toolLog = toolCallLogMapper.delete(new LambdaQueryWrapper<ToolCallLog>()
+                .lt(ToolCallLog::getCreatedAt, cutoff));
+        int ragLog = ragDecisionLogMapper.delete(new LambdaQueryWrapper<RagDecisionLog>()
+                .lt(RagDecisionLog::getCreatedAt, cutoff));
+        int ctxLog = contextLogMapper.delete(new LambdaQueryWrapper<ContextLog>()
+                .lt(ContextLog::getCreatedAt, cutoff));
         int memory = chatMemoryRecordMapper.delete(
-                new LambdaQueryWrapper<com.ai.memory.entity.ChatMemoryRecord>()
-                        .lt(com.ai.memory.entity.ChatMemoryRecord::getTimestamp, cutoff));
+                new LambdaQueryWrapper<ChatMemoryRecord>()
+                        .lt(ChatMemoryRecord::getTimestamp, cutoff));
         log.info("日志保留期清理完成: cutoff={}, chat={}, tool={}, rag={}, context={}, memory={}",
                 cutoff, chatLog, toolLog, ragLog, ctxLog, memory);
     }

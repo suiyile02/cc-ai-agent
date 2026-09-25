@@ -10,6 +10,7 @@ import com.ai.session.mapper.ChatSessionMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -195,7 +196,7 @@ public class SessionTitleService {
             var spec = client.prompt()
                     .system("你是会话标题生成器，只输出标题。")
                     .user(REFINE_PROMPT + Strings.truncate(question, PROMPT_QUESTION_MAX_CHARS));
-            spec.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
+            spec.options(OpenAiChatOptions.builder()
                     .extraBody(Map.of("enable_thinking", false)));
             String raw = Timeouts.call(() -> spec.call().content(), config().getTimeoutMs());
             persistRefined(sessionId, raw, fallbackTitle);

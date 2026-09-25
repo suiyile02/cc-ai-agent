@@ -1,5 +1,6 @@
 package com.ai.context.service;
 
+import com.ai.common.Timeouts;
 import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;
 import com.ai.config.props.ContextProps;
@@ -8,6 +9,7 @@ import com.ai.prompt.PromptService;
 import com.ai.session.SessionType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -79,7 +81,7 @@ public class ShortQueryExpander {
         try {
             String prompt = promptService.template("prompts/short-query-expand.st")
                     .replace("{{query}}", query.trim());
-            String raw = com.ai.common.Timeouts.call(() -> complete(prompt), cfg.getTimeoutMs());
+            String raw = Timeouts.call(() -> complete(prompt), cfg.getTimeoutMs());
             long elapsed = System.currentTimeMillis() - start;
             String expanded = sanitize(raw, cfg.getMaxChars());
             if (expanded == null || expanded.equals(query.trim())) {
@@ -107,7 +109,7 @@ public class ShortQueryExpander {
                 .user(prompt);
         // 补全是机械性任务, 注入 enable_thinking=false 关闭 qwen3 思维链(与改写/摘要同口径)
         if (appProperties.getContext().getShortQuery().isDisableThinking()) {
-            spec.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
+            spec.options(OpenAiChatOptions.builder()
                     .extraBody(Map.of("enable_thinking", false)));
         }
         return spec.call().content();

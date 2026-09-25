@@ -3,11 +3,13 @@ package com.ai.config;
 import com.ai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * 安全配置启动校验：prod 下 JWT 密钥缺失/过短/带占位符特征, 或令牌黑名单处于 fail-open 时拒绝启动。
@@ -40,7 +42,7 @@ public class SecurityConfigValidator implements ApplicationRunner {
      * @throws IllegalStateException prod 下密钥不合规, 或黑名单为 fail-open
      */
     @Override
-    public void run(org.springframework.boot.ApplicationArguments args) {
+    public void run(ApplicationArguments args) {
         if (!environment.matchesProfiles("prod")) {
             // 非生产: JWT_SECRET 留空由 JwtTokenProvider 生成一次性随机密钥(构造时已 WARN)
             return;
@@ -69,7 +71,7 @@ public class SecurityConfigValidator implements ApplicationRunner {
 
     /** 是否命中占位符特征(忽略大小写)——用于拦截"直接把示例值当生产密钥"的情况。 */
     private static boolean looksLikePlaceholder(String secret) {
-        String lower = secret.toLowerCase(java.util.Locale.ROOT);
+        String lower = secret.toLowerCase(Locale.ROOT);
         for (String marker : PLACEHOLDER_MARKERS) {
             if (lower.contains(marker)) {
                 return true;

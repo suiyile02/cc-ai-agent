@@ -8,12 +8,15 @@ import com.ai.context.ConversationMemory;
 import com.ai.session.SessionType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.transformation.CompressionQueryTransformer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 多轮查询改写器：基于 Spring AI {@link CompressionQueryTransformer} 把"对话历史 + 当前追问"
@@ -42,11 +45,10 @@ public class QueryRewriter {
     private final CompressionQueryTransformer transformer;
 
     /** 熔断状态: 连续失败次数(E3①: 并发请求线程自增, 用 AtomicInteger 防丢计数)与冷却截止时间 */
-    private final java.util.concurrent.atomic.AtomicInteger consecutiveFailures =
-            new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
     private volatile long breakerOpenUntil = 0;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public QueryRewriter(ConversationMemory memoryService, AppProperties appProperties,
             ChatClientProvider chatClientProvider) {
         this(memoryService, appProperties, chatClientProvider, null);
@@ -144,7 +146,7 @@ public class QueryRewriter {
         }
         // 改写是机械性压缩任务, 注入 enable_thinking=false 关闭 qwen3 思维链(实测大幅降延迟)
         if (appProperties.getContext().getQueryRewrite().isDisableThinking()) {
-            builder.defaultOptions(org.springframework.ai.openai.OpenAiChatOptions.builder()
+            builder.defaultOptions(OpenAiChatOptions.builder()
                     .extraBody(Map.of("enable_thinking", false)));
         }
         return CompressionQueryTransformer.builder().chatClientBuilder(builder).build();

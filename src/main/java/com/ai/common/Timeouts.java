@@ -1,12 +1,16 @@
 package com.ai.common;
 
+import org.slf4j.MDC;
+
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
@@ -19,9 +23,9 @@ public final class Timeouts {
     private static final ExecutorService VIRTUAL = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 并发上限(B4): 防止端点故障时改写/摘要调用无限堆积; 超限立即失败由调用方降级 */
-    private static final java.util.concurrent.Semaphore CONCURRENCY = new java.util.concurrent.Semaphore(50);
-    private static final java.util.concurrent.atomic.AtomicLong IN_FLIGHT = new java.util.concurrent.atomic.AtomicLong();
-    private static final java.util.concurrent.atomic.AtomicLong PEAK = new java.util.concurrent.atomic.AtomicLong();
+    private static final Semaphore CONCURRENCY = new Semaphore(50);
+    private static final AtomicLong IN_FLIGHT = new AtomicLong();
+    private static final AtomicLong PEAK = new AtomicLong();
 
     private Timeouts() {
     }
@@ -55,15 +59,15 @@ public final class Timeouts {
         try {
             // MDC 传播: 虚拟线程是另一个线程, 提交前快照当前 traceId, 任务内恢复、结束清理——
             // 改写/摘要/检索的限时日志因此都带请求 traceId(一处改, 所有限时调用受益)
-            Map<String, String> mdc = org.slf4j.MDC.getCopyOfContextMap();
+            Map<String, String> mdc = MDC.getCopyOfContextMap();
             Future<T> future = VIRTUAL.submit(() -> {
                 if (mdc != null) {
-                    org.slf4j.MDC.setContextMap(mdc);
+                    MDC.setContextMap(mdc);
                 }
                 try {
                     return task.get();
                 } finally {
-                    org.slf4j.MDC.clear();
+                    MDC.clear();
                 }
             });
             try {

@@ -1,5 +1,6 @@
 package com.ai.user.security;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -19,8 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 条目带最后访问时间, 由 {@link #evictStale(long)} 清理防内存增长: 触发点在失败记录路径,
  * 且仅在条目数超过 {@link #EVICT_THRESHOLD} 时才扫(否则每个新失败用户名/IP 都会永久驻留)。
  */
-@org.springframework.stereotype.Component
-@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+@Component
+@ConditionalOnProperty(
         name = "app.auth.rate-limit-backend", havingValue = "memory")
 public class InMemoryLoginAttemptLimiter implements LoginAttemptLimiter {
 

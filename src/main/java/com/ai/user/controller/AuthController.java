@@ -7,6 +7,9 @@ import com.ai.user.dto.AuthVO;
 import com.ai.user.dto.LoginRequest;
 import com.ai.user.dto.RegisterRequest;
 import com.ai.user.dto.UserVO;
+import com.ai.user.security.JwtTokenProvider.TokenPayload;
+import com.ai.user.security.LoginContext;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,9 +47,9 @@ public class AuthController {
      */
     @PostMapping("/login")
     public Result<AuthVO> login(@RequestBody @Valid LoginRequest request,
-            jakarta.servlet.http.HttpServletRequest httpRequest) {
+            HttpServletRequest httpRequest) {
         return Result.ok("登录成功", authService.login(
-                new com.ai.user.security.LoginContext(request, clientIp(httpRequest))));
+                new LoginContext(request, clientIp(httpRequest))));
     }
 
     /**
@@ -55,7 +58,7 @@ public class AuthController {
      * @param request HTTP 请求
      * @return 客户端 IP
      */
-    private String clientIp(jakarta.servlet.http.HttpServletRequest request) {
+    private String clientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {
             return forwarded.split(",")[0].trim();
@@ -70,9 +73,9 @@ public class AuthController {
      * @return 统一响应
      */
     @PostMapping("/logout")
-    public Result<Void> logout(jakarta.servlet.http.HttpServletRequest request) {
+    public Result<Void> logout(HttpServletRequest request) {
         if (request.getAttribute("tokenPayload")
-                instanceof com.ai.user.security.JwtTokenProvider.TokenPayload payload) {
+                instanceof TokenPayload payload) {
             long remaining = payload.expiresAt() - System.currentTimeMillis();
             authService.logout(payload, remaining);
         }

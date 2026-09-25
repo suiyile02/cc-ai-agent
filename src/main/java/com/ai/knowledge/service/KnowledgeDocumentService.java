@@ -4,14 +4,19 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.common.PageResult;
 import com.ai.config.AppProperties;
+import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
+import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.user.security.RequireAdmin;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import io.qdrant.client.ConditionFactory;
+import io.qdrant.client.QdrantClient;
+import io.qdrant.client.grpc.Common.Filter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -28,9 +33,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 知识库文档管理业务(需求第 2 章)：上传 / 列表 / 删除 / 重新处理。
@@ -52,8 +59,8 @@ public class KnowledgeDocumentService {
     private final FileStorageService fileStorageService;
     private final DocumentIngestionService ingestionService;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
-    private final ObjectProvider<io.qdrant.client.QdrantClient> qdrantClientProvider;
-    private final com.ai.rag.service.SemanticAnswerCache semanticAnswerCache;
+    private final ObjectProvider<QdrantClient> qdrantClientProvider;
+    private final SemanticAnswerCache semanticAnswerCache;
     private final AppProperties appProperties;
     private final KeywordIndex keywordIndex;
 
@@ -126,28 +133,28 @@ public class KnowledgeDocumentService {
      * @throws BusinessException 未选择任何文件, 或非管理员(5002, HTTP 403)
      */
     @RequireAdmin
-    public List<com.ai.knowledge.dto.BatchUploadResultVO> uploadBatch(
+    public List<BatchUploadResultVO> uploadBatch(
             MultipartFile[] files, Long userId) {
         if (files == null || files.length == 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "未选择任何文件");
         }
-        List<com.ai.knowledge.dto.BatchUploadResultVO> results = new java.util.ArrayList<>(files.length);
+        List<BatchUploadResultVO> results = new ArrayList<>(files.length);
         for (MultipartFile file : files) {
             String displayName = file == null || file.getOriginalFilename() == null
                     || file.getOriginalFilename().isBlank() ? "未命名文件" : file.getOriginalFilename();
             try {
                 KnowledgeUploadVO vo = upload(file, userId);
-                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                results.add(new BatchUploadResultVO(
                         displayName, true, vo.docId(), vo.status(), null));
             } catch (BusinessException e) {
                 // 业务校验失败(空文件/格式/大小等): 记录原因, 继续处理下一文件
                 log.warn("批量上传跳过文件 {}: {}", displayName, e.getMessage());
-                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                results.add(new BatchUploadResultVO(
                         displayName, false, null, null, e.getMessage()));
             } catch (Exception e) {
                 // 未预期异常: 不向上抛(避免整批失败), 记录通用提示; 完整堆栈只进日志
                 log.error("批量上传单文件失败(跳过): {}", displayName, e);
-                results.add(new com.ai.knowledge.dto.BatchUploadResultVO(
+                results.add(new BatchUploadResultVO(
                         displayName, false, null, null, "系统错误，请稍后重试"));
             }
         }
@@ -274,18 +281,18 @@ public class KnowledgeDocumentService {
      * @param documentId 文档 ID
      */
     private void deleteVectorPoints(Long documentId) {
-        io.qdrant.client.QdrantClient client = qdrantClientProvider.getIfAvailable();
+        QdrantClient client = qdrantClientProvider.getIfAvailable();
         if (client == null) {
             log.warn("Qdrant 客户端不可用, 跳过向量清理: docId={}", documentId);
             return;
         }
         try {
-            var filter = io.qdrant.client.grpc.Common.Filter.newBuilder()
-                    .addMust(io.qdrant.client.ConditionFactory.matchKeyword(
+            var filter = Filter.newBuilder()
+                    .addMust(ConditionFactory.matchKeyword(
                             "doc_id", String.valueOf(documentId)))
                     .build();
             client.deleteAsync(appProperties.getRag().getCollectionName(), filter)
-                    .get(15, java.util.concurrent.TimeUnit.SECONDS);
+                    .get(15, TimeUnit.SECONDS);
             log.info("已按过滤条件清理向量: docId={}", documentId);
         } catch (Exception e) {
             log.warn("清理向量失败(继续后续删除流程): docId={}, err={}", documentId, e.getMessage());

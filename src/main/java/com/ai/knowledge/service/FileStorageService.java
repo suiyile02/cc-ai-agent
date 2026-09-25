@@ -16,6 +16,8 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * 本地文件存储(需求 1.1：本地/OSS/MinIO, MVP 落地本地磁盘)。
@@ -82,11 +84,11 @@ public class FileStorageService {
      * @param ext  扩展名(小写)
      * @throws BusinessException 内容与扩展名不符
      */
-    public void validateContent(org.springframework.web.multipart.MultipartFile file, String ext) {
+    public void validateContent(MultipartFile file, String ext) {
         byte[] head;
         try (var in = file.getInputStream()) {
             head = in.readNBytes(8);
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED, "无法读取文件内容进行校验");
         }
         boolean isPdf = head.length >= 5 && head[0] == 0x25 && head[1] == 0x50 && head[2] == 0x44
@@ -131,14 +133,14 @@ public class FileStorageService {
      * @param file 上传的 docx 文件
      * @throws BusinessException 解压后内容超限或条目过多
      */
-    private void checkZipBomb(org.springframework.web.multipart.MultipartFile file) {
+    private void checkZipBomb(MultipartFile file) {
         long maxBytes = appProperties.getIngestion().getMaxUncompressedBytes();
         int maxEntries = appProperties.getIngestion().getMaxZipEntries();
         long total = 0;
         int entries = 0;
-        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(file.getInputStream())) {
+        try (ZipInputStream zin = new ZipInputStream(file.getInputStream())) {
             byte[] buffer = new byte[8192];
-            java.util.zip.ZipEntry entry;
+            ZipEntry entry;
             while ((entry = zin.getNextEntry()) != null) {
                 entries++;
                 if (entries > maxEntries) {
@@ -157,7 +159,7 @@ public class FileStorageService {
             }
         } catch (BusinessException e) {
             throw e;
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED, "无法读取文件内容进行校验");
         }
         log.debug("docx 解压预检通过: 解压后 {} 字节, 条目 {} 个", total, entries);

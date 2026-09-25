@@ -1,8 +1,12 @@
 package com.ai.config;
 
+import com.ai.common.TraceIdFilter;
 import com.ai.user.security.AuthInterceptor;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.lang.Nullable;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
@@ -44,12 +48,12 @@ public class WebAuthConfig implements WebMvcConfigurer {
      * @param traceIdFilter 追踪过滤器(TraceIdFilter, common 包)
      * @return 追踪过滤器注册
      */
-    @org.springframework.context.annotation.Bean
-    public org.springframework.boot.web.servlet.FilterRegistrationBean<com.ai.common.TraceIdFilter> traceIdFilterRegistration(
-            com.ai.common.TraceIdFilter traceIdFilter) {
-        org.springframework.boot.web.servlet.FilterRegistrationBean<com.ai.common.TraceIdFilter> reg =
-                new org.springframework.boot.web.servlet.FilterRegistrationBean<>(traceIdFilter);
-        reg.setOrder(org.springframework.core.Ordered.HIGHEST_PRECEDENCE);
+    @Bean
+    public FilterRegistrationBean<TraceIdFilter> traceIdFilterRegistration(
+            TraceIdFilter traceIdFilter) {
+        FilterRegistrationBean<TraceIdFilter> reg =
+                new FilterRegistrationBean<>(traceIdFilter);
+        reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
         reg.addUrlPatterns("/*");
         return reg;
     }

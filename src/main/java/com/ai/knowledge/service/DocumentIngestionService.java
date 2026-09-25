@@ -58,7 +58,7 @@ public class DocumentIngestionService {
             documentMapper.updateById(doc);
 
             // 解析限时(A2): 恶意/超复杂文档不再无限占用入库线程
-            List<Document> chunks = com.ai.common.Timeouts.call(
+            List<Document> chunks = Timeouts.call(
                     () -> parseAndSplit(doc), appProperties.getIngestion().getParseTimeoutMs());
             addMetadata(doc, chunks);
 

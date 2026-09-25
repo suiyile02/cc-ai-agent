@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -70,7 +71,7 @@ public class ConversationSummarizer {
                     .user(prompt);
             // 摘要是机械性压缩任务, 关闭 qwen3 思维链加快后台就绪
             if (appProperties.getContext().getSummary().isDisableThinking()) {
-                spec.options(org.springframework.ai.openai.OpenAiChatOptions.builder()
+                spec.options(OpenAiChatOptions.builder()
                         .extraBody(Map.of("enable_thinking", false)));
             }
             String answer = Timeouts.call(() -> spec.call().content(), timeoutMs);

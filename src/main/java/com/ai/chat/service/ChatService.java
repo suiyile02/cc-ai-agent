@@ -11,19 +11,26 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
+import com.ai.context.AssembledPrompt;
+import com.ai.observability.ChatMetrics;
 import com.ai.session.entity.ChatSession;
 import com.ai.session.service.ChatSessionService;
 import com.ai.session.SessionType;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -105,15 +112,15 @@ public class ChatService {
 
         // 前置阶段：准备会话、用户消息、工具、检索结果与提示
         // (boundedElastic 是另一个线程: 提交前快照 traceId, 前置日志因此带请求 traceId)
-        Map<String, String> mdc = org.slf4j.MDC.getCopyOfContextMap();
+        Map<String, String> mdc = MDC.getCopyOfContextMap();
         Mono<PreparedChat> prepare = Mono.fromCallable(() -> {
                     if (mdc != null) {
-                        org.slf4j.MDC.setContextMap(mdc);
+                        MDC.setContextMap(mdc);
                     }
                     try {
                         return preparation.prepare(session, userMessage);
                     } finally {
-                        org.slf4j.MDC.clear();
+                        MDC.clear();
                     }
                 })
                 .subscribeOn(Schedulers.boundedElastic());
@@ -164,7 +171,7 @@ public class ChatService {
             // 静默超时保护: 相邻增量间隔超过 idleMs(或首增量迟迟不来)抛 TimeoutException。
             // 早于上游 okhttp 60s read timeout 触发——qwen3 思考模式长推理会整段静默,
             // 实测曾卡满 60s 被重置(CANCEL), 整轮回答只剩一条中断提示。
-            upstream = upstream.timeout(java.time.Duration.ofMillis(idleMs));
+            upstream = upstream.timeout(Duration.ofMillis(idleMs));
         }
         return upstream
                 .flatMap(resp -> {
@@ -190,10 +197,10 @@ public class ChatService {
                 .concatWith(Flux.defer(() ->
                         finishStream(session, userMessage, prep, collected, start, usageHolder)))
                 .onErrorResume(e -> {
-                    boolean idle = e instanceof java.util.concurrent.TimeoutException;
+                    boolean idle = e instanceof TimeoutException;
                     if (idle) {
-                        io.micrometer.core.instrument.Metrics
-                                .counter(com.ai.observability.ChatMetrics.STREAM_IDLE_TIMEOUT).increment();
+                        Metrics
+                                .counter(ChatMetrics.STREAM_IDLE_TIMEOUT).increment();
                     }
                     String tip = idle
                             ? "【系统提示】模型长时间未生成内容(可能正在深度思考)，已终止本轮，请重试或简化问题。"
@@ -263,7 +270,7 @@ public class ChatService {
      * @return 可执行的请求规格
      */
     private ChatClient.ChatClientRequestSpec buildSpec(ChatClient client,
-            ChatSession session, com.ai.context.AssembledPrompt assembled, boolean streaming,
+            ChatSession session, AssembledPrompt assembled, boolean streaming,
             AtomicInteger toolCalls) {
         ChatClient.ChatClientRequestSpec spec = client.prompt()
                 .system(assembled.system())
@@ -272,8 +279,8 @@ public class ChatService {
         boolean noThinking = appProperties.getChat().isDisableThinking();
         boolean includeUsage = streaming && appProperties.getChat().isStreamIncludeUsage();
         if (noThinking || includeUsage) {
-            org.springframework.ai.openai.OpenAiChatOptions.Builder options =
-                    org.springframework.ai.openai.OpenAiChatOptions.builder();
+            OpenAiChatOptions.Builder options =
+                    OpenAiChatOptions.builder();
             if (noThinking) {
                 // 主对话关闭 qwen3 思维链(配置默认关闭保质量; 提速时可打开)
                 options.extraBody(Map.of("enable_thinking", false));
