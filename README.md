@@ -41,7 +41,7 @@ mvn spring-boot:run       # 或打包运行
 mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 ```
 
-> 跑 `mvn test` 同理需要能连上 MySQL——建了 `application-local.yaml` 就直接 `mvn test`，不必再设环境变量。若你沿用了仓库里曾出现过的 `123456`，**请先改掉本机 MySQL 口令**——那个值已随历史提交公开。
+> 跑 `mvn test` 同理需要能连上 MySQL——建了 `application-local.yaml` 就直接 `mvn test`，不必再设环境变量。
 
 启动后：
 - 应用端口 **9090**；Qdrant 控制台 http://localhost:6334/dashboard
@@ -73,7 +73,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 > 首次启动 Qdrant 自动建集合（需 Embedding 模型可用）；MySQL 表由启动期 `spring.sql.init` 幂等建表（脚本全部 `IF NOT EXISTS`，`continue-on-error` 已关闭）。
 >
-> **运行 profile**：默认（无 profile）即安全基线——模拟登录头关闭、演示数据播种关闭、口令无默认值；`prod` profile 只是把这几项再显式钉一遍并收紧令牌黑名单口径（fail-closed）。**仓库内已删除 `application-dev.yaml`**：开发便利开关不再由配置文件提供，本机需要时显式传参（见「常用命令」）。`/actuator/health` 可用于探针。
+> **运行 profile**：默认（无 profile）即安全基线——模拟登录头关闭、演示数据播种关闭、口令无默认值；`prod` profile 只是把这几项再显式钉一遍并收紧令牌黑名单口径（fail-closed）。
 
 ## 3. 功能模块与接口
 
