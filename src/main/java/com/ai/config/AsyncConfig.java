@@ -1,8 +1,10 @@
 package com.ai.config;
 
+import com.ai.common.MdcTaskDecorator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
@@ -12,7 +14,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  * 文档入库异步线程池(与需求 2.2 一致)：入库不阻塞上传请求线程。
  */
 @EnableAsync
-@org.springframework.scheduling.annotation.EnableScheduling
+@EnableScheduling
 @Configuration
 public class AsyncConfig {
 
@@ -28,7 +30,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(20);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("doc-ingestion-");
-        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到异步入库
+        executor.setTaskDecorator(new MdcTaskDecorator()); // traceId 传播到异步入库
         // 队列满时由提交线程自己执行(降级为同步入库), 不静默丢弃任务
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
@@ -49,7 +51,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("audit-");
-        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到异步审计
+        executor.setTaskDecorator(new MdcTaskDecorator()); // traceId 传播到异步审计
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
@@ -73,7 +75,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("session-title-");
-        executor.setTaskDecorator(new com.ai.common.MdcTaskDecorator()); // traceId 传播到标题精修
+        executor.setTaskDecorator(new MdcTaskDecorator()); // traceId 传播到标题精修
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         return executor;

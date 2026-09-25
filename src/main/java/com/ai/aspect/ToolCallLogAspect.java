@@ -1,10 +1,15 @@
 package com.ai.aspect;
 import com.ai.system.service.ToolCallLogService;
 
+import com.ai.common.BusinessException;
+import com.ai.common.ErrorCode;
 import com.ai.common.SensitiveDataMasker;
 import com.ai.common.Strings;
+import com.ai.config.AppProperties;
+import com.ai.observability.ChatMetrics;
 import com.ai.system.entity.ToolCallLog;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -14,6 +19,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -31,7 +37,7 @@ public class ToolCallLogAspect {
 
     private final ToolCallLogService toolCallLogService;
     private final ObjectMapper objectMapper;
-    private final com.ai.config.AppProperties appProperties;
+    private final AppProperties appProperties;
 
     /**
      * 环绕增强：执行前记录入参, 成功后记录出参与状态 SUCCESS, 异常记录 FAILED 并继续抛出。
@@ -73,8 +79,8 @@ public class ToolCallLogAspect {
                     && toolContext.getContext().get("toolCalls") instanceof AtomicInteger counter) {
                 int max = appProperties.getChat().getMaxToolCallsPerTurn();
                 if (max > 0 && counter.incrementAndGet() > max) {
-                    throw new com.ai.common.BusinessException(
-                            com.ai.common.ErrorCode.TOOL_CALL_LIMIT,
+                    throw new BusinessException(
+                            ErrorCode.TOOL_CALL_LIMIT,
                             "单轮工具调用次数已达上限(" + max + "), 已终止本轮工具调用");
                 }
             }
@@ -89,8 +95,8 @@ public class ToolCallLogAspect {
             throw e;
         } finally {
             entry.setDurationMs((int) (System.currentTimeMillis() - start));
-            io.micrometer.core.instrument.Metrics.counter(
-                    com.ai.observability.ChatMetrics.TOOL_CALLS,
+            Metrics.counter(
+                    ChatMetrics.TOOL_CALLS,
                     "tool", toolName, "status", entry.getStatus() == null ? "UNKNOWN" : entry.getStatus()
             ).increment();
             try {
@@ -123,7 +129,7 @@ public class ToolCallLogAspect {
      * @return 剔除 ToolContext 后的参数数组
      */
     private Object[] stripToolContext(Object[] args) {
-        return java.util.Arrays.stream(args)
+        return Arrays.stream(args)
                 .filter(a -> !(a instanceof ToolContext))
                 .toArray();
     }

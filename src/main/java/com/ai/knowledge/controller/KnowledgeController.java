@@ -4,6 +4,7 @@ import com.ai.knowledge.service.KnowledgeDocumentService;
 import com.ai.common.DateParamUtils;
 import com.ai.common.PageResult;
 import com.ai.common.Result;
+import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.user.security.UserContext;
@@ -54,7 +55,7 @@ public class KnowledgeController {
      * @return 统一响应, data 为逐文件结果列表
      */
     @PostMapping("/upload/batch")
-    public Result<List<com.ai.knowledge.dto.BatchUploadResultVO>> uploadBatch(
+    public Result<List<BatchUploadResultVO>> uploadBatch(
             @RequestParam("files") MultipartFile[] files) {
         return Result.ok("批量上传完成",
                 documentService.uploadBatch(files, UserContext.requireUserId()));

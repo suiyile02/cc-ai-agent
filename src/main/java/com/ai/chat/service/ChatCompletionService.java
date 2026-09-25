@@ -3,11 +3,14 @@ package com.ai.chat.service;
 import com.ai.chat.event.ChatCompletedEvent;
 import com.ai.config.ChatClientProvider;
 import com.ai.context.ConversationMemory;
+import com.ai.context.ContextComposition;
 import com.ai.context.service.QueryRewriter;
+import com.ai.observability.ChatMetrics;
 import com.ai.rag.ChatOutcome;
 import com.ai.rag.RagMode;
 import com.ai.rag.service.SemanticAnswerCache;
 import com.ai.session.entity.ChatSession;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -58,11 +61,11 @@ public class ChatCompletionService {
                 prep.assembled() == null ? null : prep.assembled().composition(), usage);
         // 可观测性埋点: 出口分布(回答质量画像) + Token 成本
         ChatOutcome outcome = prep.rag().chatOutcome();
-        io.micrometer.core.instrument.Metrics.counter(com.ai.observability.ChatMetrics.OUTCOME,
+        Metrics.counter(ChatMetrics.OUTCOME,
                 "outcome", outcome.name()).increment();
         if (usage != null && usage > 0) {
-            io.micrometer.core.instrument.Metrics
-                    .counter(com.ai.observability.ChatMetrics.MODEL_TOKENS).increment(usage);
+            Metrics
+                    .counter(ChatMetrics.MODEL_TOKENS).increment(usage);
         }
         // 写入语义缓存: 正缓存 只有"独立原始问题(未经过改写/扩展) + 真查到知识库依据 + 没走工具"的回答才进缓存
         // 负缓存(本轮判定为"无据可依"的拒答, 用于重复无据问题省一次模型调用)。
@@ -92,8 +95,8 @@ public class ChatCompletionService {
      */
     public void completeCached(ChatSession session, String userMessage,
             ChatPreparationService.PreparedChat prep, long startMs) {
-        io.micrometer.core.instrument.Metrics.counter(com.ai.observability.ChatMetrics.OUTCOME,
-                "outcome", com.ai.rag.ChatOutcome.ANSWERED_FROM_CACHE.name()).increment();
+        Metrics.counter(ChatMetrics.OUTCOME,
+                "outcome", ChatOutcome.ANSWERED_FROM_CACHE.name()).increment();
         memoryService.append(session.getSessionId(), userMessage, prep.cachedAnswer().content());
         memoryService.summarizeIfNeededAsync(session.getSessionId());
         publishCompleted(session, userMessage, prep.cachedAnswer().content(),
@@ -132,7 +135,7 @@ public class ChatCompletionService {
      */
     private void publishCompleted(ChatSession session, String userMessage, String answer,
             List<String> sources, long durationMs, QueryRewriter.RewriteResult rw,
-            RagMode mode, com.ai.context.ContextComposition composition, Integer totalTokens) {
+            RagMode mode, ContextComposition composition, Integer totalTokens) {
         eventPublisher.publishEvent(new ChatCompletedEvent(session, userMessage, answer,
                 sources, chatClientProvider.modelLabel(), durationMs, rw, mode, composition, totalTokens));
     }

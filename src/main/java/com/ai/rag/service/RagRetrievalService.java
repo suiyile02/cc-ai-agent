@@ -2,15 +2,18 @@ package com.ai.rag.service;
 
 import com.ai.common.Timeouts;
 import com.ai.config.AppProperties;
+import com.ai.observability.ChatMetrics;
 import com.ai.rag.RagRetriever;
 import com.ai.rag.RetrievalOutcome;
 import com.ai.rag.SourceVO;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * RAG 检索编排：多路召回 → RRF 融合 → 重排 → Top-K（需求 3.3 + 混合检索增强）。
@@ -65,16 +68,16 @@ public class RagRetrievalService implements RagRetriever {
                     ? Timeouts.call(() -> doRetrieve(query, topK, threshold), timeoutMs)
                     : doRetrieve(query, topK, threshold);
             long cost = System.currentTimeMillis() - start;
-            io.micrometer.core.instrument.Metrics
-                    .timer(com.ai.observability.ChatMetrics.RETRIEVAL)
-                    .record(cost, java.util.concurrent.TimeUnit.MILLISECONDS);
+            Metrics
+                    .timer(ChatMetrics.RETRIEVAL)
+                    .record(cost, TimeUnit.MILLISECONDS);
             log.info("RAG 检索完成: {}ms, 语义 {} + 关键词 {} -> 最终 {} 段",
                     cost, outcome.semanticCount(),
                     outcome.keywordCount(), outcome.hits().size());
             return outcome;
         } catch (Exception e) {
-            io.micrometer.core.instrument.Metrics
-                    .counter(com.ai.observability.ChatMetrics.RETRIEVAL_DEGRADED).increment();
+            Metrics
+                    .counter(ChatMetrics.RETRIEVAL_DEGRADED).increment();
             log.warn("RAG 检索超时/失败(预算 {}ms, 实际 {}ms), 本轮降级为空上下文: {}",
                     timeoutMs, System.currentTimeMillis() - start, e.getMessage());
             return RetrievalOutcome.executedEmpty();

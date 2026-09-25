@@ -3,8 +3,10 @@ package com.ai.rag.service;
 import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
+import com.ai.observability.ChatMetrics;
 import com.ai.rag.SemanticCacheAdmin;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -65,13 +67,13 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
             }
             String json = redis.opsForValue().get(answerKey(question, version));
             if (json == null) {
-                io.micrometer.core.instrument.Metrics
-                        .counter(com.ai.observability.ChatMetrics.SEMCACHE_MISS).increment();
+                Metrics
+                        .counter(ChatMetrics.SEMCACHE_MISS).increment();
                 return null;
             }
             CachedAnswer answer = objectMapper.readValue(json, CachedAnswer.class);
-            io.micrometer.core.instrument.Metrics
-                    .counter(com.ai.observability.ChatMetrics.SEMCACHE_HIT).increment();
+            Metrics
+                    .counter(ChatMetrics.SEMCACHE_HIT).increment();
             log.info("语义缓存命中: question={}", question);
             return answer;
         } catch (Exception e) {
@@ -164,8 +166,8 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
             }
             redis.opsForValue().set(missKey(question, version), "1",
                     Duration.ofMinutes(appProperties.getSemanticCache().getMissTtlMinutes()));
-            io.micrometer.core.instrument.Metrics
-                    .counter(com.ai.observability.ChatMetrics.SEMCACHE_NEGATIVE).increment();
+            Metrics
+                    .counter(ChatMetrics.SEMCACHE_NEGATIVE).increment();
             log.debug("语义负缓存已写入: question={}", question);
         } catch (Exception e) {
             degraded.warn("语义负缓存写入失败(已降级: 穿透防护暂缺): {}", e.getMessage());
