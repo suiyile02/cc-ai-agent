@@ -137,7 +137,7 @@
 | | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
 | | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
 | | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
-| `HybridRecaller` | `recall(query,topK,threshold)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、在本地按阈值过滤**——阈值下发给向量库会让低于阈值的分数永不可见，分布被底部截断、无法定标 | 编排 |
+| `HybridRecaller` | `recall(query,topK)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、本类不做任何阈值过滤**——把候选原样交给重排, 过滤在 `RagRetrievalService.filterByThreshold`(重排之后)收口; 下发给向量库会让低于阈值的分数永不可见、分布被底部截断无法定标 | 编排 |
 | | `semanticHits(...)` / `keywordHits(...)` | 单路检索，异常只丢那一路（WARN） | 内部 |
 | `RrfFuser`（静态） | `fuse(semantic,keyword)` / `rrfScore(c)` | 按 `doc_id:chunk_index` 去重 + RRF(k=60) 名次融合 | 编排 |
 | `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score`，并把两路**原始分**写入 `metadata.semantic_score`/`keyword_score`（否则融合后无从判断真实相似度） | 融合/重排 |

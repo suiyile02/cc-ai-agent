@@ -446,20 +446,23 @@ flowchart TD
     R0["RagRetrievalService.retrieveOutcome(query, topK, threshold)"] --> R3["Timeouts.call(doRetrieve, app.rag.retrieve-timeout-ms=10s)"]
     R3 --> R1{"向量库 / 关键词索引 至少一路可用?"}
     R1 -->|否| R2["none()：本轮未执行检索"]
-    R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant, **以 0 阈值召回**）<br/>→ recall() 内本地过滤, 并记录**过滤前最大分** semanticMaxScore"]
+    R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant, **以 0 阈值召回**）<br/>→ recall() 不做任何阈值过滤, 原样交候选; 记录最大分 semanticMaxScore"]
     R1 -->|是| R5["HybridRecaller.keywordHits（仅 hybrid-enabled 且索引非空）<br/>KeywordIndex.search BM25；宽度 max(topK*2,10)"]
     R4 --> R6["RrfFuser.fuse：按 doc_id:chunk_index 去重 → RRF(k=60) 名次融合"]
     R5 --> R6
     R6 --> R7{"RerankStrategyFactory.current() ← rerank-mode"}
     R7 -->|score 默认| R8["ScoreFusionReranker：语义 ×0.6 + BM25 归一 ×0.4；单路命中直取该路分"]
+    R7 -->|api| R8B["DashScopeReranker：调文本排序 REST(≤rerank-candidates 条)<br/>⚠ 无密钥/非 2xx/结构不符/超时 → WARN 回退 ScoreFusionReranker"]
     R7 -->|llm| R9["LlmReranker：模型排 ≤10 条候选<br/>⚠ 模型不可用/输出不可解析/异常 → 回退 ScoreFusionReranker"]
     R7 -->|none| R10["RrfOrderReranker：保持 RRF 顺序，赋相对顺位分（首位 1.0）"]
     R7 -->|"未知值 ⚠"| R11["WARN 后按 score 处理"]
     R8 --> R12["RetrievalCandidate.toDocument：挂 score 与 metadata.rerank_score"]
+    R8B --> R12
     R9 --> R12
     R10 --> R12
     R11 --> R8
-    R12 --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
+    R12 --> R12B["filterByThreshold（重排之后收口, 只裁语义路低分; 读 metadata.semantic_score 非 doc.score）"]
+    R12B --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
     R3 -->|"超时/异常 ⚠"| R14["executedEmpty()：记为『已执行、零命中』<br/>★ 保持审计不变式：KB+未执行=false 只可能是缓存命中"]
     R14 --> R15["降级为不注入上下文继续对话"]
     R13 --> R16{"hits 为空 且 真实执行?"}
@@ -474,9 +477,9 @@ flowchart TD
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
 
-**阈值只作用于语义一路**：`HybridRecaller` 用它过滤向量路候选，BM25 命中不受约束，融合后也没有第二道阈值过滤（`RagRetrievalService.mergeAndRerank` 只 `limit(topK)`）——调阈值不会改变返回条数，只会改变“语义过阈值数”与出口判定。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
-**阈值已在本地过滤而非下发向量库**（`HybridRecaller.recall`）：下发时低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
-分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**过滤前最大分**写入
+**阈值只作用于语义一路，且在重排之后收口**：`HybridRecaller.recall` 不做任何阈值过滤（原样交出候选），过滤在 `RagRetrievalService.filterByThreshold`——排在重排之后是为了让低余弦分但可能答得上问题的候选先被重排捞一次。它只裁语义路低分（读 `metadata.semantic_score`，非 `doc.getScore()`——重排后 score 已被融合/相关度分占用），BM25-only 命中无语义分故不受约束、保留。出口判定读的是未截断的 `semanticMaxScore`，与过滤时机无关。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
+**阈值以 0 下发向量库、召回层不过滤**（`HybridRecaller.recall` 用 `similarityThreshold(0.0)`）：一旦让向量库先过滤，低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
+分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**最大相似度**写入
 `rag_decision_log.semantic_max_score`，它是 P3-6 定标与 P3-7 相关性判据的唯一未截断观察值。
 
 ---

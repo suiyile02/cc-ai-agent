@@ -8,7 +8,7 @@
 |---|---|
 | JDK / 框架 | Java 21 · Spring Boot 4.1.1（webmvc starter 命名） |
 | AI 框架 | Spring AI 2.0.1（`spring-ai-starter-model-openai`，OpenAI 兼容协议） |
-| 大模型 | 阿里云百炼 DashScope（qwen3.7-flash / qwen3.7-text-embedding），兼容本地 Ollama 等 OpenAI 兼容网关 |
+| 大模型 | 阿里云百炼 DashScope（qwen3.8-max / qwen3.7-text-embedding），兼容本地 Ollama 等 OpenAI 兼容网关 |
 | 向量库 | Qdrant（唯一向量库，首次启动自动建集合，维度随 embedding 模型） |
 | 业务库 | MySQL 8（唯一关系库，表由启动期 `spring.sql.init` 幂等建表） |
 | 持久化 | MyBatis-Plus 3.5.17（BaseMapper + LambdaQueryWrapper；表结构由启动期 `spring.sql.init` 脚本维护） |
