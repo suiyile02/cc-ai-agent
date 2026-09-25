@@ -22,7 +22,7 @@
 
 前置：JDK 21、Maven 3.9+、MySQL 8、Qdrant（`docker compose up -d` 一键起）、Redis（**compose 未纳管，需自行启动**，默认 `localhost:6379`，可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖；用于登录限流/会话缓存/语义缓存/令牌黑名单，全部为"异常即降级"设计，不起也能跑通登录与对话，只是失去缓存与限流）。对话与入库需要大模型 API Key（否则应用可启动，相关能力友好降级）。
 
-**仓库内不含任何口令/密钥默认值**（历史上放过 `123456` 与一个默认 JWT 密钥，均已移除）。本地启动前先准备环境变量：
+**仓库内不含任何口令/密钥默认值**本地启动前先准备环境变量：
 
 ```bash
 cp .env.example .env      # 供 docker compose 使用: 填 MYSQL_ROOT_PASSWORD 等(.env 已被 gitignore)
