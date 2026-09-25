@@ -102,7 +102,7 @@ app:
   chat:
     model-label: ${AI_CHAT_MODEL:qwen3.8-max}  # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名
                                               # (见 ChatClientProvider.modelLabel), 对话日志与语义缓存键共用
-    kb-only: false                         # 严格知识库模式: 只依据知识库资料/工具结果作答, 无命中按固定口径拒答
+    kb-only: true                          # 严格知识库模式: 只依据知识库资料/工具结果作答, 无命中按固定口径拒答
                                           # (提示词级软约束, 不保证零编造; AGENT 会话不受影响) 见 prompts/kb-only-system.st
     stream-idle-timeout-ms: 20000         # 流式静默止损: 20s 无增量即终止降级(早于 okhttp 60s read timeout)
     max-tool-calls-per-turn: 8            # 单轮工具调用上限(B2): 超限抛 6009 回传模型收尾, 防无限连环调工具烧 Token
