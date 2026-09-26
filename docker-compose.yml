@@ -36,11 +36,13 @@ services:
     restart: unless-stopped
 
   # ============================================================
-  # 可观测性(一期): Prometheus(指标抓取+告警评估) + Grafana(面板/通知)
-  # 用法: docker compose up -d prometheus grafana
+  # 可观测性(可选容器方案): Prometheus(指标抓取+告警评估) + Grafana(面板/通知)
+  # ⚠ 本项目实际部署为"全本机原生运行"(Qdrant/MySQL/Redis 均为原生服务, 实测
+  #   mysqld.exe/qdrant.exe/redis-server.exe)——推荐 Prometheus/Grafana 也原生运行
+  #   (启动说明见 observability/prometheus.yml 头部), 无需启动以下两个容器服务。
+  # 若用容器模式: observability/prometheus.yml 的抓取 target 须改为 host.docker.internal:9090
   #   Prometheus UI:  http://127.0.0.1:9091   (宿主机 9091, 避开应用 9090)
   #   Grafana:        http://127.0.0.1:3000   (默认 admin/admin, 首次登录强制改密)
-  # 抓取目标与应用告警规则见 observability/ 目录(prometheus.yml / alert-rules.yml)
   # ============================================================
   prometheus:
     image: prom/prometheus:v2.53.0

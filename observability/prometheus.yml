@@ -1,19 +1,28 @@
 # ============================================================
-# Prometheus 抓取与告警评估配置(可观测性闭环·部署侧)
-# 抓取目标: 宿主机上的 ai-agent 应用(Spring Boot /actuator/prometheus 端点)。
-# 容器内访问宿主机用 host.docker.internal(Windows/Mac Docker Desktop 内置支持)。
+# Prometheus 抓取与告警评估配置(可观测性一期·部署侧)
+#
+# 部署形态与本项目一致: Qdrant/MySQL/Redis/应用/Prometheus 全部**本机原生运行**,
+# 因此抓取目标为 localhost:9090(应用端点)。
+#
+# 两种运行方式:
+#   A) 原生运行(推荐, 与本机环境一致):
+#      下载 prometheus-windows-amd64.zip 解压后执行:
+#      prometheus.exe --config.file=<本项目路径>\observability\prometheus.yml --web.listen-address=127.0.0.1:9091
+#      (原生默认端口也是 9090, 会与应用冲突, 故用 --web.listen-address 指定 9091)
+#   B) 容器运行(可选): 用 docker-compose 里的 prometheus 服务时,
+#      把下方 target 改为 host.docker.internal:9090(容器内访问宿主机)。
 # ============================================================
 global:
   scrape_interval: 15s          # 每 15s 抓取一次应用指标
   evaluation_interval: 15s      # 每 15s 评估一次告警规则
 
 rule_files:
-  - /etc/prometheus/alert-rules.yml
+  - alert-rules.yml             # 相对本配置文件所在目录(observability/)
 
 scrape_configs:
   - job_name: 'ai-agent'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['host.docker.internal:9090']
+      - targets: ['localhost:9090']
         labels:
           env: 'local'
