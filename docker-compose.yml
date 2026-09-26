@@ -1,5 +1,5 @@
 # ============================================================
-# 本地开发基础设施：Qdrant(向量库) + MySQL(业务库)
+# 本地开发基础设施：Qdrant(向量库) + MySQL(业务库) + Prometheus/Grafana(可观测性)
 # 用法: docker compose up -d   (口令从同目录 .env 读取, 见下)
 # Qdrant gRPC 端口 6334 / HTTP 6333(控制台 http://localhost:6333/dashboard)
 #
@@ -35,6 +35,45 @@ services:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped
 
+  # ============================================================
+  # 可观测性(一期): Prometheus(指标抓取+告警评估) + Grafana(面板/通知)
+  # 用法: docker compose up -d prometheus grafana
+  #   Prometheus UI:  http://127.0.0.1:9091   (宿主机 9091, 避开应用 9090)
+  #   Grafana:        http://127.0.0.1:3000   (默认 admin/admin, 首次登录强制改密)
+  # 抓取目标与应用告警规则见 observability/ 目录(prometheus.yml / alert-rules.yml)
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: ai-agent-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # 容器内访问宿主机应用(9090)
+    ports:
+      - "127.0.0.1:9091:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: ai-agent-grafana
+    environment:
+      # 内网单机: 首次登录 admin/admin 强制改密即可; 需免改密可自行注入 GF_SECURITY_ADMIN_PASSWORD
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   qdrant_storage:
   mysql_data:
+  prometheus_data:
+  grafana_data:

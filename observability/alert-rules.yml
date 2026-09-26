@@ -1,0 +1,62 @@
+# ============================================================
+# 告警规则(第一期五条, 由 Prometheus 评估、Grafana/Alertmanager 展示通知)
+# 阈值为首版经验值, 上线后按一周真实分布调整。
+# 指标名与 com.ai.observability.ChatMetrics 一一对应。
+# ============================================================
+groups:
+  - name: ai-agent-business
+    rules:
+      # ① 检索降级率(超时/失败占比)——检索链路出问题的第一信号
+      - alert: RagRetrievalDegradedRateHigh
+        expr: >
+          rate(rag_retrieval_degraded_total[5m])
+          / clamp_min(rate(rag_retrieval_seconds_count[5m]), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 检索降级率超过 5%(持续 10 分钟)"
+          description: "嵌入或向量库可能异常, 对话已在降级运行(无知识库上下文作答)。"
+
+      # ② 流式静默超时频发——模型端点劣化信号
+      - alert: StreamIdleTimeoutBurst
+        expr: increase(chat_stream_idletimeout_total[10m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "10 分钟内流式静默超时超过 3 次"
+          description: "模型长时间不出字被应用层终止, 请检查上游模型端点状态。"
+
+      # ③ 语义缓存命中率骤降——知识库刚整体失效 或 出口分布突变
+      - alert: SemanticCacheHitRateDrop
+        expr: >
+          sum(rate(semcache_hit_total[1h]))
+          / clamp_min(sum(rate(semcache_hit_total[1h])) + sum(rate(semcache_miss_total[1h])), 0.001) < 0.1
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "语义缓存命中率低于 10%(持续 30 分钟)"
+          description: "若非刚清空缓存/大量新问题, 检查知识库版本是否被频繁自增。"
+
+      # ④ HTTP 5xx 错误率
+      - alert: HttpServerErrorRateHigh
+        expr: >
+          sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 5xx 错误率超过 1%(持续 5 分钟)"
+
+      # ⑤ 堆内存水位(虚拟线程 + 缓存场景防 OOM)
+      - alert: JvmHeapUsageHigh
+        expr: >
+          jvm_memory_used_bytes{area="heap"}
+          / jvm_memory_max_bytes{area="heap"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM 堆内存使用超过 90%(持续 5 分钟)"

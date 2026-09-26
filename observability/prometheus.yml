@@ -1,0 +1,19 @@
+# ============================================================
+# Prometheus 抓取与告警评估配置(可观测性闭环·部署侧)
+# 抓取目标: 宿主机上的 ai-agent 应用(Spring Boot /actuator/prometheus 端点)。
+# 容器内访问宿主机用 host.docker.internal(Windows/Mac Docker Desktop 内置支持)。
+# ============================================================
+global:
+  scrape_interval: 15s          # 每 15s 抓取一次应用指标
+  evaluation_interval: 15s      # 每 15s 评估一次告警规则
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+scrape_configs:
+  - job_name: 'ai-agent'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:9090']
+        labels:
+          env: 'local'
