@@ -58,8 +58,8 @@ public class PromptService {
      *       <td>base-system + rag-context(可补充常识)</td><td>kb-only-system + rag-context(禁引入外部知识)</td></tr>
      *   <tr><td>REFUSED_NO_EVIDENCE</td><td colspan="2">kb-only-system(固定口径友好拒答; 该出口只可能在严格模式出现)</td></tr>
      *   <tr><td>TOOL_DATA</td><td>general-system</td><td>kb-only-system(其第 4 条允许并只认工具返回值)</td></tr>
-     *   <tr><td>ANSWERED_OPEN</td><td colspan="2">general-system(自由作答; AGENT 之外的非检索会话)</td></tr>
-     *   <tr><td>AGENT 会话(任意出口)</td><td colspan="2">base-system——本就靠工具, 不被出口改造波及</td></tr>
+     *   <tr><td>ANSWERED_OPEN</td><td>general-system(自由作答)</td><td>kb-only-system(严格模式统一收口: 未检索轮/降级轮也按固定口径引导, 不自由发挥)</td></tr>
+     *   <tr><td>AGENT 会话(任意出口)</td><td colspan="2">base-system——本就靠工具; 严格模式下非"有据"出口已先被收口为 kb-only-system</td></tr>
      * </table>
      *
      * @param type        会话类型 RAG/AGENT/HYBRID
@@ -69,10 +69,18 @@ public class PromptService {
      * @return 组装后的 system 提示词
      */
     public String systemFor(SessionType type, ChatOutcome outcome, boolean hasContext, String contextText) {
+        boolean strict = appProperties.getChat().isKbOnly();
+        // kbOnly=true: 除"有据作答"(知识库/缓存命中/工具数据)外, 一律严格口径收口——
+        // 堵住"未检索轮/降级轮反而自由发挥(可能编造业务事实)"的不一致窗口
+        if (strict
+                && outcome != ChatOutcome.ANSWERED_FROM_KB
+                && outcome != ChatOutcome.ANSWERED_FROM_CACHE
+                && outcome != ChatOutcome.TOOL_DATA) {
+            return load(KB_ONLY_SYSTEM);
+        }
         if (type == SessionType.AGENT) {
             return baseSystem(type);
         }
-        boolean strict = appProperties.getChat().isKbOnly();
         return switch (outcome) {
             // 有知识库依据: 注入资料块。缓存命中路径不装配上下文, 走到这里时 hasContext 必为 true
             case ANSWERED_FROM_KB, ANSWERED_FROM_CACHE -> withContext(strict, type, hasContext, contextText);

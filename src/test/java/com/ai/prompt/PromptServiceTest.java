@@ -51,9 +51,12 @@ class PromptServiceTest {
 
         for (ChatOutcome outcome : ChatOutcome.values()) {
             String system = service.systemFor(SessionType.AGENT, outcome, false, null);
-            assertFalse(system.contains(STRICT_MARKER),
-                    "AGENT 会话靠工具作答, 不应被套上知识库严格模板: " + outcome);
-            assertTrue(system.contains("企业内部"), "AGENT 应仍使用 base-system.st: " + outcome);
+            // 严格收口后, 非"有据"出口在 AGENT 会话内也统一 kb-only-system(含"只能依据")——
+            // 这正是收口目的: AGENT 会话同样不得自由发挥编造业务事实
+            assertTrue(system.contains("只能依据") || system.contains("企业内部"),
+                    "AGENT 会话任意出口应落在 base-system 或 kb-only-system: " + outcome);
+            assertFalse(system.contains(OPEN_CHAT_MARKER),
+                    "AGENT 会话任意出口不得使用自由问答模板: " + outcome);
         }
     }
 
@@ -124,18 +127,14 @@ class PromptServiceTest {
     /* ---------------- 自由作答轮 ---------------- */
 
     @Test
-    void openAnswerUsesGeneralTemplateInBothModes() {
-        // ANSWERED_OPEN 只在"允许自由作答"或"本轮不检索(AGENT 之外的非 RAG 会话)"时出现,
-        // 两种情况都不该被套上"必须拒答"的严格模板
-        for (boolean kbOnly : new boolean[]{true, false}) {
-            givenKbOnly(kbOnly);
+    void openAnswerUsesGeneralTemplateWhenKbOnlyOff() {
+        givenKbOnly(false);
 
-            String system = service.systemFor(SessionType.HYBRID, ChatOutcome.ANSWERED_OPEN,
-                    false, null);
+        String system = service.systemFor(SessionType.HYBRID, ChatOutcome.ANSWERED_OPEN,
+                false, null);
 
-            assertTrue(system.contains(OPEN_CHAT_MARKER), "自由作答出口应使用 general-system(kbOnly=" + kbOnly + ")");
-            assertFalse(system.contains(STRICT_MARKER));
-        }
+        assertTrue(system.contains(OPEN_CHAT_MARKER), "宽松模式下 OPEN 出口使用 general-system");
+        assertFalse(system.contains(STRICT_MARKER));
     }
 
     /* ---------------- 工具轮(回归防护: 不得被套成"可回答常识科普闲聊"后自由编造) ---------------- */

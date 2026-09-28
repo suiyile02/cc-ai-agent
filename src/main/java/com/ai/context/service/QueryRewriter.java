@@ -93,6 +93,7 @@ public class QueryRewriter {
             log.debug("查询改写跳过: 问题不含指代线索, 视为独立问题: {}", userMessage);
             return new RewriteResult(userMessage, false);
         }
+        //  获取压缩查询转换器
         CompressionQueryTransformer transformer = resolveTransformer();
         if (transformer == null) {
             return new RewriteResult(userMessage, false); // 模型不可用
