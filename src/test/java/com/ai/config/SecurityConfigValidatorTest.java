@@ -68,7 +68,7 @@ class SecurityConfigValidatorTest {
     @Test
     void prodRejectsPlaceholderLikeSecret() {
         givenProd();
-        appProperties.getAuth().setJwtSecret("***removed-from-history***-CHANGE-ME-in-prod-2026-abcdefgh");
+        appProperties.getAuth().setJwtSecret("unit-test-replace-me-in-prod-secret");
 
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> validator.run(null));
         assertTrue(e.getMessage().contains("占位符"), e.getMessage());
