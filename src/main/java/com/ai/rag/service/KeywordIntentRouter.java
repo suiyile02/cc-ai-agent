@@ -10,15 +10,15 @@ import java.util.List;
 /**
  * 基于关键词表匹配的 {@link IntentRouter} 唯一实现(三态规则引擎)：
  * <ol>
- *   <li>命中工具词表({@code AppProperties.Rag#toolKeywords}) → {@link RagMode#TOOL}
- *       ——答案在业务库, 跳过知识库检索交给模型调工具(这是本实现<b>唯一</b>影响链路的地方);</li>
+ *   <li>命中工具词表({@code AppProperties.Rag#toolKeywords}) → {@link RagMode#TOOL};</li>
  *   <li>命中内部业务关键词({@code AppProperties.Rag#internalKeywords}) → {@link RagMode#KB};</li>
  *   <li>否则 → {@link RagMode#GENERAL}。</li>
  * </ol>
  * 工具词表优先于知识库词表判定(订单/物流等词同时出现在两表时按工具处理)。
  *
- * <p><b>P3-7 起 KB 与 GENERAL 都照常检索</b>，后两态只剩审计标签的作用——"这个问题依据什么作答"
- * 由检索结果算出的 {@link com.ai.rag.ChatOutcome} 决定，不再由词表预判。
+ * <p><b>三态均为审计标签</b>：旧"TOOL 预判跳过知识库检索"的短路已废除——按实体名词匹配
+ * 会误判"订单的报销制度是什么"这类问题, 严格模式下错拒知识库能答的内容。
+ * 作答口径一律由检索结果算出的 {@link com.ai.rag.ChatOutcome} 决定。
  */
 @Component
 public class KeywordIntentRouter implements IntentRouter {

@@ -124,6 +124,32 @@ class PromptServiceTest {
                 "严格模板的拒答口径必须与 ChatSourceDisplay.NO_RESULT_ANSWER 完全一致");
     }
 
+    /* ---------------- 零命中 + 工具裁决 ---------------- */
+
+    @Test
+    void noEvidenceWithToolsUnderKbOnlyAppendsToolAdjudication() {
+        givenKbOnly(true);
+
+        String system = service.systemFor(SessionType.HYBRID,
+                ChatOutcome.NO_EVIDENCE_WITH_TOOLS, false, null);
+
+        assertTrue(system.contains(STRICT_MARKER), "零命中轮仍保持严格口径");
+        assertTrue(system.contains("以工具描述为准"), "必须拼接工具裁决指令(tools-fallback)");
+        assertTrue(system.contains(ChatSourceDisplay.NO_RESULT_ANSWER),
+                "固定拒答原文必须保留——无工具可答时模型仍按原句拒答");
+        assertFalse(system.contains(OPEN_CHAT_MARKER), "不得使用自由问答模板");
+    }
+
+    @Test
+    void noEvidenceWithToolsWithoutKbOnlyUsesGeneralTemplate() {
+        givenKbOnly(false);
+
+        String system = service.systemFor(SessionType.HYBRID,
+                ChatOutcome.NO_EVIDENCE_WITH_TOOLS, false, null);
+
+        assertTrue(system.contains(OPEN_CHAT_MARKER), "宽松模式零命中仍自由作答");
+    }
+
     /* ---------------- 自由作答轮 ---------------- */
 
     @Test

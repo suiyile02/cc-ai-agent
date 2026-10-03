@@ -108,7 +108,7 @@
 
 | 方法 | 作用 | 调用方 |
 |---|---|---|
-| `PromptService.systemFor(type,mode,hasContext,contextText)` | 按会话类型/意图/是否命中上下文选模板并渲染系统提示词（`base-system.st` + `rag-context` 注入）；`app.chat.kb-only=true` 时 GENERAL/TOOL/KB 一律改用 `kb-only-system.st` 且资料块的 `{{extraRule}}` 换成"禁止引入资料之外的知识"（AGENT 会话不受影响） | 门面 `buildSpec` |
+| `PromptService.systemFor(type,outcome,hasContext,contextText)` | 按**检索事后出口**(`ChatOutcome`)选模板并渲染系统提示词（`base-system.st` + `rag-context` 注入）；严格模式下非"有据"出口一律收口 `kb-only-system.st`，其中 `NO_EVIDENCE_WITH_TOOLS` 追加 `tools-fallback.st` 工具裁决指令（固定拒答原文不动） | 门面 `buildSpec` |
 | `baseSystem(type)` | 加载基础模板并替换类型占位符 | 内部 |
 | `template(path)` | 读模板原文（带缓存），供改写/摘要复用 | `QueryRewriter`、`ConversationSummarizer` |
 | `load(path)` | classpath 读取；失败不缓存空串（下次重试） | 内部 |
@@ -122,10 +122,10 @@
 |---|---|
 | `SourceVO`（record，**自 `chat/dto` 迁入**） | 检索输出的来源表达：`fileName`/`documentId`/`chunkIndex`/`snippet` + **三个不同口径的分数** `score`(融合相对名次)/`semanticScore`(原始余弦, 判据用)/`keywordScore`(BM25 原始分)；生产方定义、chat 消费 |
 | `RagRetriever`（接口） | 仅保留有调用方的四个方法：`retrieve(query,topK,threshold)`、`retrieveOutcome(...)`、`buildContext(hits,tokenBudget)`、`toSources(hits)`（原 `available()`/单参 `retrieve`/无预算 `buildContext` 无调用方，已删除） |
-| `IntentRouter` | `route(message)` → `RagMode`；**P3-7 起仅用于识别工具轮**, 不再决定该不该检索 |
+| `IntentRouter` | `route(message)` → `RagMode`；**纯审计标签**（P3-7 退出"该不该检索"决策；2026-10-04 起 TOOL 短路跳过检索也已废除） |
 | `RagMode` | `KB`/`TOOL`/`GENERAL` 三态(预判, 只填审计的 rag_mode 诊断列) |
-| `ChatOutcome` ★新增 | 本轮**实际出口**: `ANSWERED_FROM_KB`/`ANSWERED_FROM_CACHE`/`REFUSED_NO_EVIDENCE`/`ANSWERED_OPEN`/`TOOL_DATA` |
-| `OutcomeResolver.resolve(outcome,toolTurn,kbOnly,threshold)` ★新增 | 纯函数出口判定(工具轮优先避免被误判无据; 未执行/降级不作拒答依据) |
+| `ChatOutcome` | 本轮**实际出口**(六值): `ANSWERED_FROM_KB`/`ANSWERED_FROM_CACHE`/`REFUSED_NO_EVIDENCE`/`ANSWERED_OPEN`/`NO_EVIDENCE_WITH_TOOLS`(零命中+有工具, 模型裁决)/`TOOL_DATA`(★改: 事后出口, 收尾按 `toolCalls>0` 升级, 决策时点不产出) |
+| `OutcomeResolver.resolve(outcome,toolsAvailable,kbOnly,threshold)` | 纯函数出口判定(★改: `toolTurn`→`toolsAvailable` 会话级事实；零命中+有工具→模型裁决, 无工具→拒答; 未执行/降级一律 OPEN) |
 | `RetrievalOutcome`（record） | 命中集合 + 各路计数 + `degraded` 标记 + **`semanticMaxScore`（语义路阈值过滤前最大分）**；`none()`=未执行、`executedEmpty()` ★=超时/异常降级的"已执行零命中"（保住审计不变式） |
 | `SemanticCacheAdmin` | `evictAll()`：跨模块运维清空契约（`IntentCacheAdmin` 已随 P3-7 B 批删除） |
 
@@ -268,18 +268,18 @@
 | 方法 | 作用 |
 |---|---|
 | `prepare(session,userMessage)` | 编排 §8 全部步骤(标题 → 改写 → **短查询扩展** → 检索 → **出口判定** → 缓存查询 → 审计 → 装配)；new `AtomicInteger toolCalls` ★ |
-| `resolveRagContext(session,userMessage,route)` ★改 | 工具轮跳过知识库检索→`TOOL_DATA`；非 RAG 会话 `empty()`；其余**一律检索**并用 `OutcomeResolver` 算出口（不再"KB 才检索"） |
+| `resolveRagContext(session,userMessage,route)` ★改 | 非 RAG 会话 `empty()`；RAG/HYBRID **一律检索**(TOOL 短路已废除)并用 `OutcomeResolver` 算出口, `toolsAvailable = sessionType==HYBRID` |
 | `cacheEligible(session,rw)` ★改 | enabled && 未改写 && 非 AGENT（**不再要求 route==KB**；出口门禁移到调用处） |
 | `publishDecision(session,userMessage,rag,costMs)` | 发 `ChatDecisionEvent`（模型失败也留痕） |
 | `PreparedChat`（record） | `rw`/`rag`/`sources`/`assembled`/`cacheEligible`/`retrievalQuery`/`cachedAnswer`/`toolCalls` ★ |
 | `RagContext.empty()` | 未检索时的空上下文 |
-| `debugSearch(question,topK,threshold,expandShort)` ★新增 | 检索调试：走"扩展 → 检索 → 出口判定"同一条链，只回显不落地（不写记忆/审计/缓存、不调对话模型）；工具轮照样检索，但出口按工具轮口径预测 |
+| `debugSearch(question,topK,threshold,expandShort)` ★新增 | 检索调试：走"扩展 → 检索 → 出口判定"同一条链，只回显不落地（不写记忆/审计/缓存、不调对话模型）；出口按 HYBRID 口径预测(零命中→`NO_EVIDENCE_WITH_TOOLS`) |
 | `DebugSearch`（record） | `retrievalQuery`/`expanded`/`outcome`/`chatOutcome`/`topK`/`threshold` |
 
 ### `ChatCompletionService`（收尾，同步与流式共用）
 | 方法 | 作用 |
 |---|---|
-| `complete(session,userMessage,prep,answer,usage,startMs)` | 记忆写回 → 摘要触发 → 完成事件 → ★缓存闸门（`toolCalls>0` 跳过正负缓存；否则 `cacheEligible` 下按**出口**决定：`ANSWERED_FROM_KB` 写正缓存、`REFUSED_NO_EVIDENCE` 写负缓存）→ 来源落库 |
+| `complete(session,userMessage,prep,answer,usage,startMs)` | 记忆写回 → 摘要触发 → 完成事件 → ★缓存闸门（`toolCalls>0` 跳过正负缓存；否则 `cacheEligible` 下按**出口**决定：`ANSWERED_FROM_KB` 写正缓存、`REFUSED_NO_EVIDENCE` 或 `NO_EVIDENCE_WITH_TOOLS` 且模型实际按固定口径拒答(`declaresNoResult`)写负缓存）→ 来源落库；统计出口在 `toolCalls>0` 时升级为 `TOOL_DATA`（事后出口） |
 | `completeCached(session,userMessage,cached,startMs)` | 命中路径收尾：写记忆与审计，不写模型耗时口径的缓存 |
 | `completeInterrupted(session,userMessage,answer,startMs)` | 中断收尾：只写记忆/审计，**禁止**触达缓存写入 |
 | `publishCompleted(...)` | 组 `ChatCompletedEvent`，`modelLabel()` 取 `chatClientProvider.modelLabel()` ★ |

@@ -31,6 +31,8 @@ public class PromptService {
 
     /** 严格模式系统提示 */
     private static final String KB_ONLY_SYSTEM = "prompts/kb-only-system.st";
+    /** 严格模式 + 知识库零命中时的工具裁决指令(拼接在 kb-only-system 之后, 固定拒答原文不动) */
+    private static final String TOOLS_FALLBACK = "prompts/tools-fallback.st";
     /** 自由问答系统提示(无知识库依据时允许用模型自身知识) */
     private static final String GENERAL_SYSTEM = "prompts/general-system.st";
     /** 宽松模式下资料块的补充规则(与改动前的固定文案一致) */
@@ -57,7 +59,8 @@ public class PromptService {
      *   <tr><td>ANSWERED_FROM_KB / ANSWERED_FROM_CACHE</td>
      *       <td>base-system + rag-context(可补充常识)</td><td>kb-only-system + rag-context(禁引入外部知识)</td></tr>
      *   <tr><td>REFUSED_NO_EVIDENCE</td><td colspan="2">kb-only-system(固定口径友好拒答; 该出口只可能在严格模式出现)</td></tr>
-     *   <tr><td>TOOL_DATA</td><td>general-system</td><td>kb-only-system(其第 4 条允许并只认工具返回值)</td></tr>
+     *   <tr><td>TOOL_DATA</td><td>general-system</td><td>kb-only-system(防御分支: 决策时点已不产出)</td></tr>
+     *   <tr><td>NO_EVIDENCE_WITH_TOOLS</td><td>general-system</td><td>kb-only-system + tools-fallback(先按工具描述裁决, 无工具可答才固定拒答)</td></tr>
      *   <tr><td>ANSWERED_OPEN</td><td>general-system(自由作答)</td><td>kb-only-system(严格模式统一收口: 未检索轮/降级轮也按固定口径引导, 不自由发挥)</td></tr>
      *   <tr><td>AGENT 会话(任意出口)</td><td colspan="2">base-system——本就靠工具; 严格模式下非"有据"出口已先被收口为 kb-only-system</td></tr>
      * </table>
@@ -70,11 +73,12 @@ public class PromptService {
      */
     public String systemFor(SessionType type, ChatOutcome outcome, boolean hasContext, String contextText) {
         boolean strict = appProperties.getChat().isKbOnly();
-        // kbOnly=true: 除"有据作答"(知识库/缓存命中/工具数据)外, 一律严格口径收口——
+        // kbOnly=true: 除"有据作答"(知识库/缓存命中)与"零命中但有工具可裁"外, 一律严格口径收口——
         // 堵住"未检索轮/降级轮反而自由发挥(可能编造业务事实)"的不一致窗口
         if (strict
                 && outcome != ChatOutcome.ANSWERED_FROM_KB
                 && outcome != ChatOutcome.ANSWERED_FROM_CACHE
+                && outcome != ChatOutcome.NO_EVIDENCE_WITH_TOOLS
                 && outcome != ChatOutcome.TOOL_DATA) {
             return load(KB_ONLY_SYSTEM);
         }
@@ -85,7 +89,11 @@ public class PromptService {
             // 有知识库依据: 注入资料块。缓存命中路径不装配上下文, 走到这里时 hasContext 必为 true
             case ANSWERED_FROM_KB, ANSWERED_FROM_CACHE -> withContext(strict, type, hasContext, contextText);
             case REFUSED_NO_EVIDENCE -> load(KB_ONLY_SYSTEM);
-            // 工具轮: 严格模式下仍可调工具作答(kb-only-system 第 4 条把工具结果列为合法来源)
+            // 零命中但有工具可调: 严格口径 + 工具裁决指令(先按工具描述试工具, 无工具可答才固定拒答)
+            case NO_EVIDENCE_WITH_TOOLS -> strict
+                    ? load(KB_ONLY_SYSTEM) + "\n\n" + load(TOOLS_FALLBACK)
+                    : load(GENERAL_SYSTEM);
+            // 防御分支: 决策时点已不产出 TOOL_DATA(旧工具轮短路已废除), 保留防外部误传
             case TOOL_DATA -> strict ? load(KB_ONLY_SYSTEM) : load(GENERAL_SYSTEM);
             case ANSWERED_OPEN -> load(GENERAL_SYSTEM);
         };

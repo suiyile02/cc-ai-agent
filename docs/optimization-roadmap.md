@@ -165,6 +165,9 @@
      否则审计口径静默漂移(现有不变式"KB + retrieval_executed=false ⟺ 缓存命中"要同步重述)；
   ④ `tool-keywords` 降级为纯成本短路(省一次必然无用的检索)，**前提是 `kb-only` 已成默认**——
      默认模式下它仍承担"不把无关制度片段塞进工具类问题上下文"的防污染职责；
+     **→ 已被 2026-10-04 批次进一步废除**：短路本身也下线了(词表纯审计，零命中交
+     `NO_EVIDENCE_WITH_TOOLS` 模型裁决)，理由见"已完成记录(2026-10-04)"——
+     实测该短路的误判在严格模式下把知识库能答的问题错拒，代价大于收益；
   ⑤ `internal-keywords` 从正确性路径摘除(保留字段供未来可选短路，或按 P3-7 结论删除并同步 AGENTS.md)。
 - **验收**：(a) 用 P3-6 的三类语料集跑端到端，无关类误答率 0、库内类漏答率 <5%；
   (b) 上传一篇全新主题的千字文档、**不改任何配置**，其内容立即可被问到——这条是本批次的核心验收，
@@ -229,6 +232,29 @@
 届时优先选 A 之前先确认不会双写。
 
 ---
+
+## 已完成记录（2026-10-04, TOOL 短路下线: 零命中+有工具改交模型裁决）
+
+**触发**: 复盘发现词表按实体名词误判——"订单的报销制度是什么"命中工具词"订单"→跳过检索→
+kb-only 严格模式下知识库能答的问题被错拒。检索是模型接触知识库的唯一通道(无检索工具),
+"TOOL 短路省一次 embedding"的收益远小于"错拒"的代价, P3-7 ④"纯成本短路"的定性不成立。
+
+**改动**:
+- `OutcomeResolver.resolve` 签名 `toolTurn` → `toolsAvailable`(会话级静态事实: HYBRID 有工具/RAG 无);
+  判定规则改为: 零命中 + kbOnly + 有工具 → 新出口 `NO_EVIDENCE_WITH_TOOLS`——交给模型按
+  新增的 `prompts/tools-fallback.st` 裁决(落在工具描述适用范围则调工具作答, 无工具可答才按固定口径拒答);
+  旧"toolTurn → TOOL_DATA"规则删除, RAG/HYBRID **一律检索**, 词表三态纯审计。
+- `TOOL_DATA` 改为**事后出口**: `ChatCompletionService.complete` 在 `toolCalls>0` 时把统计口径
+  升级为 `TOOL_DATA`(决策时点不产出该值), 提示词矩阵保留其分支作防御。
+- 负缓存: 读侧 `REFUSED_NO_EVIDENCE` 与 `NO_EVIDENCE_WITH_TOOLS` 都命中; 写侧后者仅当模型实际
+  按固定口径拒答(`toolCalls==0` + `declaresNoResult`)——"该调工具的问题"不会固化成"没找到"。
+- `kb-only-system.st` 规则 1/3/4 去枚举(领域判断移交 `@Tool` 描述, 为后续多领域工具铺路);
+  调试页出口按 HYBRID 口径预测; `RagMode`/`IntentRouter` javadoc 同步新职责。
+- 验证: `OutcomeResolverTest`/`PromptServiceTest`/`ChatPreparationServiceTest`/`ChatCompletionServiceTest`
+  44 例全绿; 全量 262 例通过(排除 5 个依赖 Qdrant 的 Spring 上下文用例——本机无 Docker 无法启动
+  Qdrant, 连接拒绝属环境因素; 全部测试源已编译通过)。
+- **代价(明示)**: 工具问题每轮多付一次检索(历史实测口径 159~321ms); 负缓存收益收窄为
+  "模型实际拒答"的轮次。
 
 ## 已完成记录（2026-09-23, 配置分段重构第 1 批 + rerank api 模式第 2 批）
 

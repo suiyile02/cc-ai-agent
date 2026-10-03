@@ -321,21 +321,19 @@ flowchart TD
     P3r -->|失败/超时/空/等同原句| P3a
     P3r -->|扩展成功| P3q["retrievalQuery = 扩展后的完整问题<br/>（用户原话仍用于对话与日志）"]
     P3q --> P3a
-    P3a["② 意图路由(每轮仅一次): route(retrievalQuery)<br/>**只用于判断是否工具轮**, 不再决定该不该检索"]
-    P3a -->|TOOL| P7e["★跳过知识库检索(答案在业务库, 检索只会挤占预算)<br/>出口 = TOOL_DATA"]
-    P3a -->|非 TOOL| P3b{"sessionType ∈ RAG/HYBRID?"}
+    P3a["② 意图路由(每轮仅一次): route(retrievalQuery)<br/>**纯审计标签**, 不影响链路(旧 TOOL 短路跳过检索已废除)"]
+    P3a --> P3b{"sessionType ∈ RAG/HYBRID?"}
     P3b -->|否(如 AGENT)| P7b["不检索; 出口 = ANSWERED_OPEN"]
     P3b -->|是| P7g["③ RagRetrievalService.retrieveOutcome(见 §9)<br/>**一律检索** —— 出口只能由检索事实算出 ★"]
-    P7g --> P7h["④ OutcomeResolver.resolve → ChatOutcome<br/>语义路过阈值且有命中 → ANSWERED_FROM_KB<br/>否则 kb-only ? REFUSED_NO_EVIDENCE : ANSWERED_OPEN<br/>未执行/降级 → ANSWERED_OPEN(不把瞬时故障固化成无答案)"]
-    P7e --> P8
+    P7g --> P7h["④ OutcomeResolver.resolve → ChatOutcome<br/>语义路过阈值且有命中 → ANSWERED_FROM_KB<br/>零命中 + 有工具可调 → NO_EVIDENCE_WITH_TOOLS(模型按 tools-fallback 裁决)<br/>零命中 + 无工具 → REFUSED_NO_EVIDENCE(严格) / ANSWERED_OPEN(宽松)<br/>未执行/降级 → ANSWERED_OPEN(不把瞬时故障固化成无答案)"]
     P7b --> P8
     P7h --> P4{"⑤ cacheEligible?<br/>semantic-cache.enabled && !rw.rewritten()<br/>&& sessionType != AGENT && 出口 == ANSWERED_FROM_KB"}
     P4 -->|是| P5["SemanticAnswerCache.get(retrievalQuery)<br/>键 rag:answer:v{版本}:m{模型}:{sha256} ★"]
     P5 -->|"⚠ Redis 按未命中(WARN 节流)"| P8
     P5 --> P6{"正缓存命中?"}
     P6 -->|是| P6a["出口改记 ANSWERED_FROM_CACHE<br/>→ 跳过装配与模型调用, 流式只发 1 个 content 事件<br/>★ 检索已执行, 代价实测 159~321ms(本批改序的结果)"]
-    P6 -->|否| P6b{"出口==REFUSED_NO_EVIDENCE 且 isMiss?"}
-    P6b -->|是| P6c["负缓存: 固定「未找到」文案<br/>(只省一次模型调用, **不再省检索**)"]
+    P6 -->|否| P6b{"出口 ∈ {REFUSED_NO_EVIDENCE, NO_EVIDENCE_WITH_TOOLS}<br/>且 isMiss?"}
+    P6b -->|是| P6c["负缓存: 固定「未找到」文案<br/>(只省一次模型调用, **不再省检索**; HYBRID 零命中条目<br/>仅在模型实际拒答且未调工具时写入, 见 §9 收尾)"]
     P6b -->|否| P8
     P6c --> P8
     P4 -->|否| P8["⑥ publishDecision → ChatDecisionEvent(带 answerOutcome + 阈值前最大分)"]
@@ -386,7 +384,7 @@ sequenceDiagram
         CS->>CC: complete(session, userMessage, prep, answer, usage, startMs)
         CC->>CC: memoryService.append + summarizeIfNeededAsync
         CC->>CC: publishCompleted → ChatCompletedEvent
-        CC->>CC: ★toolCalls>0 → 跳过正/负缓存写入并 INFO；否则 cacheEligible && mode==KB 才 put/putMiss
+        CC->>CC: ★toolCalls>0 → 跳过正/负缓存写入并 INFO；否则按出口写缓存<br/>（正: ANSWERED_FROM_KB 且未声明未找到；负: REFUSED_NO_EVIDENCE，<br/>或 NO_EVIDENCE_WITH_TOOLS 且模型实际按固定口径拒答）
         CC-->>CT: ChatResponse{content}（引用来源只落 chat_log.sources）
     end
     CS->>CG: Handle.close()（finally）

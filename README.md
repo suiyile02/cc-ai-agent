@@ -111,7 +111,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `POST /api/ai/rag/search` | RAG 检索调试：**走对话同一条链**（短查询扩展→检索→出口判定），返回命中块（含余弦分/BM25 分/融合名次）与"这轮交给对话会判哪个出口"；`topK`/`similarityThreshold` 留空即跟随对话配置 |
 
 按会话类型路由：`RAG`=仅检索注入；`AGENT`=仅工具；`HYBRID`=两者兼备（默认）。
-流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **短查询扩展**（`ShortQueryExpander`：去空白后不足 6 字的提问先补全成完整检索句——裸词"产品"余弦仅 0.41 会被判无据，补全后可达 0.52~0.70；扩展成功的轮次视为"已改写"，不参与语义缓存读写）→ **检索**（RAG/HYBRID 会话一律执行，工具轮除外；不再由关键词表预判"该不该查"）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `api` 专用重排模型(DashScope 文本排序，配 `app.rag.rerank-base-url`+`rerank-model`，失败回退 score) / `llm` 对话大模型排序(失败回退 score) / `none` 仅 RRF → **相似度阈值过滤**(刻意排在重排之后：让重排看到全量候选，低余弦分但答得上的段落才有机会进上下文；出口判据读未截断的最大分，故结论不受影响) → **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
+流程：校验会话 → **多轮查询改写**（`QueryRewriter` 指代消解，失败回退原文）→ **短查询扩展**（`ShortQueryExpander`：去空白后不足 6 字的提问先补全成完整检索句——裸词"产品"余弦仅 0.41 会被判无据，补全后可达 0.52~0.70；扩展成功的轮次视为"已改写"，不参与语义缓存读写）→ **检索**（RAG/HYBRID 会话一律执行，无例外——旧"工具轮跳过检索"短路已废除，词表误判不再错拒）→ **出口判定**（`ChatOutcome`：由检索事实算出，见下）→ **语义缓存查询**（`SemanticAnswerCache`：仅"未改写的独立问题 + 出口为 ANSWERED_FROM_KB"参与，键=知识库版本号+对话模型标识+问题 SHA-256（模型名取自 `ChatClientProvider.modelLabel()`，与 `chat_log.model_name` 同源，切换模型后旧模型的回答不再命中）；正缓存命中则跳过装配与模型调用直接返回（检索已执行，代价实测 159~321ms）；无据可依的重复问题命中负缓存时同样直接返回固定"未找到"文案，均流式只发 1 个 `content` 事件；因缓存条目跨用户共享，**本轮发生过工具调用的回答不写缓存**）→ **多路召回与重排**（语义向量检索 + 关键词 BM25(`KeywordIndex`) 两路召回 → RRF 融合 → 按 `app.rag.rerank-mode` 重排：`score` 分数融合 / `api` 专用重排模型(DashScope 文本排序，配 `app.rag.rerank-base-url`+`rerank-model`，失败回退 score) / `llm` 对话大模型排序(失败回退 score) / `none` 仅 RRF → **相似度阈值过滤**(刻意排在重排之后：让重排看到全量候选，低余弦分但答得上的段落才有机会进上下文；出口判据读未截断的最大分，故结论不受影响) → **上下文装配**（`ContextAssembler` 统一 Token 预算切分 system/历史/RAG/user，历史含滚动摘要）→ 模型生成（可携带 `BusinessTools`）→ 写回会话记忆 → 写缓存。**意图路由/检索决策与对话/上下文日志通过事件异步落库**（`ChatAuditListener`，可用 `/api/system/rag-decisions`、`/api/system/context-logs` 审计）。`hybrid-enabled=false` 可关闭关键词路只留语义检索。
 
 ### 3.2.1 严格知识库模式（`app.chat.kb-only`，**默认开启**）
 
@@ -119,7 +119,8 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 | 情形 | 用户看到的 |
 |---|---|
-| 库里没检索到 / 资料不足以回答 | 固定口径友好提示：「知识库中未找到相关信息，请确认问题或补充相关资料后重试。」（可再附换关键词或补充文档的建议） |
+| 库里没检索到 / 资料不足以回答（纯 RAG 会话，无工具可调） | 固定口径友好提示：「知识库中未找到相关信息，请确认问题或补充相关资料后重试。」（可再附换关键词或补充文档的建议） |
+| 库里没检索到（HYBRID 会话，有业务工具） | 先按工具描述裁决：问题落在某工具适用范围（员工/订单/时间等）→ 调用工具并以返回结果作答；确认无工具可答 → 同上固定口径拒答 |
 | 问题与知识库无关（闲聊、常识、时事、写作翻译） | 礼貌说明本助手只回答企业内部制度与业务问题，并邀请用户提这类问题，**不作答原请求** |
 | 制度/业务问题且命中资料 | 只依据资料作答，不引入资料之外的数字、日期、条款 |
 | 查订单/员工/物流等 | **照常可用**（`BusinessTools` 读的是自家 MySQL，属内部数据，不在禁止范围） |

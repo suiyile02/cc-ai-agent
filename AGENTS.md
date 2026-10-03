@@ -181,8 +181,9 @@ com.ai
 - **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
-  -> **一律检索**(RAG/HYBRID 会话, 工具轮除外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`api`/`llm`/`none`)
-  -> **相似度阈值过滤** -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门, 详见 P3-7。
+  -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`api`/`llm`/`none`)
+  -> **相似度阈值过滤** -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门
+  (连旧"工具轮跳过检索"的成本短路也已废除), 详见 P3-7 与"已完成记录(2026-10-04)"。
 - **阈值判定刻意排在重排之后**(召回层与阈值完全无关): 先过滤会让"余弦分偏低但确实答得上"的候选
   (第 6 名那类)连被重排捞一次的机会都没有——这正是"调试页查得到、对话却答无据"的成因之一。
   出口判据读的是 `semanticMaxScore`(未截断的观察值), 因此**移动过滤时机不改变出口结论**, 只改变注入内容;
@@ -218,16 +219,19 @@ com.ai
   ⚠ **勿把 BM25 命中数当相关性信号**: 实测它对"今天天气""写一首诗"这类问题同样返回 10 条并填满 topK,
   小语料下恒有命中——相关性判据只能建在向量路过阈值上(见 roadmap P3-7)。
 - 每次对话的意图路由/检索决策自动落库 `rag_decision_log`(见 `/api/system/rag-decisions`)。
-- **意图路由三态的职责已大幅收窄(P3-7)**: `RagMode` = KB / TOOL / GENERAL 仍是枚举, 但
-  **只用于工具类的成本短路**(跳过一次必然无用的知识库检索), **不再决定"这个问题要不要查知识库"**。
-  作答口径一律由检索结果算出的 `ChatOutcome` 决定。旧版本文档把"由词表决定是否检索"当成设计,
-  其后果是"知识库内容能否被问到取决于有人记得改词表", 已实测证伪(售后文档在库却答"未找到")。
-  - 判定顺序: 命中 `app.rag.tool-keywords`(订单/物流/快递/包裹等, 含少量同义词) → TOOL, 跳过知识库检索
-    (答案在业务库, 检索必然查不到反而挤占上下文预算); 其余(RAG/HYBRID 会话)**一律执行检索**。
-  - `app.rag.internal-keywords` **已退出正确性路径**: 它不再决定内容可否被问到, 仅影响审计里的
-    `rag_mode` 诊断标签。上传新文档**不再需要同步改词表**(这是 P3-7 的主要收益)。
-  - 工具问题**不入语义缓存**(答案随实时数据变化, 缓存会串味): 出口记 `TOOL_DATA`, 收尾按出口
-    与 `toolCalls` 双重排除写缓存。
+- **意图路由三态已完全退出正确性路径(2026-10-04)**: `RagMode` = KB / TOOL / GENERAL 仍是枚举,
+  但**纯审计标签**——P3-7 废除了它对"要不要检索"的决定权, 2026-10-04 又废除了最后一个残留职责
+  "TOOL 短路跳过知识库检索"。作答口径一律由检索结果算出的 `ChatOutcome` 决定。
+  - **废除 TOOL 短路的理由(实测)**: 词表按实体名词匹配, "订单的报销制度是什么"命中"订单"被判 TOOL
+    → 跳过检索 → 严格模式(kb-only 默认开)下知识库能答的问题被错拒——检索是模型接触知识库的唯一通道
+    (没有检索工具时), 跳过即断开, 错判不是"省一次 embedding"而是质量事故。
+  - 现行链路: RAG/HYBRID 会话**一律执行检索**; 零命中时由 `OutcomeResolver` 按"会话是否注册了工具"
+    分叉——HYBRID → `NO_EVIDENCE_WITH_TOOLS`(模型按工具描述裁决调工具或拒答, 见
+    `prompts/tools-fallback.st`), 纯 RAG → `REFUSED_NO_EVIDENCE`。
+  - `app.rag.internal-keywords` / `app.rag.tool-keywords` 仅影响审计里的 `rag_mode` 诊断标签。
+    上传新文档/新增工具**都不需要同步改词表**。
+  - 工具相关轮次**不入语义缓存**(答案随实时数据变化, 缓存会串味): 收尾按 `toolCalls` 计数排除;
+    本轮实际调过工具的统计出口升级记 `TOOL_DATA`(事后出口, 决策时点不产出)。
   - **单轮工具调用次数上限(B2)**: `ToolCallLogAspect` 复用 `toolCalls` 计数,
     超过 `app.chat.max-tool-calls-per-turn`(默认 8, 0=关闭)不执行工具、直接抛 `TOOL_CALL_LIMIT(6009)`,
     Spring AI 回传模型令其收尾作答——防模型异常时无限连环调工具烧 Token。
@@ -247,7 +251,7 @@ com.ai
   仅 `content`(正文增量); 结尾 `data:[DONE]`(无 event 头, 兼容契约)。
   不推送阶段提示/思考流/来源事件——**引用来源不再返回前端(2026-09 契约变更)**,
   只落库 `chat_log.sources`(审计走系统日志接口)。
-- 意图路由关键词表(缺省含年假/报销/放假/节假日/中秋等)决定是否检索。
+- 意图路由关键词表**已完全退出正确性路径**(纯审计标签, 不再决定是否检索)。
   ⚠ **旧表述纠正**: 本节曾写"语料外问题返回'未找到'属正确行为"——该定性掩盖了一个真实缺陷:
   **知识库内容能否被用户问到, 取决于有没有人记得去改一份与文档内容无关的配置**。已实测后果——
   `售后服务流程规范.pdf` 在库, 但"售后/退货/保修"均不在词表 → 判 GENERAL → 检索整段跳过 → 答"未找到",
@@ -301,7 +305,11 @@ com.ai
   (不是逐 token 增量)——前端/测试断言"流式增量≥2"必须在冷缓存下进行。
 - 审计约定(P3-7 起): 缓存命中由 `rag_decision_log.answer_outcome=ANSWERED_FROM_CACHE` 显式标识
   (不再靠 `rag_mode`+`retrieval_executed` 反推), 且该轮**不会**产生 `context_log`(未装配上下文)。
-  出口共五个值, 语义见 `com.ai.rag.ChatOutcome`。
+  出口共六个值, 语义见 `com.ai.rag.ChatOutcome`。
+- **负缓存的两个来源(2026-10-04 起)**: `REFUSED_NO_EVIDENCE`(纯 RAG 会话, 决策时已定拒答)与
+  `NO_EVIDENCE_WITH_TOOLS`(HYBRID 零命中)——后者仅当模型实际按固定口径拒答且未调任何工具
+  (`toolCalls==0` + `ChatSourceDisplay.declaresNoResult`)时才写入, 读侧两个出口都命中重放;
+  "该调工具的问题"不会因此固化成"没找到"。
 - 缓存键 = 知识库版本号 + 对话模型标识 + 归一化问题 SHA-256, 形如
   `rag:answer:v{版本}:m{模型}:{摘要}`(负缓存 `rag:miss:` 同命名空间)。两个失效维度:
   文档上传/删除/重处理 → 版本自增失效; **切换对话模型** → `m{模型}` 段天然形成新命名空间
@@ -428,7 +436,7 @@ com.ai
 
 - **traceId 全链路**: `common/TraceIdFilter`(最高优先级 Filter)为每个请求透传/生成 `X-Request-Id` 写入 MDC 并回写响应头; 日志 pattern 含 `[%X{traceId}]`——**任何线程打的日志必须带 traceId**, 排查时拿响应头一条 grep 串全链路。
 - **异步段 MDC 传播(禁止遗漏)**: `@Async` 线程池用 `common/MdcTaskDecorator`(audit/ingestion/session-title 三池已挂); 限时调用统一走 `Timeouts.call`(内部已做快照/恢复); 流式前置(boundedElastic)在 `ChatService.chatStream` 手动捕获。**新增异步路径必须同步加 MDC 传播**。
-- **业务指标**(`observability/ChatMetrics` 集中定义指标名): 出口分布 `chat.outcome`(五出口)、Token 成本 `chat.model.tokens`、缓存命中 `semcache.hit/miss/negative`、检索耗时与降级 `rag.retrieval(_degraded)`、工具调用 `tool.calls`、流式静默超时 `chat.stream.idleTimeout`。经 `/actuator/prometheus` 暴露(需 `micrometer-registry-prometheus`)。
+- **业务指标**(`observability/ChatMetrics` 集中定义指标名): 出口分布 `chat.outcome`(六出口)、Token 成本 `chat.model.tokens`、缓存命中 `semcache.hit/miss/negative`、检索耗时与降级 `rag.retrieval(_degraded)`、工具调用 `tool.calls`、流式静默超时 `chat.stream.idleTimeout`。经 `/actuator/prometheus` 暴露(需 `micrometer-registry-prometheus`)。
 - **埋点原则**: 只在入口/收尾等"结果确定"处插 1~2 行(全项目集中 5 个类), 中间过程靠日志+traceId; 指标/过滤器任何一环故障不得影响对话主流程。
 
 ### 统一返回值格式规范
@@ -441,7 +449,7 @@ com.ai
 
 ### Spring AI & RAG 提示词
 
-- 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system/kb-only-system，另有非 system 用途的 short-query-expand.st 短查询补全模板)。
+- 提示词外部化到 `classpath:/prompts/*.st`(base-system/rag-context/general-system/kb-only-system/tools-fallback，另有非 system 用途的 short-query-expand.st 短查询补全模板)。
 - 注入上下文前必须经重排或相似度阈值过滤。
 - **提示词选择矩阵**(`PromptService.systemFor`, 唯一选择点——同步与流式共用)：
 
@@ -451,7 +459,8 @@ com.ai
 |---|---|---|
 | `ANSWERED_FROM_KB` / `ANSWERED_FROM_CACHE` | `base-system.st` + `rag-context.st`(`{{extraRule}}`=可补充常识) | `kb-only-system.st` + `rag-context.st`(`{{extraRule}}`=禁止引入资料之外的知识, **且要求先答资料覆盖的那部分**) |
 | `REFUSED_NO_EVIDENCE` | —— 该出口只可能在严格模式出现 | `kb-only-system.st`(按固定口径友好拒答) |
-| `TOOL_DATA` | `general-system.st` | `kb-only-system.st`(第 4 条仍允许并只认工具返回值) |
+| `NO_EVIDENCE_WITH_TOOLS` | `general-system.st` | `kb-only-system.st` + `tools-fallback.st`(先按工具描述裁决调工具, 无工具可答才固定拒答) |
+| `TOOL_DATA` | `general-system.st` | `kb-only-system.st`(防御分支: 决策时点已不产出该值, 仅事后统计升级) |
 | `ANSWERED_OPEN` | `general-system.st`(自由作答) | `general-system.st`(非检索会话/检索降级) |
 | `AGENT` 会话(任意出口) | `base-system.st` | `base-system.st`(**刻意不变**: Agent 型本就靠工具) |
 

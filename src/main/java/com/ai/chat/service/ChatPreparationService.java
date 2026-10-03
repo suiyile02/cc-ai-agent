@@ -119,13 +119,11 @@ public class ChatPreparationService {
         }
         long rewriteMs = System.currentTimeMillis() - start;
 
-        // ① 检索先行: 出口只能由检索事实算出。词表不再预判"要不要检索"(GENERAL 也查)——
-        //    这是 P3-7 的核心: 知识库内容能否被问到, 不再取决于有没有人记得改一份与文档无关的配置。
+        // ① 检索先行: 出口只能由检索事实算出, 词表预判不再影响链路(含旧"工具轮跳过检索"短路——
+        //    词表按实体名词匹配会误判"订单的报销制度是什么"这类问题, 严格模式下错拒知识库能答的内容)。
         //    意图判定每轮只做一次(旧实现在缓存准入与路由两处各做一遍)。
-        //    预判结果仍随决策日志留痕(rag_mode 列), 用于对照"词表预判 vs 实际出口"的偏差——
-        // 成本优化 先进行关键字匹配是否要调用工具,要调用工具则少走一次调大模型进行向量化检索
+        //    预判结果仍随决策日志留痕(rag_mode 列), 用于对照"词表预判 vs 实际出口"的偏差。
         RagMode route = intentRouter.route(retrievalQuery);
-        boolean toolTurn = route == RagMode.TOOL;
         long retrieveStart = System.currentTimeMillis();
         RagContext rag = resolveRagContext(session, retrievalQuery, route);
         long retrieveMs = System.currentTimeMillis() - retrieveStart;
@@ -138,8 +136,13 @@ public class ChatPreparationService {
         SemanticAnswerCache.CachedAnswer cached = cacheEligible && outcome == ChatOutcome.ANSWERED_FROM_KB
                 ? semanticAnswerCache.get(retrievalQuery) : null;
         // 负缓存(穿透防护)只可能出现在"本轮确实无据可依"时——检索先行已经知道有没有证据,
-        // 绝不再让一条 30 分钟前的"没查到"覆盖刚查到的证据
-        boolean missHit = cacheEligible && cached == null && outcome == ChatOutcome.REFUSED_NO_EVIDENCE
+        // 绝不再让一条 30 分钟前的"没查到"覆盖刚查到的证据。
+        // 两个出口都可命中负缓存: REFUSED_NO_EVIDENCE(纯 RAG 会话, 决策时已定拒答)与
+        // NO_EVIDENCE_WITH_TOOLS(HYBRID 零命中——条目只在模型实际拒答且未调工具时写入,
+        // 见 ChatCompletionService, 故命中重放是安全的)
+        boolean missHit = cacheEligible && cached == null
+                && (outcome == ChatOutcome.REFUSED_NO_EVIDENCE
+                    || outcome == ChatOutcome.NO_EVIDENCE_WITH_TOOLS)
                 && semanticAnswerCache.isMiss(retrievalQuery);
         long cacheMs = System.currentTimeMillis() - cacheStart;
 
@@ -200,22 +203,16 @@ public class ChatPreparationService {
     }
 
     /**
-     * 检索并算出本轮出口：AGENT/非 RAG 会话不检索；工具轮跳过知识库检索(答案在业务库)；
-     * 其余一律执行混合检索——**不再由关键词表预判"该不该查"**。
+     * 检索并算出本轮出口：AGENT/非 RAG 会话不检索；RAG/HYBRID 会话**一律执行混合检索**
+     * (不再有"工具轮跳过检索"的短路)——零命中时由 {@link OutcomeResolver} 按"会话是否有工具
+     * 可调"分叉给模型裁决或固定拒答。
      *
      * @param session     会话
      * @param userMessage 检索问题
-     * @param route       意图路由预判(只有 TOOL 影响链路, KB/GENERAL 作为审计留痕)
+     * @param route       意图路由预判(纯审计标签, 随决策日志留痕, 不影响链路)
      * @return RAG 上下文快照(含出口)
      */
     private RagContext resolveRagContext(ChatSession session, String userMessage, RagMode route) {
-        if (route == RagMode.TOOL) {
-            // 工具类问题(查订单/物流)答案在业务库, 知识库检索必然查不到反而挤占上下文预算——
-            // 跳过它是省一次 embedding, 不是判据; 出口记 TOOL_DATA, 严格模式下照样允许调工具
-            log.debug("工具类问题, 跳过知识库检索(交给模型调工具): {}", userMessage);
-            return new RagContext(List.of(), RagMode.TOOL, RetrievalOutcome.none(),
-                    ChatOutcome.TOOL_DATA);
-        }
         boolean ragSession = session.getSessionType() == SessionType.RAG
                 || session.getSessionType() == SessionType.HYBRID;
         if (!ragSession) {
@@ -225,8 +222,10 @@ public class ChatPreparationService {
         RetrievalOutcome outcome = ragRetriever.retrieveOutcome(
                 userMessage, appProperties.getRag().getTopK(),
                 appProperties.getRag().getSimilarityThreshold());
-        // 出口判定( 决定是由大模型自由发挥, 还是严格按照内部知识库/数据库作答)
-        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, false,
+        // 出口判定(决定是由大模型自由发挥, 还是严格按照内部知识库/数据库作答)。
+        // toolsAvailable 是会话级静态事实: HYBRID 注册了 BusinessTools, RAG 没有。
+        boolean toolsAvailable = session.getSessionType() == SessionType.HYBRID;
+        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, toolsAvailable,
                 appProperties.getChat().isKbOnly(), appProperties.getRag().getSimilarityThreshold());
         return new RagContext(outcome.hits(), route, outcome, chatOutcome);
     }
@@ -280,8 +279,8 @@ public class ChatPreparationService {
      * 检索调试：走与对话<b>完全相同</b>的"扩展 → 混合检索 → 出口判定"三步，只回显不落地
      * (不写记忆/审计/缓存，也不装配提示词、不调用对话模型)。
      *
-     * <p>与对话的唯一差别在这里：调试的目的就是"看看能召回什么"，所以工具类问题也照样检索
-     * (对话里工具轮会跳过检索)，但出口判定仍按工具轮口径算，页面才能预测"对话会怎么答"。
+     * <p>与对话的唯一差别在这里：对话侧的出口还依赖会话类型(HYBRID 有工具/RAG 无工具),
+     * 调试页尚未建会话, 统一按 HYBRID 口径假定工具可用, 页面才能预测"对话会怎么答"。
      *
      * @param question   用户输入的查询
      * @param topK       召回条数; null 或 &lt;1 时取 {@code app.rag.top-k}
@@ -303,8 +302,8 @@ public class ChatPreparationService {
             }
         }
         RetrievalOutcome outcome = ragRetriever.retrieveOutcome(query, effectiveTopK, effectiveThreshold);
-        boolean toolTurn = intentRouter.route(query) == RagMode.TOOL;
-        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, toolTurn,
+        // 调试页按 HYBRID 口径预测出口(尚未建会话, 假定工具可用); 零命中 → NO_EVIDENCE_WITH_TOOLS
+        ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, true,
                 appProperties.getChat().isKbOnly(), effectiveThreshold);
         return new DebugSearch(query, expanded, outcome, chatOutcome, effectiveTopK, effectiveThreshold);
     }

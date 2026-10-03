@@ -99,6 +99,35 @@ class ChatCompletionServiceTest {
     }
 
     /**
+     * 零命中 + HYBRID 会话(NO_EVIDENCE_WITH_TOOLS): 仅当模型实际按固定口径拒答且未调工具时
+     * 才写负缓存——"该调工具的问题"不得被固化成"没找到"。
+     */
+    @Test
+    void zeroHitWithToolsWritesNegativeCacheOnlyOnDeclaredNoResult() {
+        ChatPreparationService.PreparedChat zeroHitWithTools =
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.2), List.of(),
+                        new AtomicInteger(), ChatOutcome.NO_EVIDENCE_WITH_TOOLS);
+
+        // 模型确实按固定口径拒答 → 可写负缓存(重复同问省一次模型调用)
+        service.complete(session(), "用户问题", zeroHitWithTools,
+                ChatSourceDisplay.NO_RESULT_ANSWER, 10, 0L);
+        verify(semanticAnswerCache).putMiss(QUESTION);
+        verify(semanticAnswerCache, never()).put(anyString(), anyString(), any());
+    }
+
+    @Test
+    void zeroHitWithToolsFreeAnswerWritesNothing() {
+        // 零命中但模型自由作答(未拒答) → 不得写入负缓存
+        service.complete(session(), "用户问题",
+                prep(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.2), List.of(),
+                        new AtomicInteger(), ChatOutcome.NO_EVIDENCE_WITH_TOOLS),
+                "今天天气晴, 适合出游。", 10, 0L);
+
+        verify(semanticAnswerCache, never()).putMiss(anyString());
+        verify(semanticAnswerCache, never()).put(anyString(), anyString(), any());
+    }
+
+    /**
      * P3-7 新增规则: 零命中但走自由作答(ANSWERED_OPEN)的轮次**不得**写负缓存。
      * 旧实现按"零命中"写, 会把宽松模式下本可自由作答的问题缓存成固定"未找到"文案。
      */

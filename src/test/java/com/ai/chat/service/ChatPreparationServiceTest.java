@@ -157,24 +157,51 @@ class ChatPreparationServiceTest {
         verify(semanticAnswerCache, never()).isMiss(anyString());
     }
 
+    /**
+     * 词表预判 TOOL 的轮次同样要真检索: TOOL 短路已废除, 预判只剩审计标签。
+     * 零命中时出口交给模型裁决(NO_EVIDENCE_WITH_TOOLS), 不再直接跳过检索。
+     */
     @Test
-    void toolQuestionSkipsRetrievalAndMarksTool() {
-        when(queryRewriter.rewrite(anyString(), any(), anyString()))
-                .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
+    void toolRoutedQuestionStillRetrievesAndKeepsAuditLabel() {
+        givenCacheEligibleBaseline();
         when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.31));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
                 .thenReturn(mock(AssembledPrompt.class));
 
         ChatPreparationService.PreparedChat prep = service.prepare(session(), QUESTION);
 
-        assertEquals(RagMode.TOOL, prep.rag().mode(), "工具类问题审计应标记为 TOOL");
-        assertTrue(prep.rag().hits().isEmpty(), "工具类问题不得返回检索命中");
-        // 工具类问题跳过检索与缓存(答案在业务库, 不在知识库)
-        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble());
-        verify(semanticAnswerCache, never()).get(anyString());
-        // 决策审计照常发布(rag_mode=TOOL)
+        assertEquals(RagMode.TOOL, prep.rag().mode(), "词表预判应如实留痕为 TOOL(仅审计)");
+        assertEquals(ChatOutcome.NO_EVIDENCE_WITH_TOOLS, prep.rag().chatOutcome(),
+                "零命中 + HYBRID 会话有工具 → 交给模型裁决");
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble());
         verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
+    }
+
+    /**
+     * 核心回归: 词表把"订单的报销制度是什么"这类知识库问题误判成 TOOL 时,
+     * 检索不再被跳过, 知识库能答的内容正常命中作答(旧实现此处会错拒)。
+     */
+    @Test
+    void misroutedToolKeywordStillAnswersFromKb() {
+        givenCacheEligibleBaseline();
+        when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+                .thenReturn(new RetrievalOutcome(
+                        List.of(mock(org.springframework.ai.document.Document.class)),
+                        true, 2, 5, false, 0.72));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        ChatPreparationService.PreparedChat prep = service.prepare(session(), QUESTION);
+
+        assertEquals(RagMode.TOOL, prep.rag().mode(), "词表预判仍是 TOOL(审计)");
+        assertEquals(ChatOutcome.ANSWERED_FROM_KB, prep.rag().chatOutcome(),
+                "检索命中即依据知识库作答, 词表误判不再影响出口");
+        assertFalse(prep.rag().hits().isEmpty(), "命中资料必须注入上下文");
     }
 
     @Test
@@ -211,22 +238,22 @@ class ChatPreparationServiceTest {
     }
 
     @Test
-    void skippedRetrievalRecordsNullMaxScoreNotZero() {
-        // 工具类问题跳过检索: 决策事件里的 semanticMaxScore 必须是 null("没观察"),
+    void agentSessionRecordsNullMaxScoreNotZero() {
+        // AGENT 会话不执行检索: 决策事件里的 semanticMaxScore 必须是 null("没观察"),
         // 不能是 0.0("观察到 0 分")——否则 P3-6 用它统计分数分布依然失真
         when(queryRewriter.rewrite(anyString(), any(), anyString()))
                 .thenReturn(new QueryRewriter.RewriteResult(QUESTION, false));
-        when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
-        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
-        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
-                .thenReturn(mock(AssembledPrompt.class));
+        when(intentRouter.route(anyString())).thenReturn(RagMode.GENERAL);
+        ChatSession agentSession = session();
+        agentSession.setSessionType(SessionType.AGENT);
 
-        service.prepare(session(), QUESTION);
+        service.prepare(agentSession, QUESTION);
 
         ArgumentCaptor<ChatDecisionEvent> sent = ArgumentCaptor.forClass(ChatDecisionEvent.class);
         verify(eventPublisher).publishEvent(sent.capture());
         assertNull(sent.getValue().semanticMaxScore(), "未执行检索时语义最高分应为 null");
         assertFalse(sent.getValue().retrievalExecuted());
+        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble());
     }
 
     @Test
@@ -316,26 +343,25 @@ class ChatPreparationServiceTest {
         assertEquals(props.getRag().getTopK(), debug.topK());
         assertEquals(props.getRag().getSimilarityThreshold(), debug.threshold(), 1e-9,
                 "留空即跟随对话阈值, 不再暗置 0(不过滤)——那会造出第三种口径");
-        assertEquals(ChatOutcome.REFUSED_NO_EVIDENCE, debug.chatOutcome(),
-                "关键词有命中但向量未过阈值 → 对话会拒答, 页面须如实预测");
+        assertEquals(ChatOutcome.NO_EVIDENCE_WITH_TOOLS, debug.chatOutcome(),
+                "调试页按 HYBRID 口径: 零命中 → 预测交给模型裁决, 页面须如实预测");
         assertFalse(debug.expanded());
         verify(shortQueryExpander, never()).expand(any(), anyString());
     }
 
-    /** 工具轮: 页面照样检索(目的就是看召回), 但出口预测须与对话一致记 TOOL_DATA */
+    /** 零命中调试: 页面照样检索(目的就是看召回), 出口按 HYBRID 口径预测为模型裁决 */
     @Test
-    void debugSearchPredictsToolTurnAndReportsExpandedQuery() {
+    void debugSearchPredictsToolAdjudicationAndReportsExpandedQuery() {
         when(shortQueryExpander.expand(any(), anyString()))
                 .thenReturn(new ShortQueryExpander.ExpandResult("订单的物流状态是什么", true));
-        when(intentRouter.route("订单的物流状态是什么")).thenReturn(RagMode.TOOL);
         when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
-                .thenReturn(new RetrievalOutcome(List.of(), true, 1, 3, false, 0.51));
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 3, false, 0.31));
 
         ChatPreparationService.DebugSearch debug = service.debugSearch("订单", 5, 0.45, true);
 
         assertTrue(debug.expanded());
         assertEquals("订单的物流状态是什么", debug.retrievalQuery());
-        assertEquals(ChatOutcome.TOOL_DATA, debug.chatOutcome());
+        assertEquals(ChatOutcome.NO_EVIDENCE_WITH_TOOLS, debug.chatOutcome());
         verify(ragRetriever).retrieveOutcome("订单的物流状态是什么", 5, 0.45);
     }
 }
