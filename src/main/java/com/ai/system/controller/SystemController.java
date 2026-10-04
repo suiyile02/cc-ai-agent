@@ -10,8 +10,10 @@ import com.ai.common.Result;
 import com.ai.rag.SemanticCacheAdmin;
 import com.ai.system.dto.ChatLogVO;
 import com.ai.system.dto.ContextLogVO;
+import com.ai.system.dto.MemoryRawEntryVO;
 import com.ai.system.dto.RagDecisionLogVO;
 import com.ai.system.dto.ToolCallLogVO;
+import com.ai.system.service.MemoryRawService;
 import com.ai.user.security.RequireAdmin;
 import com.ai.user.security.RequireSelfOrAdmin;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 系统管理接口(需求第 6 章)：对话日志 / 工具调用日志 / RAG 决策日志查询,
@@ -34,6 +38,7 @@ public class SystemController {
     private final ToolCallLogService toolCallLogService;
     private final RagDecisionLogService ragDecisionLogService;
     private final ContextLogService contextLogService;
+    private final MemoryRawService memoryRawService;
     private final SemanticCacheAdmin semanticCacheAdmin;
 
     /**
@@ -139,6 +144,22 @@ public class SystemController {
         PageResult<ContextLogVO> page = contextLogService.list(pageNum, pageSize, sessionId,
                 userId, DateParamUtils.parseDate(startTime), DateParamUtils.parseDate(endTime));
         return Result.ok(page);
+    }
+
+    /**
+     * 会话原始轨迹留档查询(管理员)：完整对话原文 + 每次摘要压缩事件, 按序升序。
+     * 含未脱敏对话全文, 刻意只对管理员开放。
+     *
+     * @param sessionId 会话 ID
+     * @param limit     最多返回条数(缺省 500, 上限 2000)
+     * @return 统一响应, data 为留档条目列表(升序)
+     */
+    @GetMapping("/memory-raw")
+    @RequireAdmin
+    public Result<List<MemoryRawEntryVO>> listMemoryRaw(
+            @RequestParam String sessionId,
+            @RequestParam(required = false) Integer limit) {
+        return Result.ok(memoryRawService.list(sessionId, limit));
     }
 
     /**

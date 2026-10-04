@@ -3,6 +3,7 @@ package com.ai.session.service;
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.common.PageResult;
+import com.ai.memory.ChatMemoryArchive;
 import com.ai.context.service.ConversationMemoryService;
 import com.ai.session.dto.SessionVO;
 import com.ai.session.entity.ChatSession;
@@ -36,7 +37,8 @@ class ChatSessionServiceTest {
         sessionMapper = mock(ChatSessionMapper.class);
         sessionCache = mock(SessionCacheService.class);
         service = new ChatSessionService(sessionMapper, sessionCache,
-                mock(ChatMemory.class), mock(ConversationMemoryService.class));
+                mock(ChatMemory.class), mock(ConversationMemoryService.class),
+                mock(ChatMemoryArchive.class));
     }
 
     /** 构造一条归属 owner、状态为 status 的会话记录 */

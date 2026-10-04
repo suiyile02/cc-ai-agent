@@ -273,6 +273,11 @@ com.ai
   终止并降级提示, 早于 okhttp 60s read timeout 触发; `spring.ai.openai.timeout`(120s)仅作二次保险。
 - **流式中断不写语义缓存**: 中断/静默超时走 `ChatCompletionService.completeInterrupted`(只写记忆与
   审计), 禁止走 `complete()`——后者会把"中断提示"当答案缓存, 下次同问直接命中一条 19 字提示。
+- **工具结果驱逐(2026-10-04)**: `ToolCallLogAspect` 对回传模型的工具结果治理——单结果超
+  `app.chat.tool-result-evict-chars`(默认 4000)或单轮累计超 `tool-result-turn-max-chars`(默认 12000,
+  经 toolContext 的 `toolResultChars` 累计器)时, 模型收到"头尾预览 + tool_call_log 存档指针"而非全文;
+  完整结果(脱敏后)仍照常落库——**驱逐只影响模型输入, 不影响审计与缓存闸门**。成功路径先落库拿行 id
+  供指针引用(`persisted` 标记防 finally 重复落库)。新增"返回大文本"的工具(联网搜索/报表)时勿放宽阈值。
 
 ### Redis 使用与降级约定(强制)
 
@@ -399,6 +404,17 @@ com.ai
   `ChatMemoryCounter.countByConversationId`(每轮都调一次, 旧实现 `findByConversationId().size()`
   会把全部历史反序列化, 开销随历史长度线性增长)。
 - 同会话的 append/摘要/裁剪共用 per-session 锁与防重入标记, 防止并发覆盖丢消息。
+- **结构化四节摘要(2026-10-04)**: `history-summary.st` 强制按【会话意图】/【已确认事实】/【未决事项】/【口径约束】
+  四节输出(节名逐字固定, 某节无内容写"无", 禁止编造凑数); `ConversationSummarizer.normalizeSections`
+  校验节头齐全(缺任一节=格式不合格→保留旧摘要下轮重试, WARN 可见)并按固定节序重组、
+  **逐节截断**(预算均分)——整段尾部截断导致尾节消失的问题不再存在。
+- **原始轨迹留档(2026-10-04)**: `chat_memory_raw`(schema-mysql-extra.sql, append-only)留存全部消息原文
+  与每次压缩事件(SUMMARY 行, batch 递增)。写入点: ① `ConversationMemoryService.append` 与工作表
+  **同事务双写**(留档缺失比对话失败更难补偿, 不做本地降级); ② 摘要完成后 `appendSummary`。
+  摘要裁剪只收缩工作表, 留档永不裁剪, 随会话删除一并清理(`ChatSessionService.delete`)。
+  价值: 摘要策略可拿留档离线重算对比、精确回放"模型当时看到了什么"。
+  管理员查询 `GET /api/system/memory-raw`(`@RequireAdmin`): **原文未脱敏**, 敏感度高于四类日志,
+  刻意不开放本人自查。
 
 ### 用户与鉴权
 

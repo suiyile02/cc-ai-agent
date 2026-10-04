@@ -95,3 +95,17 @@ CREATE TABLE IF NOT EXISTS context_log (
     created_at        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     INDEX idx_ctx_session (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='上下文装配审计日志(各段 Token 占用/截断/查询改写)';
+
+-- 会话原始轨迹留档(append-only): 滚动摘要裁剪只收缩工作表 SPRING_AI_CHAT_MEMORY,
+-- 原始消息与每次压缩事件(SUMMARY 行)完整留存于此, 供回放审计与摘要策略离线重算。
+CREATE TABLE IF NOT EXISTS chat_memory_raw (
+    id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    conversation_id VARCHAR(36)  NOT NULL COMMENT '会话唯一标识(=sessionId)',
+    seq             BIGINT       NOT NULL COMMENT '会话内单调递增序号',
+    role            VARCHAR(16)  NOT NULL COMMENT '行类型：USER/ASSISTANT/SUMMARY',
+    content         TEXT         NOT NULL COMMENT '原文(SUMMARY 行为当次摘要全文)',
+    batch           INT          NULL COMMENT '仅 SUMMARY 行：第几次滚动摘要压缩(1 起)',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入档时间',
+    UNIQUE KEY uk_conv_seq (conversation_id, seq),
+    INDEX idx_conv (conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话原始轨迹留档(append-only, 摘要裁剪不删除, 随会话删除清理)';

@@ -9,6 +9,7 @@ import com.ai.memory.ChatMemoryAppender;
 import com.ai.memory.ChatMemoryCounter;
 import com.ai.context.entity.ConversationSummary;
 import com.ai.context.mapper.ConversationSummaryMapper;
+import com.ai.memory.ChatMemoryArchive;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -61,6 +62,7 @@ public class ConversationMemoryService implements ConversationMemory {
     private final ChatMemoryRepository memoryRepository;
     private final ChatMemoryAppender memoryAppender;
     private final ChatMemoryCounter memoryCounter;
+    private final ChatMemoryArchive archive;
     private final ConversationSummaryMapper summaryMapper;
     private final ConversationSummarizer summarizer;
     private final TokenCounter tokenCounter;
@@ -162,6 +164,8 @@ public class ConversationMemoryService implements ConversationMemory {
                 writeSummary(sessionId, result.summary());
                 memoryRepository.saveAll(sessionId,
                         new ArrayList<>(all.subList(all.size() - keep, all.size())));
+                // 压缩事件入档: 被裁剪的原文已在追加时入留档, 这里补一条 SUMMARY 行使轨迹自描述
+                archive.appendSummary(sessionId, result.summary());
                 log.info("会话摘要已更新并裁剪历史: sessionId={}, 触发=[{}], 摘要 {} tok, 保留 {} 条消息",
                         sessionId, triggerReason, tokenCounter.count(result.summary()), keep);
             }
@@ -221,6 +225,8 @@ public class ConversationMemoryService implements ConversationMemory {
         }
         synchronized (lockFor(sessionId)) {
             memoryAppender.append(sessionId, added);
+            // 原始轨迹双写: 工作表只保窗口(摘要裁剪会删), 留档表 append-only 永不裁剪(同事务)
+            archive.append(sessionId, added);
         }
     }
 

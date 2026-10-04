@@ -4,6 +4,7 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.common.PageResult;
 import com.ai.context.ConversationMemory;
+import com.ai.memory.ChatMemoryArchive;
 import com.ai.session.dto.HistoryMessageVO;
 import com.ai.session.dto.SessionMessagesVO;
 import com.ai.session.dto.SessionVO;
@@ -35,6 +36,7 @@ public class ChatSessionService {
     private final SessionCacheService sessionCache;
     private final ChatMemory chatMemory;
     private final ConversationMemory conversationMemoryService;
+    private final ChatMemoryArchive memoryArchive;
 
     /**
      * 创建会话(sessionId=UUID, 即记忆与日志的 conversation_id)。
@@ -169,6 +171,7 @@ public class ChatSessionService {
         try {
             chatMemory.clear(session.getSessionId());
             conversationMemoryService.clearSummary(session.getSessionId());
+            memoryArchive.deleteByConversationId(session.getSessionId());
             log.info("已清理会话记忆与摘要: {}", session.getSessionId());
         } catch (Exception e) {
             log.warn("清理会话记忆失败(忽略): {}", e.getMessage());

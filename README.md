@@ -12,7 +12,7 @@
 | 向量库 | Qdrant（唯一向量库，首次启动自动建集合，维度随 embedding 模型） |
 | 业务库 | MySQL 8（唯一关系库，表由启动期 `spring.sql.init` 幂等建表） |
 | 持久化 | MyBatis-Plus 3.5.17（BaseMapper + LambdaQueryWrapper；表结构由启动期 `spring.sql.init` 脚本维护） |
-| 对话记忆 | 自研 `DbChatMemoryRepository`（框架约定表 `SPRING_AI_CHAT_MEMORY`，content 列 JSON 序列化）+ 自管历史装配；官方 `spring-ai-starter-model-chat-memory-repository-jdbc` 在 2.0.1 BOM 中已存在，经对比暂保留自研（官方表多 `sequence_id` 列，迁移评估见 agents.md） |
+| 对话记忆 | 自研 `DbChatMemoryRepository`（框架约定表 `SPRING_AI_CHAT_MEMORY`，content 列 JSON 序列化）+ 自管历史装配；**结构化四节滚动摘要**（会话意图/已确认事实/未决事项/口径约束，格式不合格保留旧摘要）；**原始轨迹留档**（`chat_memory_raw` append-only，摘要裁剪不删除，随会话删除清理）；官方 `spring-ai-starter-model-chat-memory-repository-jdbc` 在 2.0.1 BOM 中已存在，经对比暂保留自研 |
 | 文档解析 | Tika（PDF/DOCX/TXT/MD） + `TokenTextSplitter`(512/100) |
 | 其它 | AOP(工具日志) · Lombok · 虚拟线程 |
 
@@ -159,6 +159,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `GET /api/system/tool-call-logs` | 工具调用日志分页（toolName/status/时间过滤） |
 | `GET /api/system/rag-decisions` | RAG 检索决策日志分页（sessionId/userId/ragMode/时间过滤：**出口 answerOutcome**、意图预判 ragMode、是否检索、多路命中数、Top-K/阈值/**阈值前最大分**、重排模式、耗时） |
 | `GET /api/system/context-logs` | 上下文装配日志分页（各段 token 占用/是否截断/改写结果/耗时） |
+| `GET /api/system/memory-raw` | 会话原始轨迹留档查询（管理员：完整对话原文 + 每次摘要压缩事件，按序升序；原文未脱敏，刻意不开放本人自查） |
 | `DELETE /api/system/semantic-cache` | 清空语义缓存（管理员），返回失效后的知识库版本号；文档变更已自动失效，切换对话模型也已按键隔离（无需手工清空），此接口用于“回答质量异常”的人工强制失效 |
 
 ### 3.6 异常与降级（需求第 8 章）

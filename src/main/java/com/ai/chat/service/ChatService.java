@@ -294,11 +294,13 @@ public class ChatService {
         }
         if (needTools(session)) {
             // 透传会话与用户到工具上下文: ToolCallLogAspect 据此回填 tool_call_log 的 session_id/user_id;
-            // toolCalls 计数器同经切面自增, 收尾阶段据此判定"回答含实时业务数据"→禁止写语义缓存
+            // toolCalls 计数器同经切面自增, 收尾阶段据此判定"回答含实时业务数据"→禁止写语义缓存;
+            // toolResultChars 为本轮工具结果回传模型的字符量累计(工具结果驱逐的单轮预算), 切面累加
             spec.tools(businessTools)
                     .toolContext(Map.of("sessionId", session.getSessionId(),
                             "userId", session.getUserId(),
-                            "toolCalls", toolCalls));
+                            "toolCalls", toolCalls,
+                            "toolResultChars", new AtomicInteger()));
         }
         return spec;
     }

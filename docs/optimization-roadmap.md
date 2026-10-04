@@ -233,6 +233,32 @@
 
 ---
 
+## 已完成记录（2026-10-04 第二批, 记忆留档 + 结构化摘要 + 工具结果驱逐）
+
+对齐 AgentScope 记忆机制差距分析的三项落地。
+
+**③ 结构化摘要**: `history-summary.st` 改为四节定式(会话意图/已确认事实/未决事项/口径约束, 节名逐字
+固定、无内容写"无"); `ConversationSummarizer.normalizeSections` 校验节头齐全(不合格保留旧摘要下轮重试)、
+容忍乱序输出按固定节序重组、逐节截断(预算均分)——修复"整段尾部截断导致尾节消失"。验证:
+`ConversationSummarizerTest` 3 例(规范重组/缺节拒绝/逐节截断)。
+
+**① 原始轨迹留档**: 新表 `chat_memory_raw`(append-only: conversation_id+seq 唯一, role=USER/ASSISTANT/
+SUMMARY, SUMMARY 行带 batch 压缩批次)。`ConversationMemoryService.append` 与工作表**同事务双写**;
+摘要完成后 `appendSummary` 记压缩事件; 会话删除经 `ChatSessionService.delete` 一并清理。
+新契约 `ChatMemoryArchive`(memory 模块根包, 与 Appender/Counter 成对)+实现 `DbChatMemoryArchive`;
+管理员查询 `GET /api/system/memory-raw`(@RequireAdmin, 原文未脱敏刻意不开放本人自查)。
+价值: 摘要裁剪不可逆→可逆, 摘要策略可离线重算回归。验证: `ConversationMemoryServiceTest`/
+`ChatSessionServiceTest` 构造器适配, 全量回归通过。
+
+**② 工具结果驱逐**: `ToolCallLogAspect` 成功路径对回传模型的工具结果治理——单结果 >
+`app.chat.tool-result-evict-chars`(4000) 或单轮累计 > `tool-result-turn-max-chars`(12000, 经 toolContext
+新增 `toolResultChars` 累计器)时, 模型收到"头尾预览 + tool_call_log 存档指针"而非全文;
+完整结果(脱敏后)仍落库。成功路径先落库拿行 id(`persisted` 标记防 finally 重复落库)。
+验证: `ToolCallLogAspectTest` 新增 3 例(超限驱逐+指针/单轮累计驱逐/关闭透传)。
+
+**代价(明示)**: 每轮对话多 2 行留档 INSERT(同事务); 摘要提示词格式约束有失败率(fallback 保留旧摘要);
+驱逐存在信息丢失风险(阶段 2 可选的 `readToolResult` 分段回读工具未实施, 当前靠更窄参数重查补救)。
+
 ## 已完成记录（2026-10-04, TOOL 短路下线: 零命中+有工具改交模型裁决）
 
 **触发**: 复盘发现词表按实体名词误判——"订单的报销制度是什么"命中工具词"订单"→跳过检索→

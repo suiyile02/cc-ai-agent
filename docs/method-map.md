@@ -69,7 +69,11 @@
 ### `ToolCallLogAspect`
 | 方法 | 作用 | 调用方 |
 |---|---|---|
-| `around(pjp, @Tool)` | 计时执行工具 → 落 `tool_call_log`（入参/出参/耗时/状态/错误）；**★同时 `toolCalls.incrementAndGet()`（失败调用也计数）** | Spring AI 工具调用反射 |
+| `around(pjp, @Tool)` | 计时执行工具 → 落 `tool_call_log`（入参/出参/耗时/状态/错误）；**★同时 `toolCalls.incrementAndGet()`（失败调用也计数）**；★成功路径先落库拿行 id, 结果被驱逐时回"预览+存档指针" | Spring AI 工具调用反射 |
+| `needEvict(full,toolContext)` ★新增 | 驱逐判定: 单结果 > `tool-result-evict-chars`(4000) 或单轮累计 > `tool-result-turn-max-chars`(12000), 0=关闭 | 内部 |
+| `evictedNotice(full,logId,toolContext)` ★新增 | 构造"头尾预览+存档指针"替代文本, 并把可见字符量计入单轮预算 | 内部 |
+| `persist(entry)` ★改 | 落库一次(成功 try 内/失败 finally 兜底, `persisted` 标记防重复), 失败仅 WARN | 内部 |
+| `accountTurnChars(length,toolContext)` / `turnChars(toolContext)` ★新增 | 维护 toolContext 的 `toolResultChars`(AtomicInteger) 单轮字符量累计器 | 内部 |
 | `findToolContext(args)` | 从参数里取 `ToolContext`（由门面经 `toolContext` 透传 sessionId/userId/toolCalls） | 内部 |
 | `stripToolContext(args)` | 序列化入参前剔除 `ToolContext`（上下文不是业务入参，不落库） | 内部 |
 | `toJson(value)` | Jackson 序列化，失败退化 `toString`；结果再经 `SensitiveDataMasker` | 内部 |
@@ -220,7 +224,8 @@
 ### `ConversationSummarizer` / `QueryRewriter` / `ShortQueryExpander`
 | 方法 | 作用 |
 |---|---|
-| `summarize(existing,oldMessages)` | 合并"已有摘要 + 新增老消息"生成新摘要（disable-thinking、`Timeouts` 限时） |
+| `summarize(existing,oldMessages)` | 合并"已有摘要 + 新增老消息"生成**结构化四节摘要**（disable-thinking、`Timeouts` 限时）；格式不合格(缺节头)保留旧摘要 |
+| `normalizeSections(raw,maxTokens)` ★新增 | 四节节头校验 + 按固定节序重组(容忍乱序输出) + 逐节截断(预算均分), 防尾部小节被整段截掉 |
 | `SummaryResult.unchanged(s)` | 未更新时的结果 |
 | `rewrite(sessionId,sessionType,userMessage)` | 指代消解：非 AGENT + 有历史 + 含线索词 + 未冷却 才调 `CompressionQueryTransformer`；失败/超时回退原问题 |
 | `resolveTransformer()` | 注入优先，否则按 ChatClient 可用性惰性构建 |
@@ -401,6 +406,12 @@
 | `findConversationIds()` / `deleteByConversationId(cid)` | 会话枚举 / 删会话记忆 | 契约与删除会话 |
 | `toJson(text)` / `toMessage(record)` / `JsonText` | content 列 JSON 序列化与还原 | 内部 |
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
+| `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |
+| `ChatMemoryArchive.appendSummary(cid,summary)` ★新增 | 滚动摘要完成后追加 SUMMARY 行(batch=已有最大值+1, 压缩事件自描述) | `ConversationMemoryService.summarizeIfNeededAsync` |
+| `ChatMemoryArchive.deleteByConversationId(cid)` ★新增 | 会话删除时清理留档 | `ChatSessionService.delete` |
+| `ChatMemoryArchive.findByConversationId(cid,limit)` ★新增 | 按序读取留档(回放审计) | `MemoryRawService` |
+| `DbChatMemoryArchive` / `ChatMemoryRaw`(entity) / `ChatMemoryRawMapper` | 留档实现与 `chat_memory_raw` 表(seq 单调递增 + uk 防重) | — |
+| `MemoryRawService.list(sessionId,limit)` ★新增 | 留档查询(`@RequireAdmin`, 原文未脱敏, 刻意不开放本人自查) | `SystemController#listMemoryRaw` |
 
 ---
 

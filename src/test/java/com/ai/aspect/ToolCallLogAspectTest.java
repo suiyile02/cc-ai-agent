@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -133,5 +134,61 @@ class ToolCallLogAspectTest {
         verify(logService, org.mockito.Mockito.atLeast(3)).save(saved.capture());
         var all = saved.getAllValues();
         assertEquals("FAILED", all.get(all.size() - 1).getStatus());
+    }
+
+    /* ---------------- 工具结果驱逐 ---------------- */
+
+    /** 构造带单轮字符量累计器的上下文 */
+    private Map<String, Object> contextWithTurnChars(AtomicInteger counter, AtomicInteger turnChars) {
+        return Map.of("sessionId", "s1", "toolCalls", counter, "toolResultChars", turnChars);
+    }
+
+    @Test
+    void oversizedResultIsEvictedWithArchivePointer() throws Throwable {
+        appProperties.getChat().setToolResultEvictChars(200);
+        // 落库回填行 id(驱逐指针引用; 生产由 MyBatis-Plus 回填)
+        org.mockito.Mockito.doAnswer(inv -> {
+            ((ToolCallLog) inv.getArgument(0)).setId(842L);
+            return null;
+        }).when(logService).save(any());
+
+        String big = "x".repeat(1000);
+        Object out = aspect.around(joinPoint(
+                contextWithTurnChars(new AtomicInteger(), new AtomicInteger()), big), toolAnnotation());
+
+        String notice = (String) out;
+        assertTrue(notice.contains("已截断"), "超限结果必须驱逐为截断提示");
+        assertTrue(notice.contains("tool_call_log#842"), "指针必须引用存档行 id");
+        assertTrue(notice.length() < 1200, "回给模型的是预览而非全文");
+        // 审计仍落全量(脱敏后的完整结果)
+        ArgumentCaptor<ToolCallLog> saved = ArgumentCaptor.forClass(ToolCallLog.class);
+        verify(logService).save(saved.capture());
+        assertEquals(1000, saved.getValue().getOutputResult().length());
+    }
+
+    @Test
+    void turnBudgetEvictsLaterResults() throws Throwable {
+        appProperties.getChat().setToolResultEvictChars(0);
+        appProperties.getChat().setToolResultTurnMaxChars(1000);
+        AtomicInteger counter = new AtomicInteger();
+        AtomicInteger turnChars = new AtomicInteger();
+        Map<String, Object> context = contextWithTurnChars(counter, turnChars);
+
+        assertEquals("short-1", aspect.around(joinPoint(context, "short-1"), toolAnnotation()));
+        String second = (String) aspect.around(joinPoint(context, "y".repeat(1200)), toolAnnotation());
+
+        assertTrue(second.contains("已截断"),
+                "第 2 次结果虽未超单条阈值, 但单轮累计超预算, 应被驱逐");
+    }
+
+    @Test
+    void evictionDisabledKeepsFullResult() throws Throwable {
+        appProperties.getChat().setToolResultEvictChars(0);
+        appProperties.getChat().setToolResultTurnMaxChars(0);
+
+        String big = "x".repeat(5000);
+        assertEquals(big, aspect.around(joinPoint(
+                contextWithTurnChars(new AtomicInteger(), new AtomicInteger()), big), toolAnnotation()),
+                "两项阈值都关闭时原结果透传");
     }
 }

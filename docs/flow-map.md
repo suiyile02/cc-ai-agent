@@ -546,12 +546,16 @@ sequenceDiagram
     BT-->>AO: 结果字符串（未找到也返回中文说明）
     AO->>AO: stripToolContext 后序列化入参 · SensitiveDataMasker 脱敏手机号/邮箱
     AO->>AO: ★toolCalls.incrementAndGet()（失败调用同样计数）
-    alt 正常
-        AO->>TL: save(status=SUCCESS, costMs, result) 异步 auditExecutor
+    AO->>AO: ★驱逐判定: 单结果>tool-result-evict-chars(4000)<br/>或单轮累计>tool-result-turn-max-chars(12000)?
+    alt 超限(驱逐)
+        AO->>TL: 先 save(status=SUCCESS, 全量结果) → 行 id 回填
+        AO-->>CL: "[头尾预览 + tool_call_log#id 存档指针]" 回灌模型
+    else 正常
+        AO->>TL: save(status=SUCCESS, costMs, result)
+        AO-->>CL: 原结果回灌模型继续作答
     else 抛异常
         AO->>TL: save(status=FAILED, error) 然后把异常继续抛出
     end
-    AO-->>CL: 结果回灌模型继续作答
 ```
 
 工具语义与缓存的耦合点：**KB 轮次一旦调用过工具，该轮答案禁止进入跨用户共享缓存**（§13 闸门）。新增工具或让工具参与 KB 作答时不得放宽。
@@ -590,7 +594,7 @@ flowchart TD
     A1["PUT /{id}/archive"] --> A2["status=0 + SessionCacheService.evict"]
     E1["GET /{id}"] --> E2["detail → requireOwned → toVO（前端首轮后刷新标题）"]
     N1["PUT /{id}/title"] --> N2["rename: requireOwned → setTitle → updateById → 缓存 evict<br/>★ 人工名不会被自动标题覆盖（精修回写比对兜底值）"]
-    D1["DELETE /{id}"] --> D2["软删 status=0 + 清理记忆 deleteByConversationId + clearSummary + 缓存 evict"]
+    D1["DELETE /{id}"] --> D2["软删 status=0 + 清理记忆 deleteByConversationId + clearSummary<br/>+ ★memoryArchive 清原始轨迹留档 + 缓存 evict"]
     R1["requireActive(sessionId, userId)（对话每轮调用）"] --> R2{"SessionCacheService.get 命中?"}
     R2 -->|是| R3["直接用缓存的 ChatSession（TTL 10min）"]
     R2 -->|否| R4{"isNotFound 负缓存命中?"}
@@ -610,7 +614,9 @@ flowchart TD
     W4 -->|是| W9
     W4 -->|否| W5["synchronized(lockFor(sessionId))<br/>★ 同会话 append/摘要/裁剪共用这把锁"]
     W5 --> W6["ConversationSummarizer.summarize(旧摘要, 老消息)<br/>enable_thinking=false；失败保留现状，下轮再试"]
-    W6 --> W7["writeSummary + 裁剪已合并的原始消息（append/裁剪重读同一把锁）"]
+    W6 --> W7["writeSummary + 裁剪已合并的原始消息（append/裁剪重读同一把锁）<br/>★chat_memory_raw 追加 SUMMARY 行(压缩事件, batch 递增)——被裁原文已在追加时入档"]
+    W6 -.->|"★格式不合格(缺节头)保留旧摘要"| W9
+    W7 --> W8["★摘要为结构化四节(会话意图/已确认事实/未决事项/口径约束)<br/>normalizeSections 逐节截断(预算均分), 整段尾部截断不再存在"]
 ```
 
 ---

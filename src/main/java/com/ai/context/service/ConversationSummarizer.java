@@ -17,14 +17,20 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 历史滚动摘要器：把较早的多轮对话压缩为要点式摘要, 供后续对话作为 SYSTEM 上下文注入。
+ * 历史滚动摘要器：把较早的多轮对话压缩为结构化摘要(固定四节), 供后续对话作为 SYSTEM 上下文注入。
  *
- * <p>模型不可用/生成失败时返回 {@code updated=false}, 由调用方保留原始历史(不裁剪), 保证不阻断主流程。
+ * <p>四节定式(会话意图/已确认事实/未决事项/口径约束)保证信息密度与跨版本可比性;
+ * 截断按节进行(预算均分), 避免整段截断时尾部小节整体消失。
+ * 模型不可用/生成失败/**格式不合格**(缺节头)时返回 {@code updated=false},
+ * 由调用方保留原始历史(不裁剪), 保证不阻断主流程。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConversationSummarizer {
+
+    /** 结构化摘要的四节节头(顺序固定; 模型输出缺任一节即判格式不合格) */
+    static final String[] SECTION_HEADERS = {"【会话意图】", "【已确认事实】", "【未决事项】", "【口径约束】"};
 
     private final ChatClientProvider chatClientProvider;
     private final PromptService promptService;
@@ -78,11 +84,54 @@ public class ConversationSummarizer {
             if (answer == null || answer.isBlank()) {
                 return SummaryResult.unchanged(existingSummary);
             }
-            String trimmed = tokenCounter.truncateToTokens(answer.trim(), maxTokens);
-            return new SummaryResult(trimmed, true);
+            String normalized = normalizeSections(answer, maxTokens);
+            if (normalized == null) {
+                // 模型没按四节定式输出: 保留旧摘要, 下轮写回后再触发(格式失败必须可见)
+                log.warn("结构化摘要格式不合格(缺少必要节头), 保留原摘要下轮重试");
+                return SummaryResult.unchanged(existingSummary);
+            }
+            return new SummaryResult(normalized, true);
         } catch (Exception e) {
             log.warn("历史摘要生成失败, 保留原摘要: {}", e.getMessage());
             return SummaryResult.unchanged(existingSummary);
         }
+    }
+
+    /**
+     * 校验并规范化摘要: 四节节头必须齐全(缺任一节返回 null), 按固定节序重组并逐节截断
+     * (token 预算均分到四节), 防止靠前的节挤占预算导致尾部小节被整段截掉。
+     *
+     * @param raw       模型原始输出
+     * @param maxTokens 摘要总 token 上限
+     * @return 规范化后的四节摘要; 格式不合格返回 null
+     */
+    String normalizeSections(String raw, int maxTokens) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        int[] pos = new int[SECTION_HEADERS.length];
+        for (int i = 0; i < SECTION_HEADERS.length; i++) {
+            pos[i] = raw.indexOf(SECTION_HEADERS[i]);
+            if (pos[i] < 0) {
+                return null;
+            }
+        }
+        // 模型可能不按模板节序输出: 每节内容取"本节头到下一个节头", 再按固定节序重组
+        int perSection = Math.max(1, maxTokens / SECTION_HEADERS.length);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < SECTION_HEADERS.length; i++) {
+            int next = raw.length();
+            for (int j = 0; j < SECTION_HEADERS.length; j++) {
+                if (j != i && pos[j] > pos[i]) {
+                    next = Math.min(next, pos[j]);
+                }
+            }
+            String section = tokenCounter.truncateToTokens(raw.substring(pos[i], next).trim(), perSection);
+            if (i > 0) {
+                sb.append('\n');
+            }
+            sb.append(section);
+        }
+        return sb.toString();
     }
 }

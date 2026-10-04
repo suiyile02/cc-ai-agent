@@ -8,6 +8,7 @@ import com.ai.context.entity.ConversationSummary;
 import com.ai.context.mapper.ConversationSummaryMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.ai.memory.ChatMemoryArchive;
 import com.ai.memory.ChatMemoryAppender;
 import com.ai.memory.ChatMemoryCounter;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -53,7 +54,8 @@ class ConversationMemoryServiceTest {
         summarizer = mock(ConversationSummarizer.class);
         appProperties = new AppProperties();
         service = new ConversationMemoryService(repository, memoryAppender, memoryCounter,
-                summaryMapper, summarizer, new HeuristicTokenCounter(), appProperties);
+                mock(ChatMemoryArchive.class), summaryMapper, summarizer,
+                new HeuristicTokenCounter(), appProperties);
     }
 
     @Test

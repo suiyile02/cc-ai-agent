@@ -41,6 +41,17 @@ public class ChatProps {
      */
     private int maxToolCallsPerTurn = 8;
     /**
+     * 单个工具结果回传模型的字符上限(默认 4000, 0=关闭): 超限的结果不整体回给模型,
+     * 以"头尾预览 + tool_call_log 存档指针"替代, 模型需要其余部分时用更具体的参数重查。
+     * 完整结果(脱敏后)仍落 tool_call_log 供审计——驱逐只影响模型输入, 不影响落库。
+     */
+    private int toolResultEvictChars = 4000;
+    /**
+     * 单轮全部工具结果回传模型的字符总量上限(默认 12000, 0=关闭): 防多个中等结果
+     * 叠加挤爆上下文预算, 超出预算的结果整体驱逐为存档指针。
+     */
+    private int toolResultTurnMaxChars = 12_000;
+    /**
      * 流式静默超时毫秒(默认 20s): 相邻两个增量间隔超过该值(或首增量迟迟不来)即主动终止本轮
      * 并降级为友好提示, 早于上游 okhttp 的 60s read timeout 触发。
      *
