@@ -40,7 +40,7 @@ public class KeywordIntentRouter implements IntentRouter {
      * 按消息内容路由意图(三态)。
      *
      * @param message 用户消息
-     * @return TOOL=工具类问题(跳过知识库检索, 调工具); KB/GENERAL 仅影响审计标签, 两者一律照常检索
+     * @return 预判类别, 三态均为审计标签, 不影响检索与作答链路
      */
     @Override
     public RagMode route(String message) {
@@ -51,10 +51,10 @@ public class KeywordIntentRouter implements IntentRouter {
     }
 
     /**
-     * 工具类问题判定：消息命中任一工具关键词(订单/物流/快递等)。
+     * 工具词表命中判定(消息包含任一工具关键词, 仅服务于审计预判)。
      *
      * @param message 用户消息
-     * @return true=工具类问题
+     * @return true=命中工具词表
      */
     public boolean isToolQuestion(String message) {
         if (message == null || message.isBlank() || toolKeywords == null) {

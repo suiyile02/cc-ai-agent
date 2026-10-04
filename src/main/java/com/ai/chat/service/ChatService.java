@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>管线职责已拆分：前置(改写/缓存/路由检索/装配)在 {@link ChatPreparationService},
  * 收尾(记忆/摘要/审计/缓存写入/来源口径)在 {@link ChatCompletionService},
  * 本类只保留"输出方式"差异——同步调用与 SSE 流式编排, 以及请求链构建。
- * 意图路由关键词表见 {@link com.ai.rag.IntentRouter}。
+ * 意图路由关键词表见 {@link com.ai.rag.IntentRouter}(纯审计标签, 不影响链路)。
  * 降级：模型未配置抛 {@link ErrorCode#AI_NOT_CONFIGURED}, 调用失败抛 {@link ErrorCode#AI_CALL_FAILED};
  * 向量库不可用时以空上下文继续。
  */

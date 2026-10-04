@@ -14,7 +14,10 @@ import java.util.List;
 public interface RagRetriever {
 
     /**
-     * 按指定 Top-K / 阈值执行检索并返回最终命中列表（检索调试接口使用）。
+     * 按指定 Top-K / 阈值执行检索并返回最终命中列表。
+     *
+     * <p>【未被引用】生产与调试链路均已走 {@link #retrieveOutcome}（出口判定需要各路明细），
+     * 本方法当前无任何调用方，仅为接口便利性保留，可安全删除。
      *
      * @param query     用户问题
      * @param topK      召回数量上限
@@ -26,8 +29,10 @@ public interface RagRetriever {
     /**
      * 混合检索主流程（多路召回 + RRF + 重排），返回各路命中明细供审计。
      *
-     * <p>实现方必须在超时/故障时降级为**已执行、零命中**（而非"未执行"），
-     * 以保住 {@code rag_mode=KB 且 retrieval_executed=false} 只对应语义缓存命中的审计不变式。
+     * <p>实现方必须在超时/故障时降级为**已执行、零命中**（而非"未执行"）——
+     * "未执行"仅属于不检索的会话（AGENT 等），降级轮不得据此拒答；
+     * 语义缓存命中由出口 {@code ANSWERED_FROM_CACHE} 显式标识（旧
+     * {@code rag_mode=KB 且 retrieval_executed=false} 推断式不变式已作废）。
      *
      * @param query     用户问题
      * @param topK      最终注入 Top-K

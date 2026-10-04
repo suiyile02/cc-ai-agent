@@ -14,12 +14,12 @@ package com.ai.rag;
  */
 public enum RagMode {
 
-    /** 需要检索知识库 */
+    /** 词表预判"像知识库问题"(命中 internal-keywords), 与 GENERAL 一样照常检索 */
     KB,
 
-    /** 工具类问题, 答案在业务库, 跳过检索交给模型调工具 */
+    /** 词表预判"像工具问题"(命中 tool-keywords), 旧"短路跳过检索"已废除, 仅审计 */
     TOOL,
 
-    /** 无需检索，直接作答 */
+    /** 词表预判"像通用问题", 照常检索(不再跳过) */
     GENERAL
 }

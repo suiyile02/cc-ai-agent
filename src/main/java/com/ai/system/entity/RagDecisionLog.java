@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 
 /**
  * RAG 意图路由决策日志(rag_decision_log)：每次对话请求自动记录
- * “判定结果(KB/GENERAL)、是否执行检索、多路召回命中数、Top-K/阈值/重排模式、耗时”。
+ * “词表预判(KB/TOOL/GENERAL, 纯审计)、是否执行检索、多路召回命中数、Top-K/阈值/重排模式、耗时”。
  * 表结构见 db/schema 脚本。
  */
 @Getter
@@ -34,15 +34,17 @@ public class RagDecisionLog {
     private String userMessage;
 
     /**
-     * 意图路由预判: KB=需要检索 / GENERAL=无需检索 / TOOL=工具类。
+     * 词表预判: KB / GENERAL / TOOL——三态均为纯审计标签(旧"KB 需要检索/GENERAL 无需检索/
+     * TOOL 跳过检索"的语义已全部废除)。
      *
-     * <p>P3-7 起仅作诊断参考——作答口径由 {@link #answerOutcome} 决定，本列不再参与判定。
+     * <p>作答口径由 {@link #answerOutcome} 决定，本列不参与判定。
      */
     private String ragMode;
 
     /**
      * 本轮实际出口(见 {@code com.ai.rag.ChatOutcome}): ANSWERED_FROM_KB / ANSWERED_FROM_CACHE /
-     * REFUSED_NO_EVIDENCE / ANSWERED_OPEN / TOOL_DATA。事后由检索事实算出，不是事前猜测;
+     * REFUSED_NO_EVIDENCE / ANSWERED_OPEN / NO_EVIDENCE_WITH_TOOLS / TOOL_DATA(事后出口, 本列
+     * 记决策时点值, 故不出现 TOOL_DATA)。决策时点由检索事实算出，不是事前猜测;
      * 缓存命中自 P3-7 起由 ANSWERED_FROM_CACHE 显式标识(旧推断式不变式已作废)。
      */
     private String answerOutcome;

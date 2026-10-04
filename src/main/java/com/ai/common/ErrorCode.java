@@ -23,6 +23,7 @@ public enum ErrorCode {
 
     // 对话相关
     SESSION_NOT_FOUND(3001, "会话不存在或已归档", HttpStatus.NOT_FOUND),
+    /** 【未被引用】当前无任何抛出点——检索失败由"降级为空上下文继续对话"策略覆盖, 保留 3002 作语义位 */
     RAG_SEARCH_FAILED(3002, "知识库检索失败", HttpStatus.SERVICE_UNAVAILABLE),
 
     // 系统相关

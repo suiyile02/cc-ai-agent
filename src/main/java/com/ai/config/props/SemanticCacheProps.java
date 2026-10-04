@@ -3,7 +3,7 @@ package com.ai.config.props;
 import lombok.Data;
 
 /**
- * 语义缓存({@code app.semantic-cache.*}): 相同知识库问题的回答缓存(P3-3, 命中跳过检索+模型调用)。
+ * 语义缓存({@code app.semantic-cache.*}): 相同知识库问题的回答缓存(P3-3, 命中跳过上下文装配+模型调用)。
  */
 @Data
 public class SemanticCacheProps {

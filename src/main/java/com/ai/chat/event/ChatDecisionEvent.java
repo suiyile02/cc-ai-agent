@@ -18,7 +18,7 @@ package com.ai.chat.event;
  * @param finalHits          最终注入上下文的命中数
  * @param topK               生效的 Top-K
  * @param similarityThreshold 生效的相似度阈值
- * @param semanticMaxScore    语义路**阈值过滤前**的最大相似度; **null = 本轮未执行检索**(工具轮/AGENT 会话),
+ * @param semanticMaxScore    语义路**阈值过滤前**的最大相似度; **null = 本轮未执行检索**(AGENT 等未检索会话),
  *                            0.0 = 执行了但该路无分数可得。两者必须可区分, 否则据此统计的分数分布失真。
  *                            阈值定标(P3-6)与相关性判据(P3-7)的唯一未截断观察值
  * @param rerankMode         生效的重排模式 score/llm/none

@@ -19,7 +19,7 @@ import java.util.List;
  * @param modelLabel  记录到 chat_log.model_name 的模型名
  * @param durationMs  从请求开始到回答完成的总耗时
  * @param rewrite     多轮改写结果(供 context_log 记录; 不可空)
- * @param intentMode  意图路由结果(供 context_log 记录)
+ * @param intentMode  词表预判结果(纯审计标签, 供 context_log 记录)
  * @param composition 上下文 Token 组成快照; null=本次不写 context_log(如流式中断)
  * @param totalTokens 模型返回的 Token 用量(usage.totalTokens, 采自 ChatResponse; 可空)
  */

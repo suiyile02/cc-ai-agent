@@ -12,7 +12,7 @@ public final class ChatMetrics {
     private ChatMetrics() {
     }
 
-    /** 问答出口计数(tag: outcome=五出口)——回答质量画像 */
+    /** 问答出口计数(tag: outcome=六出口)——回答质量画像 */
     public static final String OUTCOME = "chat.outcome";
     /** 模型 Token 消耗(按轮累加)——成本趋势 */
     public static final String MODEL_TOKENS = "chat.model.tokens";

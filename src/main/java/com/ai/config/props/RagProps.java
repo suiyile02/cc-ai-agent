@@ -85,8 +85,8 @@ public class RagProps {
      */
     private boolean autoRebuildIndex = true;
     /**
-     * 意图路由关键词表({@code app.rag.internal-keywords})：auto-route=true 时,
-     * 消息命中任一关键词判为知识库类问题(KB), 否则判为通用常识(GENERAL)跳过检索。
+     * 意图路由关键词表({@code app.rag.internal-keywords})：命中任一关键词预判为 KB,
+     * 否则 GENERAL——两者仅作审计标签, 一律照常检索(不再决定是否跳过检索)。
      * 缺省为内置企业内部高频词表, 可在 yaml 覆盖。
      */
     private List<String> internalKeywords = List.of(
@@ -97,13 +97,11 @@ public class RagProps {
             "福利", "标准", "公司",
             "放假", "节假日", "中秋", "国庆", "春节", "元旦", "调休", "补班");
     /**
-     * 工具类问题关键词表({@code app.rag.tool-keywords})：命中即判为 TOOL 类意图——
-     * 答案在业务库(经 BusinessTools 查询, 如 orders 表), 知识库检索查不到,
-     * 因此跳过检索直接交给模型自主调工具。优先于 {@link #internalKeywords} 判定。
+     * 工具类问题关键词表({@code app.rag.tool-keywords})：命中预判为 TOOL——
+     * 【已被替代】旧语义"跳过检索直接交给模型自主调工具"已废除, 现仅作审计标签;
+     * 匹配上仍优先于 {@link #internalKeywords}。
      *
-     * <p>已内置少量高频同义说法(包裹/货运/物流信息), 缓解"换个说法就漏"；
-     * 但关键词表本质上仍需人工维护(治标), 真正的语义泛化靠后续"意图检索层"(见 roadmap)。
-     * 缺省词表见下, 可在 yaml 覆盖。
+     * <p>已内置少量高频同义说法(包裹/货运/物流信息)；缺省词表见下, 可在 yaml 覆盖。
      */
     private List<String> toolKeywords = List.of(
             "订单", "单号", "物流", "快递", "运单", "发货", "收货", "跟踪",

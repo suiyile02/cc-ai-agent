@@ -44,6 +44,8 @@ public final class ChatSourceDisplay {
     /**
      * 去掉文件名末尾的扩展名("员工手册示例.md" → "员工手册示例")。
      *
+     * <p>生产调用仅限本类 {@link #sourceNames}; 独立 public 供测试直接断言。
+     *
      * @param name 文件名
      * @return 去扩展名的名称
      */

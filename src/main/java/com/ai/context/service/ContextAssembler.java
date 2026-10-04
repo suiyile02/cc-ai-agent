@@ -26,7 +26,7 @@ import java.util.List;
  * 依次完成 RAG 上下文注入(受预算约束)、system 组装、历史读取(摘要 + 窗口 + 预算)、
  * 用户输入截断, 产出可直接喂给 {@code ChatClient} 的 {@link AssembledPrompt}。
  *
- * <p>意图路由与检索仍在 {@code ChatService} 完成(基于改写后的问题), 本层只负责预算与装配。
+ * <p>意图路由与检索在 {@code ChatPreparationService} 完成(基于改写后的问题), 本层只负责预算与装配。
  */
 @Slf4j
 @Service
