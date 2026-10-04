@@ -259,6 +259,12 @@ SUMMARY, SUMMARY 行带 batch 压缩批次)。`ConversationMemoryService.append`
 **代价(明示)**: 每轮对话多 2 行留档 INSERT(同事务); 摘要提示词格式约束有失败率(fallback 保留旧摘要);
 驱逐存在信息丢失风险(阶段 2 可选的 `readToolResult` 分段回读工具未实施, 当前靠更窄参数重查补救)。
 
+**上线补遗(2026-10-04 晚, 生产首撞)**: `appendSummary` 直接把 MAX(seq) 当新行 seq, 首次触发摘要即
+撞 `uk_conv_seq`(Duplicate entry '…-22', 恰为第 11 轮 ASSISTANT 行)。摘要/裁剪在此之前已提交, 对话无损,
+但留档缺该次压缩事件且要再攒 ~6 轮才补记。根因是 **DbChatMemoryArchive 无任何直测**——mock 级测试
+验证不了 seq 算术。修复(+1)+ 补两层回归: `DbChatMemoryArchiveTest`(fake 表, 3 例, 已验证在旧代码上变红)、
+`ConversationSummaryIntegrationTest`(真 MySQL + 触发阈值下调 20→2/keep 8→1 走全链路, 测试属性覆盖主配置零改动)。
+
 ## 已完成记录（2026-10-04, TOOL 短路下线: 零命中+有工具改交模型裁决）
 
 **触发**: 复盘发现词表按实体名词误判——"订单的报销制度是什么"命中工具词"订单"→跳过检索→

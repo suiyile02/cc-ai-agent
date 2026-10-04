@@ -170,7 +170,8 @@ public class ConversationMemoryService implements ConversationMemory {
                         sessionId, triggerReason, tokenCounter.count(result.summary()), keep);
             }
         } catch (Exception e) {
-            log.warn("异步滚动摘要失败(保留现状, 下轮再触发): {}", e.getMessage());
+            // toString 而非 getMessage: MyBatis 包装异常的 message 以换行开头, 首行会打成空串
+            log.warn("异步滚动摘要失败(保留现状, 下轮再触发): {}", e.toString());
         } finally {
             summarizing.remove(sessionId);
         }

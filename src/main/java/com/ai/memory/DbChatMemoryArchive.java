@@ -38,7 +38,8 @@ public class DbChatMemoryArchive implements ChatMemoryArchive {
     public void appendSummary(String conversationId, String summary) {
         ChatMemoryRaw row = new ChatMemoryRaw();
         row.setConversationId(conversationId);
-        row.setSeq(nextSeq(conversationId));
+        // +1: nextSeq 返回的是当前最大值, 直接用作新行 seq 会与最后一行消息撞 uk_conv_seq
+        row.setSeq(nextSeq(conversationId) + 1);
         row.setRole("SUMMARY");
         row.setContent(summary);
         row.setBatch(nextBatch(conversationId));

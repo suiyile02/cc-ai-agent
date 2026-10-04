@@ -548,6 +548,11 @@ com.ai
 ## 测试策略
 
 - 单元测试使用 Mockito Mock `ChatModel`/`EmbeddingModel`，禁止调用真实 API。
+- **新增含 SQL 语义/数值分配/并发协调的类, 禁止只做 mock 级验证**(教训: 2026-10-04 `DbChatMemoryArchive`
+  的 seq 分配 off-by-one 在 mock 测试全绿下上线即撞唯一键——mock 只能证明"调用发生过", 证明不了"算术正确")。
+  必须二选一: ① fake 后端直测核心逻辑(如 `DbChatMemoryArchiveTest` 的内存表); ② 真库集成测试
+  (阈值类触发条件**下调阈值触发**, 用 @SpringBootTest 测试属性覆盖、主配置不动, 如
+  `ConversationSummaryIntegrationTest`)。
 - 集成/冒烟优先真实环境脚本(`docs/seed/e2e_test.py`)；断言含返回文本与落库记录。
 - **e2e 必须在冷缓存基线运行**: 语义缓存持久在 Redis, 上一轮写入的回答会让本轮
   "流式增量(content≥2)"与"上下文装配日志"断言失败(缓存命中不装配、只发 1 个 content 事件)。
