@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 /**
  * 敏感数据脱敏工具：对落库日志中的手机号/邮箱打码(P2-3)。
  *
- * <p>手机号保留前 3 后 2(138****56)，邮箱保留首字符与域名(a***@demo.com)。
+ * <p>手机号保留前 3 后 4(138****5678)，邮箱保留首字符与域名(z***@demo.com)。
  * 用于工具调用日志等可能携带用户真实联系方式的持久化内容。
  */
 public final class SensitiveDataMasker {
