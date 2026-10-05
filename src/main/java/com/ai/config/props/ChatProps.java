@@ -60,7 +60,7 @@ public class ChatProps {
      */
     private long streamIdleTimeoutMs = 20_000;
     /**
-     * 严格知识库模式(默认开启)。
+     * 严格知识库模式(默认开启, **可经管理员端点热切换**)。
      *
      * <p>开启后主对话只能依据「知识库检索到的资料」或「业务工具返回结果」作答, 禁止模型用
      * 自身预训练知识回答公司内部事务; 无资料/资料无关时按固定口径友好拒答。
@@ -69,6 +69,10 @@ public class ChatProps {
      *
      * <p><b>这是提示词级软约束, 不是硬保证</b>: 模型仍被调用, 极端情况仍可能不遵守。
      * 需要"保证零编造"时应在检索零命中处直接返回固定文案(硬闸门), 而非依赖本开关。
+     *
+     * <p><b>volatile(2026-10-04 热切换)</b>: 管理员经 {@code PUT /api/system/kb-only}
+     * 运行时切换(纯内存, 无持久化)——本字段的全部消费点均为每请求实时读取, 切换立即生效;
+     * **重启后回退 yaml 安全基线**(`application.yaml` 的 {@code kb-only}), 属刻意的 fail-safe 设计。
      */
-    private boolean kbOnly = true;
+    private volatile boolean kbOnly = true;
 }

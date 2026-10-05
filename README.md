@@ -115,6 +115,8 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 
 ### 3.2.1 严格知识库模式（`app.chat.kb-only`，**默认开启**）
 
+> 管理员可经 `PUT /api/system/kb-only` 运行时**热切换**（纯内存即时生效，无需重启；**重启后自动回退 yaml 安全基线**），`GET /api/system/kb-only` 供前端展示当前模式。
+
 打开后主对话**只能依据知识库检索到的资料或业务工具返回结果作答**，不再使用模型自身的通用知识：
 
 | 情形 | 用户看到的 |
@@ -160,6 +162,8 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `GET /api/system/rag-decisions` | RAG 检索决策日志分页（sessionId/userId/ragMode/时间过滤：**出口 answerOutcome**、意图预判 ragMode、是否检索、多路命中数、Top-K/阈值/**阈值前最大分**、重排模式、耗时） |
 | `GET /api/system/context-logs` | 上下文装配日志分页（各段 token 占用/是否截断/改写结果/耗时） |
 | `GET /api/system/memory-raw` | 会话原始轨迹留档查询（管理员：完整对话原文 + 每次摘要压缩事件，按序升序；原文未脱敏，刻意不开放本人自查） |
+| `GET /api/system/kb-only` | 当前问答模式查询（登录即可见：true=严格知识库 / false=宽松自由作答） |
+| `PUT /api/system/kb-only` | 热切换问答模式（管理员：纯内存即时生效，**重启回退 yaml 安全基线**） |
 | `DELETE /api/system/semantic-cache` | 清空语义缓存（管理员），返回失效后的知识库版本号；文档变更已自动失效，切换对话模型也已按键隔离（无需手工清空），此接口用于“回答质量异常”的人工强制失效 |
 
 ### 3.6 异常与降级（需求第 8 章）

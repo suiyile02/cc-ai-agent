@@ -378,7 +378,8 @@
 | 方法 | 作用 | 调用方 |
 |---|---|---|
 | `SystemController.listChatLogs/listToolCallLogs/listRagDecisions/listContextLogs` | 端点 18~21，分页 + 时间/维度过滤，`DateParamUtils` 解析 | 前端 SystemView |
-| `SystemController.clearSemanticCache/clearIntentCache` | 端点 22~23，返回失效后的版本号 | 运维/前端 |
+| `SystemController.kbOnlyStatus/switchKbOnly` ★新增 | 端点: 严格知识库模式查询(登录可见)与热切换(`@RequireAdmin`, 纯内存 volatile 写, 重启回退 yaml 基线) | 前端管理按钮 |
+| `SystemController.clearSemanticCache` | 语义缓存运维清空, 返回失效后的版本号(`clearIntentCache` 已随 P3-7 B 批删除) | 运维/前端 |
 | `ChatAuditListener.onDecision(event)` | `@Async(auditExecutor)` 写 `rag_decision_log` | 前置事件 |
 | `ChatAuditListener.onChatCompleted(event)` | 写 `chat_log`（来源序列化 JSON）+ `context_log`（仅管线模式有快照） | 收尾事件 |
 | `ChatAuditListener.recordChatLog` / `recordContextLog` | 组装并保存 | 内部 |
