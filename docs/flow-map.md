@@ -297,6 +297,10 @@ flowchart TD
 
 ---
 
+> 检索启用/禁用(2026-10-04): `POST /documents/{id}/disable|enable` 仅翻转 `knowledge_document.enabled`
+> 并失效语义缓存; 禁用文档在召回层被排除——语义路 Qdrant 查询过滤(不占 Top-K)、BM25 路召回后过滤(过取补偿),
+> 出口判定/装配/审计链路零感知。
+
 ## 8. 对话主链路 ① 前置阶段（`ChatPreparationService.prepare`）
 
 同步 `chat()` 与流式 `chatStream()` **共用**这张图，这是"两条管线不得漂移"的实现点。

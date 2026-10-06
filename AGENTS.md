@@ -178,6 +178,12 @@ com.ai
 ### 向量化与 RAG 数据规范
 
 - 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- **文档检索启用/禁用(2026-10-04)**: `knowledge_document.enabled` 列(SSOT) + `DocumentVisibility` 契约
+  (knowledge 根包); 语义路下推 Qdrant `NIN(doc_id)` 查询过滤(后过滤会静默缩水有效 K, 禁止),
+  BM25 路召回后过滤(过取补偿, `KeywordIndex` 零改动); toggle 必须 `evictAll()`(正/负缓存一并失效);
+  仅 status=2 可切换; `knowledgeWritesShouldRequireAdmin` 正则已扩容钉住新方法。
+  注意 `FilterExpressionBuilder.nin` 有 `List<Object>` 与 `Object...` 双重载——传 `List<String>` 会因
+  泛型不兼容选中变长参数重载, 整个 List 被当成单个值生成失效过滤(单测钉住)。
 - **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)

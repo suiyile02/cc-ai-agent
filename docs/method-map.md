@@ -406,6 +406,8 @@
 | `findConversationIds()` / `deleteByConversationId(cid)` | 会话枚举 / 删会话记忆 | 契约与删除会话 |
 | `toJson(text)` / `toMessage(record)` / `JsonText` | content 列 JSON 序列化与还原 | 内部 |
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
+| `KnowledgeDocumentService.disableDocument/enableDocument(id)` ★新增 | 检索启用开关: 仅 status=2 可切换, 置 `enabled` 列 + `evictAll()`(正/负缓存一并失效) | Controller disable/enable |
+| `DocumentVisibility.disabledDocIds()` ★新增 | 禁用文档 ID 集合(实时查询, 查询失败降级空集+WARN 节流); 语义路下推 Qdrant `NIN(doc_id)` 过滤、BM25 路召回后过滤 | `HybridRecaller.recall` |
 | `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |
 | `ChatMemoryArchive.appendSummary(cid,summary)` ★新增 | 滚动摘要完成后追加 SUMMARY 行(batch=已有最大值+1, 压缩事件自描述) | `ConversationMemoryService.summarizeIfNeededAsync` |
 | `ChatMemoryArchive.deleteByConversationId(cid)` ★新增 | 会话删除时清理留档 | `ChatSessionService.delete` |

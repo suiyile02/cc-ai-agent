@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
                                     collection_name VARCHAR(100) NOT NULL COMMENT 'Qdrant中的集合名称',
                                     chunk_count     INT          DEFAULT 0 COMMENT '分块数量',
                                     status          TINYINT      DEFAULT 0 COMMENT '0-待处理 1-处理中 2-已完成 3-失败',
+                                    enabled         TINYINT      NOT NULL DEFAULT 1 COMMENT '检索启用开关：1-参与检索(默认) 0-已禁用(仅 status=2 时有意义；禁用不删向量/索引)',
                                     error_message   TEXT         NULL COMMENT '处理失败原因',
                                     created_by      BIGINT       NOT NULL COMMENT '上传人ID',
                                     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

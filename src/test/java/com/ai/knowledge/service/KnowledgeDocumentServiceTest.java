@@ -4,7 +4,9 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.config.AppProperties;
 import com.ai.knowledge.dto.BatchUploadResultVO;
+import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
+import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
 import com.ai.rag.service.SemanticAnswerCache;
@@ -25,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -143,5 +146,62 @@ class KnowledgeDocumentServiceTest {
         BusinessException e = assertThrows(BusinessException.class,
                 () -> service.uploadBatch(new MultipartFile[0], 1L));
         assertEquals(ErrorCode.PARAM_ERROR, e.getErrorCode());
+    }
+
+    /* ---------------- 检索启用/禁用开关 ---------------- */
+
+    private KnowledgeDocument completedDoc(long id) {
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setId(id);
+        doc.setFileName("员工手册.md");
+        doc.setStatus(2);
+        doc.setEnabled(true);
+        return doc;
+    }
+
+    @Test
+    void disableSetsFlagAndEvictsSemanticCache() {
+        when(documentMapper.selectById(9L)).thenReturn(completedDoc(9L));
+
+        KnowledgeDocumentVO vo = service.disableDocument(9L);
+
+        assertEquals(Boolean.FALSE, vo.enabled());
+        verify(documentMapper).updateById(any(KnowledgeDocument.class));
+        verify(semanticAnswerCache).evictAll();
+    }
+
+    @Test
+    void enableRestoresFlagAndEvictsSemanticCache() {
+        KnowledgeDocument doc = completedDoc(9L);
+        doc.setEnabled(false);
+        when(documentMapper.selectById(9L)).thenReturn(doc);
+
+        KnowledgeDocumentVO vo = service.enableDocument(9L);
+
+        assertEquals(Boolean.TRUE, vo.enabled());
+        verify(semanticAnswerCache).evictAll();
+    }
+
+    @Test
+    void toggleRejectedForNonCompletedDoc() {
+        KnowledgeDocument doc = completedDoc(9L);
+        doc.setStatus(0); // 待处理: 本就不参与检索, 切换无意义
+        when(documentMapper.selectById(9L)).thenReturn(doc);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.disableDocument(9L));
+        assertEquals(ErrorCode.DOCUMENT_PROCESSING, e.getErrorCode());
+        verify(semanticAnswerCache, never()).evictAll();
+        verify(documentMapper, never()).updateById(any(KnowledgeDocument.class));
+    }
+
+    @Test
+    void toggleMissingDocFailsNotFound() {
+        when(documentMapper.selectById(9L)).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.enableDocument(9L));
+        assertEquals(ErrorCode.DOCUMENT_NOT_FOUND, e.getErrorCode());
+        verify(semanticAnswerCache, never()).evictAll();
     }
 }

@@ -44,6 +44,12 @@ public class KnowledgeDocument {
     /** 处理状态 0/1/2/3 */
     private Integer status = 0;
 
+    /**
+     * 检索启用开关(默认参与检索; 仅 status=2 时有意义)。
+     * 禁用不删向量点/BM25 索引(启用零成本恢复), 检索侧经语义路查询过滤 + BM25 路后过滤排除。
+     */
+    private Boolean enabled = true;
+
     /** 失败原因 */
     private String errorMessage;
 

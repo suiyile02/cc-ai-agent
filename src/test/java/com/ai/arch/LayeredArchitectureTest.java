@@ -136,7 +136,7 @@ class LayeredArchitectureTest {
     static final ArchRule knowledgeWritesShouldRequireAdmin =
             methods().that().arePublic()
                     .and().areDeclaredInClassesThat().haveSimpleName("KnowledgeDocumentService")
-                    .and().haveNameMatching("(upload|delete|reprocess).*")
+                    .and().haveNameMatching("(upload|delete|reprocess|enable|disable).*")
                     .should().beAnnotatedWith(RequireAdmin.class)
-                    .as("知识库写操作必须标注 @RequireAdmin");
+                    .as("知识库写操作(含禁用/启用)必须标注 @RequireAdmin");
 }

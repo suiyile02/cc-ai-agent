@@ -12,6 +12,7 @@ public record KnowledgeDocumentVO(
         Long fileSize,
         Integer chunkCount,
         Integer status,
+        Boolean enabled,
         String errorMessage,
         Long createdBy,
         LocalDateTime createTime) {

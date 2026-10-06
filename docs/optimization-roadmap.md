@@ -233,6 +233,28 @@
 
 ---
 
+## 已完成记录（2026-10-04 第三批, 严格模式管理员热切换——最简版）
+
+`PUT/GET /api/system/kb-only`: `ChatProps.kbOnly` 改 volatile, 管理员端点纯内存切换
+(`@RequireAdmin`), 消费点(出口判定/提示词选择)每请求实时读取 → 切换即时生效无需重启;
+**重启回退 yaml 安全基线**(刻意 fail-safe: 宽松模式是临时态)。切换无需失效语义缓存
+(正缓存与模式正交, 负缓存只在严格模式读写)。验证: `KbOnlyHotSwitchIntegrationTest`
+(真上下文排除 Qdrant)——同一"零命中+有工具"世界, 翻转标志位断言出口与提示词模板互转。
+
+## 已完成记录（2026-10-04 第四批, 知识库文档检索启用/禁用）
+
+管理员按钮: `POST /api/knowledge/documents/{id}/disable|enable`。语义=检索召回排除
+(不删向量点/索引/文件, 启用零成本恢复), 与入库生命周期(status)解耦为独立 `enabled` 列
+(仅 status=2 可切换, upgrade 脚本 2026-10-document-enabled.sql)。
+- 过滤落点: 语义路下推 Qdrant `NIN(doc_id)` 查询过滤(后过滤会静默缩水有效 K, 禁止); BM25 路
+  召回后过滤(过取 topK*2 补偿), `KeywordIndex` 零改动。禁用集经新契约 `DocumentVisibility`
+  (knowledge 根包)实时查询, 查询失败降级空集+WARN 节流。
+- 缓存: toggle 必须 `evictAll()`(正/负缓存一并失效)。
+- 过程教训: `FilterExpressionBuilder.nin` 的 `List<Object>`/`Object...` 双重载——传 `List<String>`
+  因泛型不兼容选中变长参数重载, 生成 `NIN [["7"]]` 失效过滤; 单测断言过滤表达式结构当场抓住。
+验证: 297 例全绿(新增 Service 开关 4 例 + HybridRecaller 过滤 3 例 + Visibility 2 例); 真 Qdrant 的
+过滤行为待装 Docker 后由集成测试覆盖。
+
 ## 已完成记录（2026-10-04 第二批, 记忆留档 + 结构化摘要 + 工具结果驱逐）
 
 对齐 AgentScope 记忆机制差距分析的三项落地。

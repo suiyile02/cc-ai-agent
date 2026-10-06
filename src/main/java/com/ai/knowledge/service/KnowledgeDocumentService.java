@@ -307,7 +307,55 @@ public class KnowledgeDocumentService {
      */
     private KnowledgeDocumentVO toVO(KnowledgeDocument d) {
         return new KnowledgeDocumentVO(d.getId(), d.getFileName(), d.getFileType(),
-                d.getFileSize(), d.getChunkCount(), d.getStatus(), d.getErrorMessage(),
-                d.getCreatedBy(), d.getCreatedAt());
+                d.getFileSize(), d.getChunkCount(), d.getStatus(), d.getEnabled(),
+                d.getErrorMessage(), d.getCreatedBy(), d.getCreatedAt());
+    }
+
+    /**
+     * 禁用文档检索(管理员)：语义路与 BM25 路都不再召回该文档, 但**不删向量点/索引/文件**——
+     * 启用时零成本恢复。仅 status=2(已完成)的文档可切换; 切换即失效全部语义缓存。
+     *
+     * @param id 文档 ID
+     * @return 更新后的文档 VO
+     * @throws BusinessException 文档不存在/非已完成状态, 或非管理员(5002, HTTP 403)
+     */
+    @RequireAdmin
+    @Transactional
+    public KnowledgeDocumentVO disableDocument(Long id) {
+        return setRetrievalEnabled(id, false);
+    }
+
+    /**
+     * 启用文档检索(管理员)：恢复语义路与 BM25 路召回, 不重新向量化。
+     *
+     * @param id 文档 ID
+     * @return 更新后的文档 VO
+     * @throws BusinessException 文档不存在/非已完成状态, 或非管理员(5002, HTTP 403)
+     */
+    @RequireAdmin
+    @Transactional
+    public KnowledgeDocumentVO enableDocument(Long id) {
+        return setRetrievalEnabled(id, true);
+    }
+
+    /**
+     * 启用开关的公共实现：校验状态 → 置列 → 语义缓存整体失效(禁用/启用都改变检索结果,
+     * 与 upload/delete/reprocess 同款)。
+     *
+     * @param id      文档 ID
+     * @param enabled 目标状态
+     * @return 更新后的文档 VO
+     */
+    private KnowledgeDocumentVO setRetrievalEnabled(Long id, boolean enabled) {
+        KnowledgeDocument doc = requireDocument(id);
+        if (doc.getStatus() != 2) {
+            // 仅"已完成"文档可切换: 待处理/处理中本来就不参与检索, 失败文档无内容可禁
+            throw new BusinessException(ErrorCode.DOCUMENT_PROCESSING);
+        }
+        doc.setEnabled(enabled);
+        documentMapper.updateById(doc);
+        semanticAnswerCache.evictAll(); // 检索结果集变化 → 语义缓存全部失效(正/负缓存一并)
+        log.info("文档检索开关已切换: id={}, file={}, enabled={}", id, doc.getFileName(), enabled);
+        return toVO(doc);
     }
 }

@@ -39,7 +39,8 @@ class RagRetrievalTimeoutTest {
         ObjectProvider<VectorStore> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(store);
         ScoreFusionReranker score = new ScoreFusionReranker();
-        HybridRecaller recaller = new HybridRecaller(provider, mock(KeywordIndex.class), props);
+        HybridRecaller recaller = new HybridRecaller(provider, mock(KeywordIndex.class),
+                mock(com.ai.knowledge.DocumentVisibility.class), props);
         RerankStrategyFactory rerankers = new RerankStrategyFactory(
                 List.of(score, new LlmReranker(mock(ChatClientProvider.class), score), new RrfOrderReranker()),
                 props);

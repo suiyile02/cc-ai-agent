@@ -31,9 +31,17 @@ class HybridRecallerTest {
 
     @SuppressWarnings("unchecked")
     private HybridRecaller recaller(VectorStore store, KeywordIndex index) {
+        return recaller(store, index, java.util.Set.of());
+    }
+
+    @SuppressWarnings("unchecked")
+    private HybridRecaller recaller(VectorStore store, KeywordIndex index,
+            java.util.Set<Long> disabled) {
         ObjectProvider<VectorStore> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(store);
-        return new HybridRecaller(provider, index, props());
+        com.ai.knowledge.DocumentVisibility visibility = mock(com.ai.knowledge.DocumentVisibility.class);
+        when(visibility.disabledDocIds()).thenReturn(disabled);
+        return new HybridRecaller(provider, index, visibility, props());
     }
 
     /** 一个带相似度分的分块 */
@@ -108,6 +116,75 @@ class HybridRecallerTest {
 
         assertTrue(recall.semantic().isEmpty());
         assertEquals(0.0, recall.semanticMaxScore(), 1e-9);
+    }
+
+    /* ---------------- 禁用文档过滤 ---------------- */
+
+    /** 构造带 doc_id 元数据的分块(模拟入库写入的 payload) */
+    private static Document docWithId(long docId, String text, double score) {
+        return Document.builder().text(text)
+                .metadata(java.util.Map.of("doc_id", String.valueOf(docId),
+                        "file_name", "考勤与假期制度.md"))
+                .score(score).build();
+    }
+
+    @Test
+    void disabledDocIsPushedDownAsQdrantFilterNotPostFiltered() throws Exception {
+        // 语义路: 禁用集必须下推为查询过滤条件(后过滤会让禁用文档占满 Top-K, 静默缩水有效 K)
+        VectorStore store = mock(VectorStore.class);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        HybridRecaller recaller = recaller(store, emptyKeywordIndex(),
+                java.util.Set.of(7L));
+
+        recaller.recall("年假几天", 5);
+
+        ArgumentCaptor<SearchRequest> sent = ArgumentCaptor.forClass(SearchRequest.class);
+        org.mockito.Mockito.verify(store).similaritySearch(sent.capture());
+        org.springframework.ai.vectorstore.filter.Filter.Expression expr =
+                (org.springframework.ai.vectorstore.filter.Filter.Expression) sent.getValue()
+                        .getFilterExpression();
+        assertEquals(org.springframework.ai.vectorstore.filter.Filter.ExpressionType.NIN,
+                expr.type(), "过滤语义必须是 NOT IN(doc_id)");
+        org.springframework.ai.vectorstore.filter.Filter.Value value =
+                (org.springframework.ai.vectorstore.filter.Filter.Value) expr.right();
+        assertEquals(List.of("7"), (List<?>) value.value(),
+                "过滤值为字符串形式的 docId(payload 中 doc_id 为字符串存储)");
+    }
+
+    @Test
+    void emptyDisabledSetIssuesNoFilter() throws Exception {
+        VectorStore store = mock(VectorStore.class);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        HybridRecaller recaller = recaller(store, emptyKeywordIndex(), java.util.Set.of());
+
+        recaller.recall("年假几天", 5);
+
+        ArgumentCaptor<SearchRequest> sent = ArgumentCaptor.forClass(SearchRequest.class);
+        org.mockito.Mockito.verify(store).similaritySearch(sent.capture());
+        assertEquals(null, sent.getValue().getFilterExpression(),
+                "无禁用文档时不得附加过滤条件");
+    }
+
+    @Test
+    void keywordPathPostFiltersDisabledDocsButKeepsMissingDocId() {
+        // BM25 路召回后过滤: 禁用文档剔除, 缺 doc_id 的点保守保留
+        KeywordIndex index = mock(KeywordIndex.class);
+        when(index.isEmpty()).thenReturn(false);
+        when(index.search(any(), org.mockito.Mockito.anyInt())).thenReturn(List.of(
+                new KeywordIndex.Hit("k1", 7L, "已禁用.md", 0, "禁用内容", 3.0),
+                new KeywordIndex.Hit("k2", 8L, "正常.md", 1, "正常内容", 2.0)));
+        VectorStore store = mock(VectorStore.class);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        HybridRecaller recaller = recaller(store, index, java.util.Set.of(7L));
+
+        HybridRecaller.Recall recall = recaller.recall("查询", 5);
+
+        assertEquals(1, recall.keyword().size(), "禁用文档被后过滤剔除, 正常文档保留");
+        assertEquals("正常.md", String.valueOf(recall.keyword().get(0).getMetadata().get("file_name")));
+        // 语义路同样收到下推过滤(禁用集非空)
+        ArgumentCaptor<SearchRequest> sent = ArgumentCaptor.forClass(SearchRequest.class);
+        org.mockito.Mockito.verify(store).similaritySearch(sent.capture());
+        assertTrue(sent.getValue().getFilterExpression() != null);
     }
 
     /** 关键词索引置空以隔离语义路(hybrid 开启但索引空 → 该路不产出) */

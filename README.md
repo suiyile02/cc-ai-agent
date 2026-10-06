@@ -100,6 +100,8 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `GET /api/knowledge/documents` | 分页列表（fileName/status/startTime/endTime 过滤） |
 | `DELETE /api/knowledge/documents/{id}` | 删除：按 doc_id 清理向量 → 删除记录 → 删除本地文件 |
 | `POST /api/knowledge/documents/{id}/reprocess` | 重新入库（失败重试） |
+| `POST /api/knowledge/documents/{id}/disable` | 禁用文档检索（管理员：语义+BM25 两路不再召回，不删向量/索引/文件，启用零成本恢复；切换即失效语义缓存） |
+| `POST /api/knowledge/documents/{id}/enable` | 启用文档检索（管理员：恢复召回，不重新向量化） |
 
 入库链路：上传 → `knowledge_document(status=0)` → `DocumentIngestionService`(@Async ingestionExecutor) → Tika 解析 → TokenTextSplitter 分块(512/100) → 附加元数据(doc_id/file_name/chunk_index…) → 向量化写入 VectorStore → status=2/3（分块数与真实 chunk 一致，记录于 chunk_count）。
 

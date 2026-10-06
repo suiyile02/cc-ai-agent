@@ -21,10 +21,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.List;
 
 /**
- * 知识库管理接口(需求第 2 章)：上传 / 列表 / 删除 / 重新处理。
+ * 知识库管理接口(需求第 2 章)：上传 / 列表 / 删除 / 重新处理 / 检索启用与禁用。
  * Controller 只做请求映射与参数绑定，业务逻辑在 {@link KnowledgeDocumentService}。
  *
- * <p>写操作（上传/批量上传/删除/重处理）全部在 Service 方法上标 {@code @RequireAdmin}
+ * <p>写操作（上传/批量上传/删除/重处理/禁用/启用）全部在 Service 方法上标 {@code @RequireAdmin}
  * ——知识库是全公司共享的 RAG 内容源；列表查询对所有人开放。
  */
 @RestController
@@ -108,5 +108,28 @@ public class KnowledgeController {
     public Result<Void> reprocess(@PathVariable Long id) {
         documentService.reprocess(id);
         return Result.ok("文档已重新提交处理");
+    }
+
+    /**
+     * 禁用文档检索(管理员)：语义路与 BM25 路不再召回该文档, 但不删向量点/索引/文件,
+     * 启用时零成本恢复。仅"已完成"(status=2)的文档可切换; 切换即失效全部语义缓存。
+     *
+     * @param id 文档 ID
+     * @return 统一响应, data 为更新后的文档 VO(含 enabled=false)
+     */
+    @PostMapping("/documents/{id}/disable")
+    public Result<KnowledgeDocumentVO> disableDocument(@PathVariable Long id) {
+        return Result.ok("文档已禁用", documentService.disableDocument(id));
+    }
+
+    /**
+     * 启用文档检索(管理员)：恢复语义路与 BM25 路召回, 不重新向量化。
+     *
+     * @param id 文档 ID
+     * @return 统一响应, data 为更新后的文档 VO(含 enabled=true)
+     */
+    @PostMapping("/documents/{id}/enable")
+    public Result<KnowledgeDocumentVO> enableDocument(@PathVariable Long id) {
+        return Result.ok("文档已启用", documentService.enableDocument(id));
     }
 }
