@@ -10,22 +10,15 @@ import com.ai.common.Result;
 import com.ai.rag.SemanticCacheAdmin;
 import com.ai.system.dto.ChatLogVO;
 import com.ai.system.dto.ContextLogVO;
-import com.ai.system.dto.KbOnlySwitchRequest;
 import com.ai.system.dto.MemoryRawEntryVO;
 import com.ai.system.dto.RagDecisionLogVO;
 import com.ai.system.dto.ToolCallLogVO;
 import com.ai.system.service.MemoryRawService;
-import com.ai.config.AppProperties;
-import com.ai.user.security.UserContext;
 import com.ai.user.security.RequireAdmin;
 import com.ai.user.security.RequireSelfOrAdmin;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,9 +27,8 @@ import java.util.List;
 
 /**
  * 系统管理接口(需求第 6 章)：对话日志 / 工具调用日志 / RAG 决策日志查询,
- * 语义缓存的运维清空(仅供管理员), 以及严格知识库模式的运行时热切换(管理员按钮)。
+ * 以及语义缓存的运维清空(仅供管理员)。
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/system")
 @RequiredArgsConstructor
@@ -48,7 +40,6 @@ public class SystemController {
     private final ContextLogService contextLogService;
     private final MemoryRawService memoryRawService;
     private final SemanticCacheAdmin semanticCacheAdmin;
-    private final AppProperties appProperties;
 
     /**
      * 对话日志分页查询(6.1)。
@@ -169,37 +160,6 @@ public class SystemController {
             @RequestParam String sessionId,
             @RequestParam(required = false) Integer limit) {
         return Result.ok(memoryRawService.list(sessionId, limit));
-    }
-
-    /**
-     * 当前问答模式(登录即可见, 供前端徽标展示)。
-     *
-     * @return true=严格知识库模式 / false=宽松自由作答
-     */
-    @GetMapping("/kb-only")
-    public Result<Boolean> kbOnlyStatus() {
-        return Result.ok(appProperties.getChat().isKbOnly());
-    }
-
-    /**
-     * 热切换严格知识库模式(管理员按钮, **纯内存, 重启回退 yaml 安全基线**)。
-     *
-     * <p>生效机制: 全部消费点(出口判定/提示词选择)每请求实时读 {@code ChatProps.kbOnly}
-     * (volatile), 切换即对后续请求生效, 无需重启、无需失效语义缓存(正缓存与模式正交,
-     * 负缓存只在严格模式产生与读取)。宽松模式的风险提示: 无据时模型将自由作答, 可能引入
-     * 自身知识(可能过时/错误)——请仅在明确需要的场景临时开启。
-     *
-     * @param request {@code {"enabled": false}} 切到宽松; {@code true} 切回严格
-     * @return 切换后的当前状态
-     */
-    @PutMapping("/kb-only")
-    @RequireAdmin
-    public Result<Boolean> switchKbOnly(@RequestBody @Valid KbOnlySwitchRequest request) {
-        boolean old = appProperties.getChat().isKbOnly();
-        appProperties.getChat().setKbOnly(request.enabled());
-        log.info("严格知识库模式热切换(重启回退 yaml 基线): {} -> {}, operator={}",
-                old, request.enabled(), UserContext.currentUserId());
-        return Result.ok(appProperties.getChat().isKbOnly());
     }
 
     /**
