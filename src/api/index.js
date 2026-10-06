@@ -126,4 +126,7 @@ export const systemApi = {
   toolCallLogs: (params) => http.get('/system/tool-call-logs', { params }),
   ragDecisions: (params) => http.get('/system/rag-decisions', { params }),
   contextLogs: (params) => http.get('/system/context-logs', { params }),
+  /* 严格知识库模式热切换(管理员按钮; 纯内存, 重启回退严格基线) */
+  kbOnlyStatus: () => http.get('/system/kb-only'),
+  switchKbOnly: (enabled) => http.put('/system/kb-only', { enabled }),
 }
