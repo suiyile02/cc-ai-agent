@@ -114,44 +114,6 @@ function openDetail(row, title) {
 }
 
 const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(detail.value)) : ''))
-
-/* ---------------- 问答模式热切换(管理员按钮; 纯内存, 重启回退严格基线) ---------------- */
-const kbOnly = ref(null) // null=未加载; true=严格知识库 / false=宽松自由作答
-const modeLoading = ref(false)
-const confirmModeOpen = ref(false)
-const confirmModeTarget = ref(null)
-
-async function loadMode() {
-  try {
-    kbOnly.value = (await systemApi.kbOnlyStatus()).data
-  } catch {
-    // 模式徽标加载失败不影响日志页主体, 静默(后端降级口径一致)
-  }
-}
-
-function askSwitch(target) {
-  confirmModeTarget.value = target
-  confirmModeOpen.value = true
-}
-
-async function doSwitch() {
-  modeLoading.value = true
-  try {
-    kbOnly.value = (await systemApi.switchKbOnly(confirmModeTarget.value)).data
-    toast.success(
-      kbOnly.value
-        ? '已切换为严格知识库模式：无据时拒答/交由工具裁决'
-        : '已切换为宽松自由作答：无据时模型自由发挥（重启后自动回退严格）'
-    )
-  } catch (e) {
-    toast.error(e.message)
-  } finally {
-    modeLoading.value = false
-    confirmModeOpen.value = false
-  }
-}
-
-onMounted(loadMode)
 </script>
 
 <template>
@@ -163,28 +125,9 @@ onMounted(loadMode)
           授权规则：管理员可查全量；普通用户固定只看本人数据（后端强制改写 userId）
         </div>
       </div>
-      <div class="header-right">
-        <!-- 问答模式徽标 + 管理员热切换按钮 -->
-        <div v-if="kbOnly !== null" class="mode-box" :class="{ loose: !kbOnly }">
-          <Icon name="sliders" :size="13" />
-          <span class="mode-label" :title="kbOnly ? '无据时拒答/交由工具裁决，禁止模型自由发挥' : '无据时模型自由作答，可能引入自身知识'">
-            {{ kbOnly ? '严格知识库模式' : '宽松自由作答' }}
-          </span>
-          <button
-            v-if="auth.isAdmin"
-            class="btn sm ghost"
-            :disabled="modeLoading"
-            @click="askSwitch(!kbOnly)"
-          >
-            <Icon name="refresh" :size="12" />
-            切换为{{ kbOnly ? '宽松' : '严格' }}
-          </button>
-          <span v-if="auth.isAdmin" class="mode-hint">重启回退严格基线</span>
-        </div>
-        <button class="btn sm ghost" :disabled="loading" @click="load">
-          <Icon name="refresh" :size="13" /> 刷新
-        </button>
-      </div>
+      <button class="btn sm ghost" :disabled="loading" @click="load">
+        <Icon name="refresh" :size="13" /> 刷新
+      </button>
     </header>
 
     <div class="page-body">
@@ -351,25 +294,6 @@ onMounted(loadMode)
     <Modal v-model="detailOpen" :title="detailTitle" :width="680">
       <pre class="detail-json mono">{{ detailJson }}</pre>
     </Modal>
-
-    <!-- 问答模式切换确认(影响所有用户的回答口径) -->
-    <Modal v-model="confirmModeOpen" :title="`确认切换为${confirmModeTarget ? '严格知识库模式' : '宽松自由作答'}？`" :width="440">
-      <p class="mode-confirm-text">
-        <template v-if="confirmModeTarget">
-          切换后：无据可依时将<b>固定拒答或交由业务工具裁决</b>，禁止模型自由发挥。立即对所有用户生效。
-        </template>
-        <template v-else>
-          切换后：无据可依时<b>模型将自由作答</b>，可能引入自身知识（可能过时/错误）。立即对所有用户生效。
-        </template>
-      </p>
-      <p class="mode-confirm-hint">重启后自动回退严格知识库基线。</p>
-      <template #footer>
-        <button class="btn sm" @click="confirmModeOpen = false">取消</button>
-        <button class="btn primary sm" :disabled="modeLoading" @click="doSwitch">
-          {{ modeLoading ? '切换中…' : '确认切换' }}
-        </button>
-      </template>
-    </Modal>
   </div>
 </template>
 
@@ -413,49 +337,5 @@ onMounted(loadMode)
   word-break: break-all;
   max-height: 60vh;
   overflow: auto;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.mode-box {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-deep);
-  color: var(--accent);
-  font-size: 12.5px;
-}
-.mode-box.loose {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-.mode-label {
-  font-weight: 600;
-  white-space: nowrap;
-}
-.mode-hint {
-  color: var(--fg-faint);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.mode-confirm-text {
-  margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 1.8;
-  color: var(--fg);
-}
-.mode-confirm-text b {
-  color: var(--warn);
-}
-.mode-confirm-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--fg-faint);
 }
 </style>
