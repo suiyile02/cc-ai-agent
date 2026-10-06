@@ -127,6 +127,19 @@ function changePage(p) {
   load()
 }
 
+/* ---------------- 操作：禁用/启用检索(管理员; 不删向量/索引, 启用零成本恢复) ---------------- */
+async function toggleEnabled(doc) {
+  try {
+    const body = doc.enabled
+      ? await knowledgeApi.disableDocument(doc.id)
+      : await knowledgeApi.enableDocument(doc.id)
+    doc.enabled = body.data.enabled
+    toast.success(body.message || (doc.enabled ? '文档已启用' : '文档已禁用'))
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
 /* ---------------- 操作：重新处理 / 删除 ---------------- */
 async function reprocess(doc) {
   try {
@@ -240,6 +253,7 @@ onUnmounted(() => clearInterval(pollTimer))
               <td>{{ doc.chunkCount ?? '-' }}</td>
               <td>
                 <StatusTag :type="STATUS[doc.status]?.type || 'neutral'" :text="STATUS[doc.status]?.text || doc.status" />
+                <StatusTag v-if="doc.enabled === false" type="warn" text="已禁用检索" style="margin-left: 6px" />
               </td>
               <td>
                 <span class="cell-truncate" :title="doc.errorMessage" :style="{ color: 'var(--danger)', fontSize: '12px' }">
@@ -250,6 +264,14 @@ onUnmounted(() => clearInterval(pollTimer))
               <td class="mono" style="font-size: 12px">{{ formatDateTime(doc.createTime) }}</td>
               <td>
                 <div style="display: flex; gap: 6px">
+                  <button
+                    class="btn sm"
+                    :disabled="doc.status !== 2"
+                    :title="doc.enabled === false ? '恢复语义/BM25 两路召回(不重新向量化)' : '两路检索不再召回该文档, 不删向量/索引, 可随时启用'"
+                    @click="toggleEnabled(doc)"
+                  >
+                    <Icon name="sliders" :size="12" /> {{ doc.enabled === false ? '启用检索' : '禁用检索' }}
+                  </button>
                   <button class="btn sm" :disabled="doc.status === 0 || doc.status === 1" title="清理旧向量后重新入库" @click="reprocess(doc)">
                     <Icon name="refresh" :size="12" /> 重处理
                   </button>

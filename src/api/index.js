@@ -118,6 +118,9 @@ export const knowledgeApi = {
   listDocuments: (params) => http.get('/knowledge/documents', { params }),
   deleteDocument: (id) => http.delete(`/knowledge/documents/${id}`),
   reprocess: (id) => http.post(`/knowledge/documents/${id}/reprocess`),
+  /** 检索启用/禁用(管理员; 禁用不删向量/索引, 启用零成本恢复) */
+  disableDocument: (id) => http.post(`/knowledge/documents/${id}/disable`),
+  enableDocument: (id) => http.post(`/knowledge/documents/${id}/enable`),
 }
 
 /* ================= 系统日志 ================= */
