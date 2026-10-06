@@ -184,6 +184,10 @@ com.ai
   仅 status=2 可切换; `knowledgeWritesShouldRequireAdmin` 正则已扩容钉住新方法。
   注意 `FilterExpressionBuilder.nin` 有 `List<Object>` 与 `Object...` 双重载——传 `List<String>` 会因
   泛型不兼容选中变长参数重载, 整个 List 被当成单个值生成失效过滤(单测钉住)。
+  ⚠ **禁用不追溯对话记忆(2026-10-06 故障)**: 检索排除只挡"重新拿资料", 挡不住"历史窗口里的旧回答"
+  ——同会话重问时模型会复述禁用前的回答。防线是 `kb-only-system.st` 第 2 条的显式声明
+  ("历史旧回答不构成知识库资料", 由 `PromptServiceTest#strictTemplateDeclaresHistoryAnswersAreNotSources` 钉住);
+  验证过滤是否生效用 `/api/system/rag-decisions` 的 semantic_hits 判断。
 - **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)

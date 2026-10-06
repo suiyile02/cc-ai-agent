@@ -124,6 +124,26 @@ class PromptServiceTest {
                 "严格模板的拒答口径必须与 ChatSourceDisplay.NO_RESULT_ANSWER 完全一致");
     }
 
+    /**
+     * 回归(2026-10-06 生产故障): 禁用知识库文档后, 同一会话重问同一问题, 模型把
+     * 历史窗口里禁用前的旧回答当作资料来源复述——检索排除被对话记忆旁路。
+     * 严格模板必须显式声明"历史旧回答不构成知识库资料"。
+     */
+    @Test
+    void strictTemplateDeclaresHistoryAnswersAreNotSources() {
+        givenKbOnly(true);
+
+        String system = service.systemFor(SessionType.HYBRID,
+                ChatOutcome.NO_EVIDENCE_WITH_TOOLS, false, null);
+
+        assertTrue(system.contains("不构成知识库资料"),
+                "严格模板必须声明: 历史旧回答不构成知识库资料(防对话记忆旁路检索排除)");
+        assertTrue(system.contains("不得把历史中的旧回答当作检索结果"),
+                "必须显式禁止复述历史旧回答充当资料");
+        assertTrue(system.contains(ChatSourceDisplay.NO_RESULT_ANSWER),
+                "固定拒答口径必须保持逐字一致");
+    }
+
     /* ---------------- 零命中 + 工具裁决 ---------------- */
 
     @Test
