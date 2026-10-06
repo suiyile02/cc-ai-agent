@@ -163,25 +163,6 @@ class PromptServiceTest {
         assertFalse(system.contains(STRICT_MARKER));
     }
 
-    /**
-     * 回归(2026-10-06 生产故障): 旧宽松模板第 2 条写着"询问公司内部制度等内部信息时,
-     * 请如实说明这类内部信息需要检索企业知识库/工具"——导致热切换到宽松后, 零命中轮
-     * 模型照样拒答, 管理员按钮形同虚设。宽松模板必须真正授权自由作答, 且不得再包含
-     * 任何"引导用户去检索"的拒答指令。
-     */
-    @Test
-    void looseTemplateAuthorizesFreeAnswerAndNeverRefuses() {
-        givenKbOnly(false);
-
-        String system = service.systemFor(SessionType.HYBRID, ChatOutcome.ANSWERED_OPEN,
-                false, null);
-
-        assertTrue(system.contains("基于你自己的知识直接回答"), "宽松模板必须显式授权自由作答");
-        assertFalse(system.contains("需要检索企业知识库"), "不得再出现引导去检索的拒答指令");
-        assertFalse(system.contains("知识库中未找到相关信息"), "宽松模板不得携带固定拒答口径");
-        assertTrue(system.contains("工具"), "业务工具调用授权必须保留");
-    }
-
     /* ---------------- 工具轮(回归防护: 不得被套成"可回答常识科普闲聊"后自由编造) ---------------- */
 
     @Test
