@@ -98,6 +98,7 @@ public class RagRetrievalService implements RagRetriever {
      * @return 检索结果
      */
     private RetrievalOutcome doRetrieve(String query, int topK, double threshold) {
+        // 两路召回
         HybridRecaller.Recall recall = recaller.recall(query, topK);
         if (recall.nothingUsable()) {
             log.warn("向量库与关键词索引均不可用(未配置 Embedding 或未入库)，RAG 降级为空上下文");

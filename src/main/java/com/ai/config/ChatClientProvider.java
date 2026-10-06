@@ -40,8 +40,8 @@ public class ChatClientProvider {
      */
     public String modelLabel() {
         ChatModel model = chatModelProvider.getIfAvailable();
-        if (model != null && model.getDefaultOptions() != null) {
-            String name = model.getDefaultOptions().getModel();
+        if (model != null && model.getOptions() != null) {
+            String name = model.getOptions().getModel();
             if (name != null && !name.isBlank()) {
                 return name.trim();
             }
