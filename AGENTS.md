@@ -177,7 +177,11 @@ com.ai
 
 ### 向量化与 RAG 数据规范
 
-- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(**内容清洗 -> ** Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+  **内容清洗(`DocumentTextCleaner`, 2026-10-07)**: Tika 提取后、分块前执行——控制字符/NBSP/零宽剔除、
+  U+FFFD 密度超阈值判乱码失败(默认 5%)、PDF 页眉页脚统计剔除(仅头尾候选区 + ≥3 页 + 60% 频率 + 长度上限
+  四重防护防误杀正文)、空白规范化(MD 代码块/表格保护)。配置 `app.ingestion.clean.*`, 总开关关闭即回到
+  上线前行为; 存量文档不受影响(对旧文档生效需"重新处理")。
 - **文档检索启用/禁用(2026-10-04)**: `knowledge_document.enabled` 列(SSOT) + `DocumentVisibility` 契约
   (knowledge 根包); 语义路下推 Qdrant `NIN(doc_id)` 查询过滤(后过滤会静默缩水有效 K, 禁止),
   BM25 路召回后过滤(过取补偿, `KeywordIndex` 零改动); toggle 必须 `evictAll()`(正/负缓存一并失效);

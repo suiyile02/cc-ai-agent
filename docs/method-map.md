@@ -407,6 +407,7 @@
 | `toJson(text)` / `toMessage(record)` / `JsonText` | content 列 JSON 序列化与还原 | 内部 |
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
 | `KnowledgeDocumentService.disableDocument/enableDocument(id)` ★新增 | 检索启用开关: 仅 status=2 可切换, 置 `enabled` 列 + `evictAll()`(正/负缓存一并失效) | Controller disable/enable |
+| `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化(MD 代码块/表格保护); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentVisibility.disabledDocIds()` ★新增 | 禁用文档 ID 集合(实时查询, 查询失败降级空集+WARN 节流); 语义路下推 Qdrant `NIN(doc_id)` 过滤、BM25 路召回后过滤 | `HybridRecaller.recall` |
 | `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |
 | `ChatMemoryArchive.appendSummary(cid,summary)` ★新增 | 滚动摘要完成后追加 SUMMARY 行(batch=已有最大值+1, 压缩事件自描述) | `ConversationMemoryService.summarizeIfNeededAsync` |

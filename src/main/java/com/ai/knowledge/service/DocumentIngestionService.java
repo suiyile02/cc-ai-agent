@@ -36,6 +36,7 @@ public class DocumentIngestionService {
     private static final int MIN_CHUNK_CHARS = 100;
 
     private final KnowledgeDocumentMapper documentMapper;
+    private final DocumentTextCleaner textCleaner;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final KeywordIndex keywordIndex;
     private final AppProperties appProperties;
@@ -82,7 +83,9 @@ public class DocumentIngestionService {
             String message = e.getMessage() == null ? "入库失败"
                     : (e.getMessage().contains("未能从文档中解析出有效文本")
                             ? "文件内容为空或无法解析出有效文本(可能为纯图片/扫描件)"
-                            : Strings.truncate(e.getMessage(), 500));
+                            : (e.getMessage().contains("疑似乱码")
+                                    ? "文档内容疑似乱码(编码异常)，无法入库"
+                                    : Strings.truncate(e.getMessage(), 500)));
             doc.setErrorMessage(message);
             documentMapper.updateById(doc);
         }
@@ -98,7 +101,7 @@ public class DocumentIngestionService {
     private List<Document> parseAndSplit(KnowledgeDocument doc) {
         TikaDocumentReader reader = new TikaDocumentReader(
                 new FileSystemResource(doc.getStoragePath()));
-        List<Document> docs = reader.get();
+        List<Document> docs = textCleaner.clean(reader.get(), doc.getFileType());
         TokenTextSplitter splitter = TokenTextSplitter.builder()
                 .withChunkSize(CHUNK_SIZE)
                 .withMinChunkSizeChars(MIN_CHUNK_CHARS)
