@@ -128,7 +128,10 @@ function changePage(p) {
 }
 
 /* ---------------- 操作：禁用/启用检索(管理员; 不删向量/索引, 启用零成本恢复) ---------------- */
+const togglingId = ref(null)
+
 async function toggleEnabled(doc) {
+  togglingId.value = doc.id
   try {
     const body = doc.enabled
       ? await knowledgeApi.disableDocument(doc.id)
@@ -137,6 +140,8 @@ async function toggleEnabled(doc) {
     toast.success(body.message || (doc.enabled ? '文档已启用' : '文档已禁用'))
   } catch (e) {
     toast.error(e.message)
+  } finally {
+    togglingId.value = null
   }
 }
 
@@ -253,7 +258,6 @@ onUnmounted(() => clearInterval(pollTimer))
               <td>{{ doc.chunkCount ?? '-' }}</td>
               <td>
                 <StatusTag :type="STATUS[doc.status]?.type || 'neutral'" :text="STATUS[doc.status]?.text || doc.status" />
-                <StatusTag v-if="doc.enabled === false" type="warn" text="已禁用检索" style="margin-left: 6px" />
               </td>
               <td>
                 <span class="cell-truncate" :title="doc.errorMessage" :style="{ color: 'var(--danger)', fontSize: '12px' }">
@@ -265,12 +269,14 @@ onUnmounted(() => clearInterval(pollTimer))
               <td>
                 <div style="display: flex; gap: 6px">
                   <button
-                    class="btn sm"
-                    :disabled="doc.status !== 2"
-                    :title="doc.enabled === false ? '恢复语义/BM25 两路召回(不重新向量化)' : '两路检索不再召回该文档, 不删向量/索引, 可随时启用'"
+                    class="toggle-btn"
+                    :class="doc.enabled === false ? 'off' : 'on'"
+                    :disabled="doc.status !== 2 || togglingId === doc.id"
+                    :title="doc.enabled === false ? '点击启用：恢复语义/BM25 两路召回(不重新向量化)' : '点击禁用：两路检索不再召回该文档, 不删向量/索引, 可随时再启用'"
                     @click="toggleEnabled(doc)"
                   >
-                    <Icon name="sliders" :size="12" /> {{ doc.enabled === false ? '启用检索' : '禁用检索' }}
+                    <span class="state-dot" />
+                    {{ doc.enabled === false ? '已禁用' : '启用中' }}
                   </button>
                   <button class="btn sm" :disabled="doc.status === 0 || doc.status === 1" title="清理旧向量后重新入库" @click="reprocess(doc)">
                     <Icon name="refresh" :size="12" /> 重处理
@@ -374,4 +380,45 @@ onUnmounted(() => clearInterval(pollTimer))
   font-size: 11.5px;
   color: var(--fg-muted);
 }
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--speed);
+  white-space: nowrap;
+}
+.toggle-btn.on {
+  background: var(--success-dim);
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+.toggle-btn.on:hover {
+  background: var(--success);
+  color: #fff;
+}
+.toggle-btn.off {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.toggle-btn.off:hover {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.toggle-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 </style>
