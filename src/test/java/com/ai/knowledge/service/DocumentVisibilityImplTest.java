@@ -2,7 +2,7 @@ package com.ai.knowledge.service;
 
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -39,8 +39,8 @@ class DocumentVisibilityImplTest {
         assertEquals(Set.of(7L, 9L), disabled);
         // 查询条件必须锁定 enabled=0 且只取 id 列
         @SuppressWarnings("unchecked")
-        ArgumentCaptor<LambdaQueryWrapper<KnowledgeDocument>> qw =
-                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<KnowledgeDocument>> qw =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
         org.mockito.Mockito.verify(mapper).selectList(qw.capture());
         assertTrue(qw.getValue().getSqlSelect().contains("id"), "只查 id 列");
     }

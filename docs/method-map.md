@@ -319,6 +319,7 @@
 | | `addMetadata(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`（删除与溯源依据） |
 | `FileStorageService` | `save(file,userId)` | `用户/日期/UUID.ext` 落盘 |
 | | `delete(path)` | 尽力而为（失败仅 WARN） |
+| | `sha256Hex(file)` / `sha256Hex(path)` ★新增 | 流式计算内容 SHA-256(P3-9 判重键; DigestInputStream 不整读内存); 读取失败抛 FILE_SAVE_FAILED | upload 判重、入库补填 |
 | | `validateContent(file,ext)` | 魔数与扩展名一致性（PDF/ZIP/docx 头） |
 | | `checkZipBomb(file)` | 流式遍历 zip 条目：解压后 ≤512MB、条目 ≤5000 |
 | | `extensionOf(name)` | 小写无点扩展名 |

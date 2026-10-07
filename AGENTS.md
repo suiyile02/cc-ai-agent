@@ -192,7 +192,9 @@ com.ai
   ——同会话重问时模型会复述禁用前的回答。防线是 `kb-only-system.st` 第 2 条的显式声明
   ("历史旧回答不构成知识库资料", 由 `PromptServiceTest#strictTemplateDeclaresHistoryAnswersAreNotSources` 钉住);
   验证过滤是否生效用 `/api/system/rag-decisions` 的 semantic_hits 判断。
-- **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
+- **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> **内容 SHA-256 判重(2003, P3-9: 流式计算, 魔数之后/落盘之前;
+  两层防护=应用层 WHERE file_hash 友好提示 + 唯一索引 uk_file_hash 兜并发竞态; 存量行 file_hash 为 NULL
+  不参与判重, 入库成功/重处理时补填)** -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
   -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`api`/`llm`/`none`)
@@ -473,7 +475,7 @@ com.ai
 
 - 所有 Controller 返回 `Result<T>` 或 `Result<PageResult<T>>`，禁止直接返回 Entity。
 - `Result` 结构: `{code, message, data, timestamp}`；`PageResult`: `{records,total,page,size,totalPages}`。
-- 错误码集中定义在 `ErrorCode`（按枚举实测）：文件与上传 1001~1005、文档 2001~2002、会话与检索 3001~3002、
+- 错误码集中定义在 `ErrorCode`（按枚举实测）：文件与上传 1001~1005、文档 2001~2003(2003=内容判重冲突)、会话与检索 3001~3002、
   参数 4001、系统与 AI 5001~5004（含 5002 授权/越权）、用户与登录 6001~6006、并发限制 6010（6007~6009 预留）。
   业务异常抛 `BusinessException(ErrorCode, message)`，由 `GlobalExceptionHandler` 统一兜底，禁止向客户端泄漏堆栈。
 

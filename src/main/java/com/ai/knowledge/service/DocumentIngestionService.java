@@ -36,6 +36,7 @@ public class DocumentIngestionService {
     private static final int MIN_CHUNK_CHARS = 100;
 
     private final KnowledgeDocumentMapper documentMapper;
+    private final FileStorageService fileStorageService;
     private final DocumentTextCleaner textCleaner;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final KeywordIndex keywordIndex;
@@ -73,6 +74,16 @@ public class DocumentIngestionService {
 
             doc.setStatus(2); // 已完成
             doc.setChunkCount(chunks.size());
+            // 存量行补填判重键(P3-9): 解析阶段已读取该文件, 顺手流式计算; 唯一索引冲突
+            // (同内容存量并发补填)降级为不参与判重并 WARN, 不影响入库成功状态
+            if (doc.getFileHash() == null) {
+                try {
+                    doc.setFileHash(fileStorageService.sha256Hex(doc.getStoragePath()));
+                } catch (Exception e) {
+                    log.warn("补填 file_hash 失败(忽略, 该文档不参与判重): id={}, err={}",
+                            doc.getId(), e.getMessage());
+                }
+            }
             documentMapper.updateById(doc);
             log.info("文档 [{}] 入库完成, 分块数={}", doc.getFileName(), chunks.size());
         } catch (Exception e) {

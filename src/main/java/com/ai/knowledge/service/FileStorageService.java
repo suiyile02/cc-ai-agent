@@ -9,12 +9,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.HexFormat;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -174,5 +179,51 @@ public class FileStorageService {
     public static String extensionOf(String filename) {
         int dot = filename.lastIndexOf('.');
         return (dot == -1) ? "" : filename.substring(dot + 1).toLowerCase();
+    }
+
+    /**
+     * 流式计算上传文件内容的 SHA-256(P3-9 全库判重键; 单文件上限 50MB, 禁止 getBytes() 整读内存)。
+     *
+     * @param file 上传文件
+     * @return 64 位十六进制哈希串
+     * @throws BusinessException 无法读取文件内容
+     */
+    public String sha256Hex(MultipartFile file) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new DigestInputStream(file.getInputStream(), digest)) {
+                drain(in);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException | IOException e) {
+            throw new BusinessException(ErrorCode.FILE_SAVE_FAILED, "无法读取文件内容进行判重");
+        }
+    }
+
+    /**
+     * 流式计算本地已存文件内容的 SHA-256(存量文档重处理/入库成功时补填判重键)。
+     *
+     * @param storagePath 本地存储路径
+     * @return 64 位十六进制哈希串
+     * @throws BusinessException 文件不存在或读取失败
+     */
+    public String sha256Hex(String storagePath) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new DigestInputStream(Files.newInputStream(Paths.get(storagePath)), digest)) {
+                drain(in);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException | IOException e) {
+            throw new BusinessException(ErrorCode.FILE_SAVE_FAILED, "无法读取文件内容计算哈希");
+        }
+    }
+
+    /** 消费流至末尾(DigestInputStream 边读边更新摘要) */
+    private void drain(InputStream in) throws IOException {
+        byte[] buffer = new byte[8192];
+        while (in.read(buffer) != -1) {
+            // 仅计算摘要, 内容不落地
+        }
     }
 }

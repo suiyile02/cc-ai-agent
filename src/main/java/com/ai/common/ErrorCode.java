@@ -20,6 +20,7 @@ public enum ErrorCode {
     // 知识库相关
     DOCUMENT_NOT_FOUND(2001, "文档不存在", HttpStatus.NOT_FOUND),
     DOCUMENT_PROCESSING(2002, "文档正在处理中，请稍后再试", HttpStatus.CONFLICT),
+    DOCUMENT_DUPLICATE(2003, "相同内容的文档已存在", HttpStatus.CONFLICT),
 
     // 对话相关
     SESSION_NOT_FOUND(3001, "会话不存在或已归档", HttpStatus.NOT_FOUND),

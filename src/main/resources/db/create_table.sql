@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
                                     file_name       VARCHAR(255) NOT NULL COMMENT '文件名',
                                     file_type       VARCHAR(20)  NOT NULL COMMENT '文件类型：PDF/DOCX/TXT/MD',
                                     file_size       BIGINT       NOT NULL COMMENT '文件大小（字节）',
+                                    file_hash       CHAR(64)     NULL COMMENT '文件内容 SHA-256(全库判重键；存量行为 NULL 不参与判重，入库成功时补填)',
                                     storage_path    VARCHAR(500) NOT NULL COMMENT '文件存储路径',
                                     collection_name VARCHAR(100) NOT NULL COMMENT 'Qdrant中的集合名称',
                                     chunk_count     INT          DEFAULT 0 COMMENT '分块数量',
@@ -29,7 +30,8 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
                                     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                                     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                                     INDEX idx_collection (collection_name),
-                                    INDEX idx_status (status)
+                                    INDEX idx_status (status),
+                                    UNIQUE INDEX uk_file_hash (file_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库文档（上传记录/异步入库状态/分块数）';
 
 

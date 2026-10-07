@@ -3,7 +3,7 @@ package com.ai.knowledge.service;
 import com.ai.knowledge.DocumentVisibility;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.ai.common.WarnThrottle;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,9 +31,11 @@ public class DocumentVisibilityImpl implements DocumentVisibility {
     @Override
     public Set<Long> disabledDocIds() {
         try {
-            return documentMapper.selectList(new LambdaQueryWrapper<KnowledgeDocument>()
-                            .select(KnowledgeDocument::getId)
-                            .eq(KnowledgeDocument::getEnabled, false))
+            // 字符串列名 QueryWrapper(DbChatMemoryRepository 同款): Lambda 方法引用在纯
+            // Mockito 单测中无 TableInfo 缓存会抛异常, 字符串列可测性与生产行为一致
+            return documentMapper.selectList(new QueryWrapper<KnowledgeDocument>()
+                            .select("id")
+                            .eq("enabled", 0))
                     .stream()
                     .map(KnowledgeDocument::getId)
                     .collect(Collectors.toSet());

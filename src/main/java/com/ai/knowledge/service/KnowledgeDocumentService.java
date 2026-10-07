@@ -96,18 +96,32 @@ public class KnowledgeDocumentService {
         // 内容与扩展名一致性校验(魔数), 防伪装文件进入解析管线(P2-1)
         fileStorageService.validateContent(file, ext);
 
+        // 内容判重(P3-9): 文件内容 SHA-256 全库判重(与文件名无关), 魔数校验之后、落盘之前
+        String fileHash = fileStorageService.sha256Hex(file);
+        Long dup = documentMapper.selectCount(new LambdaQueryWrapper<KnowledgeDocument>()
+                .eq(KnowledgeDocument::getFileHash, fileHash));
+        if (dup != null && dup > 0) {
+            throw new BusinessException(ErrorCode.DOCUMENT_DUPLICATE,
+                    "相同内容的文档已存在(按内容判重, 与文件名无关)；如需替换请先删除旧文档");
+        }
+
         String storagePath = fileStorageService.save(file, userId);
 
         KnowledgeDocument doc = new KnowledgeDocument();
         doc.setFileName(originalName);
         doc.setFileType(ext.toUpperCase());
         doc.setFileSize(file.getSize());
+        doc.setFileHash(fileHash);
         doc.setStoragePath(storagePath);
         doc.setCollectionName(appProperties.getRag().getCollectionName());
         doc.setCreatedBy(userId);
         doc.setStatus(0);
         try {
             documentMapper.insert(doc);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // 并发竞态兜底: 唯一索引 uk_file_hash 拦截, 清理已落盘文件并给友好提示(否则冒成 5001)
+            fileStorageService.delete(storagePath); // 事务将回滚, 清理已落盘文件避免孤儿
+            throw new BusinessException(ErrorCode.DOCUMENT_DUPLICATE, "相同内容的文档已存在(按内容判重)");
         } catch (RuntimeException e) {
             fileStorageService.delete(storagePath); // 事务将回滚, 清理已落盘文件避免孤儿
             throw e;
@@ -226,6 +240,14 @@ public class KnowledgeDocumentService {
         }
         deleteVectorPoints(doc.getId());
         keywordIndex.removeDocument(doc.getId()); // 重处理成功后再由入库流程重建
+        if (doc.getFileHash() == null) {
+            // 存量行补填判重键(P3-9): 从已存文件流式计算, 失败不阻断重处理(下轮再补)
+            try {
+                doc.setFileHash(fileStorageService.sha256Hex(doc.getStoragePath()));
+            } catch (Exception e) {
+                log.warn("重处理补填 file_hash 失败(忽略, 不参与判重): id={}, err={}", id, e.getMessage());
+            }
+        }
         doc.setStatus(0);
         doc.setChunkCount(0);
         doc.setErrorMessage(null);

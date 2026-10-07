@@ -32,6 +32,12 @@ public class KnowledgeDocument {
     /** 文件大小(字节) */
     private Long fileSize;
 
+    /**
+     * 文件内容 SHA-256(全库判重键, 上传时流式计算)。
+     * 存量行为 NULL 不参与判重, 重处理/入库成功时补填; 唯一索引 uk_file_hash 兜并发竞态。
+     */
+    private String fileHash;
+
     /** 存储路径(本地文件) */
     private String storagePath;
 
