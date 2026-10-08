@@ -188,6 +188,15 @@ com.ai
   相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)。
   新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
   MIME 键含特殊字符(如 `application/vnd.x.y`)在 yaml 里用 `[中括号]` 包裹。
+- **父子文档(小-大检索, 2026-10-08)**: 结构感知策略(`md-structure`/`code-line`)split 时给每个小块写入内部键
+  `_parent_seq`(= 小节/缩进块序号)并 `producesParents()=true`; 入库层按该键聚合小块成父块文本, 存
+  `knowledge_chunk` 表(MySQL; 不进 Qdrant——避免同一内容重复嵌入与双份存储), 小块元数据转正式
+  `parent_ref` 后入向量库(内部键不泄漏)。检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
+  按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
+  `semanticMaxScore` 与计数)仍按小块分数, 只有喂给模型的上下文换成父块全文。
+  降级: 父块缺失/读失败保留小块原文(绝不降级为无资料); 写失败仅 WARN(小块照常入库);
+  非结构策略入库时显式清空历史父块(覆盖重处理换策略场景); 删除/重处理文档清父块。
+  表 DDL 在 `db/schema-mysql-extra.sql`(需手动执行)。
   **内容清洗(`DocumentTextCleaner`, 2026-10-07)**: Tika 提取后、分块前执行——控制字符/NBSP/零宽剔除、
   U+FFFD 密度超阈值判乱码失败(默认 5%)、PDF 页眉页脚统计剔除(仅头尾候选区 + ≥3 页 + 60% 频率 + 长度上限
   四重防护防误杀正文)、空白规范化(MD 代码块/表格保护)。配置 `app.ingestion.clean.*`, 总开关关闭即回到

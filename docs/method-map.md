@@ -137,8 +137,9 @@
 | 类 | 方法 | 作用 | 调用方 |
 |---|---|---|---|
 | `RagRetrievalService` | `retrieveOutcome(query,topK,threshold)` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()` | 前置 |
-| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 组装 `RetrievalOutcome` | 内部 |
+| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块展开** → 组装 `RetrievalOutcome` | 内部 |
 | | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
+| | `expandToParents(hits)` ★新增 | 父子文档(小-大检索)：命中小块带 `doc_id+parent_ref` 时按文档批量取父块(序号去重)替换注入文本; 缺父块/读失败回退小块原文; 排序/阈值/判据仍读小块分数 | 内部 |
 | | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
 | | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
 | `HybridRecaller` | `recall(query,topK)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、本类不做任何阈值过滤**——把候选原样交给重排, 过滤在 `RagRetrievalService.filterByThreshold`(重排之后)收口; 下发给向量库会让低于阈值的分数永不可见、分布被底部截断无法定标 | 编排 |
@@ -308,22 +309,24 @@
 | `KnowledgeDocumentService` | `upload(file,userId)` | §6 校验链 → 落盘 → `status=0` 落库 → 事务后触发入库 |
 | | `uploadBatch(files,userId)` | 逐文件走同一链，部分失败语义 |
 | | `listDocuments(pageNum,pageSize,…)` | 分页 + `status`/关键字过滤，返回 VO |
-| | `deleteDocument(id)` | 清向量 → 清关键词索引 → 删记录 → 尽力删文件 |
-| | `reprocess(id)` | 清旧向量与索引 + 状态重置 → 重新入库 |
+| | `deleteDocument(id)` | 清向量 → 清关键词索引 → 清父块 → 删记录 → 尽力删文件 |
+| | `reprocess(id)` | 清旧向量与索引 + 清旧父块 + 状态重置 → 重新入库 |
 | | `ingestAfterCommit(docId)` + `afterCommit()` | **事务提交后**再投 `@Async`（否则异步线程读不到未提交记录） |
 | | `requireDocument(id)` | 存在性校验（1004） |
 | | `deleteVectorPoints(documentId)` | 按 `doc_id` filter 精确删点（向量库不可用→记日志继续） |
 | | `toVO(d)` | 实体 → VO（含 `errorMessage` 友好化） |
-| `DocumentIngestionService` | `ingestDocument(docId)` | `@Async("ingestionExecutor")`：状态机推进 + 解析分块 + 向量化入库 + 注册 BM25 + `evictAll()` |
-| | `parseAndSplit(doc)` | Tika 读 + `TokenTextSplitter(512/100)`，`Timeouts.call(parse-timeout-ms)` |
-| | `addMetadata(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`（删除与溯源依据） |
+| `DocumentIngestionService` | `ingestDocument(docId)` | `@Async("ingestionExecutor")`：状态机推进 + 解析分块 + 父块聚合写入 + 向量化入库 + 注册 BM25 + `evictAll()` |
+| | `parseAndSplit(doc)` | Tika 读 + 清洗 + `MimeResolver` 按 MIME 路由到切分策略，`Timeouts.call(parse-timeout-ms)`；返回块 + 是否产父块 |
+| | `addMetadata(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`（删除与溯源依据）；`_parent_seq` 转正式 `parent_ref` 且内部键剔除 |
+| | `aggregateParents(chunks)` ★新增 | 按 `_parent_seq` 分组拼接小块文本成父块（无标记小块以 `chunk_index` 兜底各自成块） → `ParentBlockStore.replaceParents` |
 | `FileStorageService` | `save(file,userId)` | `用户/日期/UUID.ext` 落盘 |
 | | `delete(path)` | 尽力而为（失败仅 WARN） |
 | | `sha256Hex(file)` / `sha256Hex(path)` ★新增 | 流式计算内容 SHA-256(P3-9 判重键; DigestInputStream 不整读内存); 读取失败抛 FILE_SAVE_FAILED | upload 判重、入库补填 |
 | | `validateContent(file,ext)` | 魔数与扩展名一致性（PDF/ZIP/docx 头） |
 | | `checkZipBomb(file)` | 流式遍历 zip 条目：解压后 ≤512MB、条目 ≤5000 |
 | | `extensionOf(name)` | 小写无点扩展名 |
-| entity/mapper/dto | `KnowledgeDocument`(表 `knowledge_document`, `status` 0/1/2/3 + `error_message` 注释)、`KnowledgeDocumentMapper`、`KnowledgeUploadVO`、`KnowledgeDocumentVO`、`BatchUploadResultVO` | 数据与响应载体 |
+| entity/mapper/dto | `KnowledgeDocument`(表 `knowledge_document`, `status` 0/1/2/3 + `error_message` 注释)、`KnowledgeDocumentMapper`、`KnowledgeChunk`(表 `knowledge_chunk`, 父块文本)、`KnowledgeChunkMapper`、`KnowledgeUploadVO`、`KnowledgeDocumentVO`、`BatchUploadResultVO` | 数据与响应载体 |
+| `ParentBlockStore` / `ParentBlockStoreImpl` ★新增 | `replaceParents(docId,parents)` / `findParents(docId,seqs)` / `deleteByDocId(docId)` | 父块存取契约(knowledge 根包, 与 `DocumentVisibility` 同模式)与实现(knowledge_chunk 表); 覆盖写=先删后插(防空父块 Map 也清历史); 写失败仅 WARN、读失败返回空(降级不中断入库/检索) | 入库聚合 / 检索展开 / 删除重处理 |
 
 ---
 
@@ -411,7 +414,7 @@
 | `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentIngestionService.parseAndSplit` |
 | `MdStructureChunker.split(fullDoc)` ★新增 | Markdown 按标题(#~####)切节, 标题保留在节首(检索语境); 超长节标点回退再切; 无标题文本退化为单节 | 路由 md-structure |
 | `CodeLineChunker.split(fullDoc)` ★新增 | 代码按空行/缩进块切分(顶层行开块、缩进体并入、空行分隔开新块), 保函数/类边界; 超长块再切 | 路由 code-line |
-| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap) | 路由调用 |
+| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`)须写 `PARENT_SEQ_KEY` 并 `producesParents()=true`(父块标记) | 路由调用 |
 | `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
 | `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化(MD 代码块/表格保护); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |

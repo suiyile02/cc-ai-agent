@@ -86,4 +86,38 @@ class MdStructureChunkerTest {
             assertTrue(joined.contains(h), "标题应保留: " + h);
         }
     }
+
+    /* ---------------- 父子文档(小-大检索): 小节序号 = 父块序号 ---------------- */
+
+    private static int parentSeq(Document d) {
+        Object seq = d.getMetadata().get(ChunkingStrategy.PARENT_SEQ_KEY);
+        assertTrue(seq instanceof Number, "每个小块必须携带 " + ChunkingStrategy.PARENT_SEQ_KEY);
+        return ((Number) seq).intValue();
+    }
+
+    @Test
+    void eachSectionCarriesItsOwnParentSeq() {
+        String md = "# 甲\n甲正文。\n\n## 乙\n乙正文。\n\n# 丙\n丙正文。";
+        List<Document> chunks = split(md);
+
+        assertEquals(3, chunks.size(), "三个短节各成一块");
+        assertEquals(List.of(0, 1, 2), chunks.stream().map(MdStructureChunkerTest::parentSeq).toList(),
+                "父块序号按节出现顺序编号(入库层据此拼父块)");
+    }
+
+    @Test
+    void oversizeSectionPiecesShareOneParentSeq() {
+        // 一个超长节被切成多块: 召回应按小块多路命中, 注入时必须收敛回同一个父块
+        StringBuilder sb = new StringBuilder();
+        sb.append("# 大节\n");
+        for (int i = 0; i < 500; i++) {
+            sb.append("这是第").append(i).append("句,内容足够长使本节能被再次切分。");
+        }
+        List<Document> chunks = split(sb.toString());
+
+        assertTrue(chunks.size() > 1, "前置确认: 超长节确实被再切");
+        assertEquals(java.util.Set.of(0),
+                chunks.stream().map(MdStructureChunkerTest::parentSeq).collect(java.util.stream.Collectors.toSet()),
+                "同节所有小块必须指向同一父块序号");
+    }
 }

@@ -7,6 +7,7 @@ import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
+import com.ai.knowledge.ParentBlockStore;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
 import com.ai.rag.service.SemanticAnswerCache;
@@ -54,7 +55,7 @@ class KnowledgeDocumentDedupTest {
         when(vs.getIfAvailable()).thenReturn(mock(VectorStore.class));
         service = new KnowledgeDocumentService(documentMapper, fileStorageService, ingestion,
                 vs, mock(ObjectProvider.class), semanticAnswerCache,
-                new AppProperties(), mock(KeywordIndex.class));
+                new AppProperties(), mock(KeywordIndex.class), mock(ParentBlockStore.class));
     }
 
     private MultipartFile file(String name, String content) {

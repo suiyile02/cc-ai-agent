@@ -233,6 +233,27 @@
 
 ---
 
+## 已完成记录（2026-10-08 第十批, 父子文档——小-大检索）
+
+按"小块召回、父块上下文"落地检索/注入粒度分离:
+- 切分策略侧: `ChunkingStrategy` 增内部键 `PARENT_SEQ_KEY`(`_parent_seq`)与 `producesParents()`;
+  `md-structure`(小节序号)与 `code-line`(缩进块序号)已产出父块标记, 超长节/块的多个小块共享同一父块序号。
+- 存储侧: 新增 `knowledge_chunk` 表 + `KnowledgeChunk`/`KnowledgeChunkMapper` + `ParentBlockStore` 契约
+  (knowledge 根包, 与 DocumentVisibility 同模式) + `ParentBlockStoreImpl`; 父块存 MySQL 而不进 Qdrant
+  (避免同一内容重复嵌入与双份存储)。
+- 入库侧: `DocumentIngestionService` 按 `_parent_seq` 聚合父块文本 → `replaceParents` 覆盖写;
+  小块元数据 `_parent_seq` → 正式 `parent_ref`(内部键不泄漏进向量库); 非结构策略显式清空历史父块
+  (覆盖"重处理换策略/换配置"后旧父块残留)。
+- 检索侧: `RagRetrievalService.expandToParents` 在阈值过滤后按 `doc_id+parent_ref` 批量取父块替换注入文本;
+  排序/阈值/出口判据仍读小块分数(`semanticMaxScore` 与计数不受展开影响), 来源展示仍指向命中小块。
+- 清理: 删除/重处理文档时 `ParentBlockStore.deleteByDocId` 清父块。
+- 降级口径: 父块写失败 WARN(小块照常入库); 读失败/父块缺失回退小块原文(绝不降级为无资料)。
+验证: ParentBlockStoreImplTest 8 例(fake 表按 wrapper eq/IN 条件真实过滤 + 模拟 uk_doc_parent 唯一键:
+覆盖替换语义/文档隔离/清空/写读降级) + DocumentIngestionServiceParentTest 2 例(真实 Tika+清洗+切分全链路:
+父块聚合与 parent_ref 转换、非结构策略清空) + RagRetrievalParentExpansionTest 5 例(展开与来源/判据不变/
+缺父块回退/无 parent_ref 零开销/按文档批量去重/阈值先于展开) + 策略侧 parent_seq 断言 4 例;
+全量 378 例全绿。
+
 ## 已完成记录（2026-10-07 第六批, P3-9 文档内容去重）
 
 按 P3-9 既定设计落地: 判重键=文件内容 SHA-256(全局范围, 与文件名无关), 流式计算

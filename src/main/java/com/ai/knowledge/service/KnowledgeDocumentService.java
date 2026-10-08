@@ -1,5 +1,7 @@
 package com.ai.knowledge.service;
 
+import com.ai.knowledge.ParentBlockStore;
+
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.common.PageResult;
@@ -69,6 +71,7 @@ public class KnowledgeDocumentService {
     private final SemanticAnswerCache semanticAnswerCache;
     private final AppProperties appProperties;
     private final KeywordIndex keywordIndex;
+    private final ParentBlockStore parentBlockStore;
 
     /**
      * 上传文档：校验格式/大小/非空 → 保存文件 → 建记录(待处理) → 触发异步入库。
@@ -227,6 +230,7 @@ public class KnowledgeDocumentService {
         }
         deleteVectorPoints(doc.getId());
         keywordIndex.removeDocument(doc.getId());
+        parentBlockStore.deleteByDocId(doc.getId()); // 父块随文档删除清理(小-大检索)
         documentMapper.deleteById(doc.getId());
         fileStorageService.delete(doc.getStoragePath());
         semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
@@ -248,6 +252,7 @@ public class KnowledgeDocumentService {
         }
         deleteVectorPoints(doc.getId());
         keywordIndex.removeDocument(doc.getId()); // 重处理成功后再由入库流程重建
+        parentBlockStore.deleteByDocId(doc.getId()); // 清旧父块, 入库成功后再重建
         if (doc.getFileHash() == null) {
             // 存量行补填判重键(P3-9): 从已存文件流式计算, 失败不阻断重处理(下轮再补)
             try {

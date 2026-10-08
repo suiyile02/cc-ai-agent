@@ -4,6 +4,7 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.config.AppProperties;
 import com.ai.knowledge.dto.BatchUploadResultVO;
+import com.ai.knowledge.ParentBlockStore;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
@@ -42,6 +43,7 @@ class KnowledgeDocumentServiceTest {
     private DocumentIngestionService ingestionService;
     private SemanticAnswerCache semanticAnswerCache;
     private KeywordIndex keywordIndex;
+    private ParentBlockStore parentBlockStore;
     private KnowledgeDocumentService service;
 
     @BeforeEach
@@ -52,9 +54,10 @@ class KnowledgeDocumentServiceTest {
         ingestionService = mock(DocumentIngestionService.class);
         semanticAnswerCache = mock(SemanticAnswerCache.class);
         keywordIndex = mock(KeywordIndex.class);
+        parentBlockStore = mock(ParentBlockStore.class);
         service = new KnowledgeDocumentService(documentMapper, fileStorageService, ingestionService,
                 mock(ObjectProvider.class), mock(ObjectProvider.class), semanticAnswerCache,
-                new AppProperties(), keywordIndex);
+                new AppProperties(), keywordIndex, parentBlockStore);
     }
 
     private MockMultipartFile file(String name, String content) {
@@ -223,5 +226,37 @@ class KnowledgeDocumentServiceTest {
                 () -> service.enableDocument(9L));
         assertEquals(ErrorCode.DOCUMENT_NOT_FOUND, e.getErrorCode());
         verify(semanticAnswerCache, never()).evictAll();
+    }
+
+    /* ---------------- 父子文档(小-大检索): 父块随删除/重处理清理 ---------------- */
+
+    @Test
+    void deleteDocumentClearsParentBlocksAlongWithIndexes() {
+        KnowledgeDocument d = completedDoc(5L);
+        d.setStoragePath("./data/files/x.md");
+        when(documentMapper.selectById(5L)).thenReturn(d);
+
+        service.deleteDocument(5L);
+
+        verify(parentBlockStore).deleteByDocId(5L); // 留存的父块不得在文档删除后继续可注入
+        verify(keywordIndex).removeDocument(5L);
+        verify(documentMapper).deleteById(5L);
+        verify(fileStorageService).delete("./data/files/x.md");
+        verify(semanticAnswerCache).evictAll();
+    }
+
+    @Test
+    void reprocessClearsOldParentsBeforeRebuild() {
+        KnowledgeDocument d = completedDoc(6L);
+        d.setFileHash("hash-x"); // 跳过重处理的补填判重键分支
+        when(documentMapper.selectById(6L)).thenReturn(d);
+
+        service.reprocess(6L);
+
+        verify(parentBlockStore).deleteByDocId(6L); // 清旧父块, 入库成功后再重建
+        verify(keywordIndex).removeDocument(6L);
+        assertEquals(0, d.getStatus());
+        assertEquals(0, d.getChunkCount());
+        verify(ingestionService).ingestDocument(6L); // 无活动事务 → 直接触发异步入库
     }
 }

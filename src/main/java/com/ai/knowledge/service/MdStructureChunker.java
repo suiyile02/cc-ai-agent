@@ -7,14 +7,17 @@ import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Markdown 结构感知切分策略: 按标题层级(#/##/###)切成小节, 每个切块携带所属小节的标题路径,
- * 保留检索语境; 小节超长时用 {@link RecursivePunctuationSplitter} 标点回退再切。
+ * Markdown 结构感知切分策略: 按标题层级(#/##/###)切成小节, 每个小块携带所属小节序号
+ * ({@link ChunkingStrategy#PARENT_SEQ_KEY}), 入库层据此把同节小块拼成父块(小-大检索);
+ * 小节超长时用 {@link RecursivePunctuationSplitter} 标点回退再切。
  *
- * <p>无标题文本退化为整篇标点回退切分(单节); 不丢内容(拼接各块可还原全部文本)。
- * 标题本身并入所属小节的首块(标题不被丢弃, 检索时命中"标题+正文"更可读)。
+ * <p>无标题文本退化为整篇单节(全部小块同父块); 不丢内容(拼接各块可还原全部文本)。
+ * 标题并入所属小节的首块。无共享实例状态, 线程安全。
  */
 @Component("md-structure")
 @RequiredArgsConstructor
@@ -28,18 +31,25 @@ public class MdStructureChunker implements ChunkingStrategy {
     }
 
     @Override
+    public boolean producesParents() {
+        return true; // Markdown 节是天然父块(小-大检索)
+    }
+
+    @Override
     public List<Document> split(Document fullDoc) {
         IngestionProps.ChunkingStrategyProps p = props();
         String text = fullDoc.getText() == null ? "" : fullDoc.getText();
         List<String> sections = splitByHeadings(text);
         List<Document> out = new ArrayList<>();
-        for (String section : sections) {
+        for (int s = 0; s < sections.size(); s++) {
             // 节内超长 → 标点回退再切; 未超长则整节一块(含标题)
-            List<String> pieces = RecursivePunctuationSplitter.split(section, p.getChunkSize());
+            List<String> pieces = RecursivePunctuationSplitter.split(sections.get(s), p.getChunkSize());
             for (String piece : pieces) {
+                Map<String, Object> md = new HashMap<>(fullDoc.getMetadata());
+                md.put(PARENT_SEQ_KEY, s); // 小节序号 = 父块序号(入库层聚合)
                 out.add(Document.builder()
                         .text(piece)
-                        .metadata(fullDoc.getMetadata())
+                        .metadata(md)
                         .build());
             }
         }

@@ -1,5 +1,7 @@
 package com.ai.knowledge.service;
 
+import com.ai.knowledge.ParentBlockStore;
+
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.common.Strings;
 import com.ai.common.Timeouts;
@@ -36,6 +38,7 @@ public class DocumentIngestionService {
     private final DocumentTextCleaner textCleaner;
     private final MimeResolver mimeResolver;
     private final ChunkingStrategyRouter chunkingRouter;
+    private final ParentBlockStore parentBlockStore;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final KeywordIndex keywordIndex;
     private final AppProperties appProperties;
@@ -58,20 +61,26 @@ public class DocumentIngestionService {
             documentMapper.updateById(doc);
 
             // 解析限时(A2): 恶意/超复杂文档不再无限占用入库线程
-            List<Document> chunks = Timeouts.call(
+            ParsedResult parsed = Timeouts.call(
                     () -> parseAndSplit(doc), appProperties.getIngestion().getParseTimeoutMs());
-            addMetadata(doc, chunks);
+            addMetadata(doc, parsed.chunks());
+            // 父块写入(小-大检索): 策略产出父块时按 _parent_seq 聚合小块成父块文本, 存表
+            if (parsed.producesParents()) {
+                parentBlockStore.replaceParents(doc.getId(), aggregateParents(parsed.chunks()));
+            } else {
+                parentBlockStore.replaceParents(doc.getId(), Map.of()); // 覆盖清除历史父块
+            }
 
             VectorStore vectorStore = vectorStoreProvider.getIfAvailable();
             if (vectorStore == null) {
                 throw new IllegalStateException("向量库不可用(未配置 Embedding/VectorStore)，无法入库");
             }
-            vectorStore.add(chunks);
+            vectorStore.add(parsed.chunks());
             // 多路召回: 关键词索引(BM25)与语义向量同步注册
-            keywordIndex.addDocument(doc.getId(), doc.getFileName(), chunks);
+            keywordIndex.addDocument(doc.getId(), doc.getFileName(), parsed.chunks());
 
             doc.setStatus(2); // 已完成
-            doc.setChunkCount(chunks.size());
+            doc.setChunkCount(parsed.chunks().size());
             // 存量行补填判重键(P3-9): 解析阶段已读取该文件, 顺手流式计算; 唯一索引冲突
             // (同内容存量并发补填)降级为不参与判重并 WARN, 不影响入库成功状态
             if (doc.getFileHash() == null) {
@@ -83,7 +92,9 @@ public class DocumentIngestionService {
                 }
             }
             documentMapper.updateById(doc);
-            log.info("文档 [{}] 入库完成, 分块数={}", doc.getFileName(), chunks.size());
+            log.info("文档 [{}] 入库完成, 分块数={}, 父块={}",
+                    doc.getFileName(), parsed.chunks().size(),
+                    parsed.producesParents() ? aggregateParents(parsed.chunks()).size() : 0);
         } catch (Exception e) {
             log.error("文档 [{}] 入库失败", doc.getFileName(), e);
             doc.setStatus(3); // 失败
@@ -104,10 +115,10 @@ public class DocumentIngestionService {
      * 解析文档全文并分块: 清洗 → 按 MIME 路由到切分策略 → 分块。
      *
      * @param doc 文档记录(含本地存储路径)
-     * @return 分块后的 Document 列表
+     * @return 分块结果(小块 + 是否产出父块)
      * @throws IllegalStateException 解析不出有效文本
      */
-    private List<Document> parseAndSplit(KnowledgeDocument doc) {
+    private ParsedResult parseAndSplit(KnowledgeDocument doc) {
         TikaDocumentReader reader = new TikaDocumentReader(
                 new FileSystemResource(doc.getStoragePath()));
         List<Document> parsed = reader.get();
@@ -132,11 +143,42 @@ public class DocumentIngestionService {
         }
         log.debug("文档 [{}] 切分: mime={}, 策略={}, 分块={}",
                 doc.getFileName(), mime, strategy.name(), split.size());
-        return split;
+        return new ParsedResult(split, strategy.producesParents());
+    }
+
+    /** 切分结果: 小块列表 + 是否产出父块 */
+    private record ParsedResult(List<Document> chunks, boolean producesParents) {
+    }
+
+    /**
+     * 按小块的 {@code _parent_seq} 内部键聚合父块文本: 同父块序号的小块文本拼接成一个父块。
+     * 只保留确实有父块标记的小块(无标记的散落块各自成父块, 兜底不丢)。
+     *
+     * @param chunks 已附加元数据的小块
+     * @return 父块序号 → 父块文本
+     */
+    private Map<Integer, String> aggregateParents(List<Document> chunks) {
+        Map<Integer, StringBuilder> acc = new java.util.LinkedHashMap<>();
+        for (Document chunk : chunks) {
+            Object seqObj = chunk.getMetadata().get(ChunkingStrategy.PARENT_SEQ_KEY);
+            int seq = seqObj instanceof Number n ? n.intValue()
+                    : chunk.getMetadata().get("chunk_index") instanceof Number c ? c.intValue() : 0;
+            acc.computeIfAbsent(seq, k -> new StringBuilder())
+                    .append(chunk.getText()).append('\n');
+        }
+        Map<Integer, String> parents = new java.util.LinkedHashMap<>();
+        acc.forEach((seq, sb) -> {
+            String text = sb.toString().stripTrailing();
+            if (!text.isEmpty()) {
+                parents.put(seq, text);
+            }
+        });
+        return parents;
     }
 
     /**
      * 给分块附加检索元数据(doc_id/file_name/chunk_index/collection 等)。
+     * 父块内部键 {@code _parent_seq} 转为正式 {@code parent_ref}(供检索时取父块)。
      *
      * @param doc    文档记录
      * @param chunks 分块列表(原地修改 metadata)
@@ -145,11 +187,16 @@ public class DocumentIngestionService {
         int index = 0;
         for (Document chunk : chunks) {
             Map<String, Object> md = new HashMap<>(chunk.getMetadata());
+            Object parentSeq = md.get(ChunkingStrategy.PARENT_SEQ_KEY);
+            md.remove(ChunkingStrategy.PARENT_SEQ_KEY);
             md.put("doc_id", doc.getId());
             md.put("file_name", doc.getFileName());
             md.put("file_type", doc.getFileType());
             md.put("chunk_index", index);
             md.put("collection", doc.getCollectionName());
+            if (parentSeq instanceof Number n) {
+                md.put("parent_ref", n.intValue()); // 父块序号(检索时按 doc_id+parent_ref 取父块文本)
+            }
             chunk.getMetadata().clear();
             chunk.getMetadata().putAll(md);
             index++;

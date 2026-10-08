@@ -109,3 +109,15 @@ CREATE TABLE IF NOT EXISTS chat_memory_raw (
     UNIQUE KEY uk_conv_seq (conversation_id, seq),
     INDEX idx_conv (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话原始轨迹留档(append-only, 摘要裁剪不删除, 随会话删除清理)';
+
+-- 知识库父块(父子文档/小-大检索): 小块向量进 Qdrant 用于召回, 命中小块后按 parent_ref
+-- 取本表父块文本喂给模型, 保证"检索粒度(小块)与上下文粒度(父块)分离"。随文档删除/重处理清理。
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
+    id          BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    doc_id      BIGINT       NOT NULL COMMENT '知识库文档ID(knowledge_document.id)',
+    parent_seq  INT          NOT NULL COMMENT '文档内父块序号(从小块 parent_ref 引用)',
+    content     TEXT         NOT NULL COMMENT '父块文本(结构单元: Markdown 小节/代码函数等)',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    UNIQUE KEY uk_doc_parent (doc_id, parent_seq),
+    INDEX idx_doc (doc_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库父块(小-大检索: 小块召回, 父块供上下文)';

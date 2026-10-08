@@ -45,7 +45,8 @@ class RagRetrievalTimeoutTest {
                 List.of(score, new LlmReranker(mock(ChatClientProvider.class), score), new RrfOrderReranker()),
                 props);
         return new RagRetrievalService(props, recaller, rerankers,
-                new RagContextRenderer(props, new HeuristicTokenCounter()));
+                new RagContextRenderer(props, new HeuristicTokenCounter()),
+                mock(com.ai.knowledge.ParentBlockStore.class));
     }
 
     @Test

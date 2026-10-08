@@ -13,6 +13,8 @@ import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,6 +36,7 @@ public class RagRetrievalService implements RagRetriever {
     private final HybridRecaller recaller;
     private final RerankStrategyFactory rerankers;
     private final RagContextRenderer renderer;
+    private final com.ai.knowledge.ParentBlockStore parentBlockStore;
 
     /**
      * 按指定 Top-K / 阈值检索（检索调试接口使用）。
@@ -108,7 +111,8 @@ public class RagRetrievalService implements RagRetriever {
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
                 : mergeAndRerank(query, recall, topK);
-        return new RetrievalOutcome(filterByThreshold(hits, threshold), true,
+        List<Document> finalHits = expandToParents(filterByThreshold(hits, threshold));
+        return new RetrievalOutcome(finalHits, true,
                 countPassed(recall.semantic(), threshold), recall.keyword().size(),
                 false, recall.semanticMaxScore());
     }
@@ -153,6 +157,61 @@ public class RagRetrievalService implements RagRetriever {
                 .limit(topK)
                 .map(RetrievalCandidate::toDocument)
                 .toList();
+    }
+
+    /**
+     * 父子文档(小-大检索)展开: 命中小块若带 {@code doc_id + parent_ref}, 用其父块文本替换小块文本,
+     * 使"检索粒度(小块)"与"上下文粒度(父块)"分离——召回仍按小块分数, 注入喂给模型的是完整父块。
+     *
+     * <p>降级: 父块读取失败/父块缺失时保留小块原文(不因父块查询失败而降级为无资料)。
+     * 父块展开后 text 变化, 但 source 展示仍指向命中小块(来源正确)。
+     */
+    private List<Document> expandToParents(List<Document> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return hits;
+        }
+        // 收集需要展开的 (docId, parentRef) 去重
+        Map<Long, Set<Integer>> need = new java.util.LinkedHashMap<>();
+        for (Document hit : hits) {
+            Object docIdObj = hit.getMetadata().get("doc_id");
+            Object parentRefObj = hit.getMetadata().get("parent_ref");
+            if (docIdObj instanceof Number d && parentRefObj instanceof Number pr) {
+                need.computeIfAbsent(d.longValue(), k -> new java.util.HashSet<>())
+                        .add(pr.intValue());
+            }
+        }
+        if (need.isEmpty()) {
+            return hits;
+        }
+        // 批量取父块
+        Map<String, String> parentTexts = new java.util.HashMap<>();
+        need.forEach((docId, seqs) ->
+                parentBlockStore.findParents(docId, new java.util.ArrayList<>(seqs))
+                        .forEach((seq, text) -> parentTexts.put(docId + ":" + seq, text)));
+        if (parentTexts.isEmpty()) {
+            return hits;
+        }
+        // 替换命中小块文本为父块文本
+        List<Document> expanded = new java.util.ArrayList<>(hits.size());
+        for (Document hit : hits) {
+            Object docIdObj = hit.getMetadata().get("doc_id");
+            Object parentRefObj = hit.getMetadata().get("parent_ref");
+            String parentText = null;
+            if (docIdObj instanceof Number d && parentRefObj instanceof Number pr) {
+                parentText = parentTexts.get(d.longValue() + ":" + pr.intValue());
+            }
+            if (parentText != null && !parentText.isBlank()) {
+                expanded.add(Document.builder()
+                        .id(hit.getId())
+                        .text(parentText)
+                        .score(hit.getScore())
+                        .metadata(hit.getMetadata())
+                        .build());
+            } else {
+                expanded.add(hit); // 无父块: 保留小块原文
+            }
+        }
+        return expanded;
     }
 
     /**

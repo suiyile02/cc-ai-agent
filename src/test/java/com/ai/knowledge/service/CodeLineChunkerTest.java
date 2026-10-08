@@ -98,4 +98,38 @@ class CodeLineChunkerTest {
         assertTrue(chunks.get(0).getText().contains("a = 1"));
         assertTrue(chunks.get(0).getText().contains("c = 3"));
     }
+
+    /* ---------------- 父子文档(小-大检索): 缩进块序号 = 父块序号 ---------------- */
+
+    private static int parentSeq(Document d) {
+        Object seq = d.getMetadata().get(ChunkingStrategy.PARENT_SEQ_KEY);
+        assertTrue(seq instanceof Number, "每个小块必须携带 " + ChunkingStrategy.PARENT_SEQ_KEY);
+        return ((Number) seq).intValue();
+    }
+
+    @Test
+    void eachBlockCarriesItsOwnParentSeq() {
+        String code = "def a():\n    return 1\n\n\ndef b():\n    return 2\n";
+        List<Document> chunks = split(code);
+
+        assertEquals(2, chunks.size(), "前置确认: 两个函数分成两块");
+        assertEquals(0, parentSeq(chunks.get(0)), "函数 a 的块序号 0");
+        assertEquals(1, parentSeq(chunks.get(1)), "函数 b 的块序号 1");
+    }
+
+    @Test
+    void oversizeBlockPiecesShareOneParentSeq() {
+        // 单个超长函数被再切: 召回应按小块命中, 注入时必须收敛回整个函数(父块)
+        StringBuilder sb = new StringBuilder();
+        sb.append("def huge():\n");
+        for (int i = 0; i < 2000; i++) {
+            sb.append("    line_").append(i).append(" = ").append(i).append("\n");
+        }
+        List<Document> chunks = split(sb.toString());
+
+        assertTrue(chunks.size() > 1, "前置确认: 超长块确实被再切");
+        assertEquals(java.util.Set.of(0),
+                chunks.stream().map(CodeLineChunkerTest::parentSeq).collect(java.util.stream.Collectors.toSet()),
+                "同一函数的全部小块必须指向同一父块序号");
+    }
 }

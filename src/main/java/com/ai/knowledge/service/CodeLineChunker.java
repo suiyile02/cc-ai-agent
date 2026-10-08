@@ -28,27 +28,34 @@ public class CodeLineChunker implements ChunkingStrategy {
     }
 
     @Override
+    public boolean producesParents() {
+        return true; // 顶层缩进块(函数/类)是天然父块(小-大检索)
+    }
+
+    @Override
     public List<Document> split(Document fullDoc) {
         IngestionProps.ChunkingStrategyProps p = props();
         String text = fullDoc.getText() == null ? "" : fullDoc.getText();
         int minIndent = Math.max(0, p.getMinIndent());
         String[] lines = text.split("\n", -1);
-        List<String> blocks = splitByIndent(lines, minIndent);
+        List<BlockRef> blocks = splitByIndent(lines, minIndent);
         List<Document> out = new ArrayList<>();
-        for (String block : blocks) {
-            if (block.isBlank()) {
-                continue;
-            }
-            // 超长缩进块按标点/字符回退再切(代码标点稀疏, 多半走硬切兜底; 不丢内容)
-            List<String> pieces = RecursivePunctuationSplitter.split(block, p.getChunkSize());
+        for (int b = 0; b < blocks.size(); b++) {
+            List<String> pieces = RecursivePunctuationSplitter.split(blocks.get(b).text, p.getChunkSize());
             for (String piece : pieces) {
+                java.util.Map<String, Object> md = new java.util.HashMap<>(fullDoc.getMetadata());
+                md.put(PARENT_SEQ_KEY, b); // 缩进块序号 = 父块序号
                 out.add(Document.builder()
                         .text(piece)
-                        .metadata(fullDoc.getMetadata())
+                        .metadata(md)
                         .build());
             }
         }
         return out;
+    }
+
+    /** 一个缩进块(父块候选): 文本 + 起始小块序号(块内第一个 piece 的下标) */
+    private record BlockRef(String text) {
     }
 
     /**
@@ -58,8 +65,8 @@ public class CodeLineChunker implements ChunkingStrategy {
      * (函数/类边界); ③空行分隔的两个顶层块之间也收尾(空行是常见函数分隔)。这样既保住
      * 函数/类的缩进体, 又把"连续顶层语句 + 空行 + 连续顶层语句"切成两块。
      */
-    private List<String> splitByIndent(String[] lines, int minIndent) {
-        List<String> blocks = new ArrayList<>();
+    private List<BlockRef> splitByIndent(String[] lines, int minIndent) {
+        List<BlockRef> blocks = new ArrayList<>();
         StringBuilder current = null;
         boolean lastIndented = false;   // 上一条非空行是否处于缩进体
         boolean sawBlank = false;       // 上一条是否为空行(空行分隔的两个块要分开)
@@ -76,7 +83,7 @@ public class CodeLineChunker implements ChunkingStrategy {
                 // 空行分隔 或 从缩进体回到顶层: 收尾当前块, 开启新块
                 String b = current.toString().stripTrailing();
                 if (!b.isBlank()) {
-                    blocks.add(b);
+                    blocks.add(new BlockRef(b));
                 }
                 current = new StringBuilder();
             }
@@ -87,7 +94,7 @@ public class CodeLineChunker implements ChunkingStrategy {
         if (current != null) {
             String b = current.toString().stripTrailing();
             if (!b.isBlank()) {
-                blocks.add(b);
+                blocks.add(new BlockRef(b));
             }
         }
         return blocks;

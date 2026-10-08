@@ -251,9 +251,10 @@ flowchart TD
     U9 --> U10["ingestionExecutor 异步 ingestDocument(docId)"]
 
     U10 --> V1["status=1 处理中"]
-    V1 --> V2["Tika 解析 + TokenTextSplitter(512/100)<br/>⚠ 受 app.ingestion.parse-timeout-ms=120s 限时"]
-    V2 --> V3["addMetadata: doc_id / file_name / chunk_index / collection"]
-    V3 --> V4["EmbeddingModel 向量化 → Qdrant upsert<br/>集合名以 app.rag.collection-name 为单一事实来源"]
+    V1 --> V2["Tika 解析 + DocumentTextCleaner 清洗 + MimeResolver 按 MIME 路由到切分策略<br/>(md-structure / code-line / fallback ...)<br/>⚠ 受 app.ingestion.parse-timeout-ms=120s 限时"]
+    V2 --> V3["addMetadata: doc_id / file_name / chunk_index / collection / parent_ref<br/>(结构策略的 _parent_seq 内部键转正式 parent_ref 并剔除)"]
+    V3 --> V3P["结构策略产父块: 按 _parent_seq 聚合小块成父块文本<br/>→ ParentBlockStore.replaceParents (knowledge_chunk 表)<br/>非结构策略: 显式清空历史父块"]
+    V3P --> V4["EmbeddingModel 向量化 → Qdrant upsert<br/>集合名以 app.rag.collection-name 为单一事实来源"]
     V4 --> V5["★KeywordIndex.addDocument 同步注册 BM25（写锁）"]
     V5 --> V6["status=2 成功 + chunk_count"]
     V2 -->|"解析不出有效文本"| VE["status=3 + 中文 error_message"]
@@ -273,9 +274,9 @@ stateDiagram-v2
     待处理0 --> 处理中1: @Async 开始
     处理中1 --> 成功2: 向量+关键词索引就绪
     处理中1 --> 失败3: 解析/嵌入/入库异常
-    成功2 --> 待处理0: reprocess（先清旧向量与索引）
+    成功2 --> 待处理0: reprocess（先清旧向量与索引与父块）
     失败3 --> 待处理0: reprocess
-    成功2 --> [*]: delete（按 doc_id 过滤删向量点 + 移除索引 + 删文件 + 删记录）
+    成功2 --> [*]: delete（按 doc_id 过滤删向量点 + 移除索引 + 清父块 + 删文件 + 删记录）
     失败3 --> [*]: delete
 ```
 
@@ -288,7 +289,8 @@ flowchart TD
     D0["DELETE /documents/{id} 或 POST /documents/{id}/reprocess<br/>@RequireAdmin 生效于 Service 方法(非 Controller)"] --> D1["requireDocument(id) 存在性校验 → 404/1004"]
     D1 --> D2["deleteVectorPoints: 以 filter doc_id 拉取点 id 后精确删除<br/>⚠ 向量库不可用：仅记日志并继续（不阻塞删除）"]
     D2 --> D3["KeywordIndex.removeDocument(docId) 写锁内移除并回收 df"]
-    D3 --> D4{"是 reprocess?"}
+    D3 --> D3B["ParentBlockStore.deleteByDocId(docId) 清 knowledge_chunk 父块(小-大检索)"]
+    D3B --> D4{"是 reprocess?"}
     D4 -->|是| D5["status 重置 0 + error_message 清空 → 事务提交后重新入库"]
     D4 -->|否| D6["deleteById + FileStorageService.delete（尽力而为 ⚠）"]
     D5 --> D7["★semanticAnswerCache.evictAll() 版本自增 → 旧答案不再命中"]
@@ -464,7 +466,8 @@ flowchart TD
     R10 --> R12
     R11 --> R8
     R12 --> R12B["filterByThreshold（重排之后收口, 只裁语义路低分; 读 metadata.semantic_score 非 doc.score）"]
-    R12B --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
+    R12B --> R12C["expandToParents ★父块展开(小-大检索): 命中小块带 doc_id+parent_ref → ParentBlockStore.findParents 按文档批量取(序号去重)父块全文替换注入文本<br/>缺父块/读失败回退小块原文; semanticMaxScore 与计数不受影响(判据按小块分数)"]
+    R12C --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
     R3 -->|"超时/异常 ⚠"| R14["executedEmpty()：记为『已执行、零命中』<br/>★ 保持审计不变式：KB+未执行=false 只可能是缓存命中"]
     R14 --> R15["降级为不注入上下文继续对话"]
     R13 --> R16{"hits 为空 且 真实执行?"}
@@ -478,6 +481,8 @@ flowchart TD
 `RerankStrategy` 实现，`RerankStrategyFactory` 按 `mode()` 自动收录，编排层零改动。
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
+
+**父块展开（2026-10-08, 父子文档/小-大检索）**：阈值过滤之后执行 `expandToParents`——召回/排序/阈值/出口判据全部按小块分数(semanticMaxScore 读未展开值)，只有注入给模型的文本换成父块全文（`toSources` 来源展示仍指向命中小块）；父块缺失/读取失败一律回退小块原文。父块来自 `knowledge_chunk` 表，由入库层在结构策略产 `_parent_seq` 时聚合写入。
 
 **阈值只作用于语义一路，且在重排之后收口**：`HybridRecaller.recall` 不做任何阈值过滤（原样交出候选），过滤在 `RagRetrievalService.filterByThreshold`——排在重排之后是为了让低余弦分但可能答得上问题的候选先被重排捞一次。它只裁语义路低分（读 `metadata.semantic_score`，非 `doc.getScore()`——重排后 score 已被融合/相关度分占用），BM25-only 命中无语义分故不受约束、保留。出口判定读的是未截断的 `semanticMaxScore`，与过滤时机无关。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
 **阈值以 0 下发向量库、召回层不过滤**（`HybridRecaller.recall` 用 `similarityThreshold(0.0)`）：一旦让向量库先过滤，低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
