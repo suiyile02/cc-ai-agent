@@ -143,6 +143,23 @@ app:
     parse-timeout-ms: 120000              # 单文档解析超时(超时置 status=3)
     max-uncompressed-bytes: 536870912     # docx 解压后总大小上限(512MB, 超限疑似压缩炸弹)
     max-zip-entries: 5000                 # docx 内部条目数上限
+    # ---- 切分策略路由(刻意外置 YAML: 映射/参数/兜底以本段为唯一来源; 详见 AGENTS.md) ----
+    # fallback-strategy 引用的策略名必须存在(ChunkingConfigValidator 启动校验, 引用漂移即拒绝启动)
+    chunking:
+      enabled: true
+      fallback-strategy: fallback          # 兜底策略名(必配)
+      mime-to-strategy:                    # MIME → 策略名(唯一映射来源; 含特殊字符的键用 [ ] 包裹)
+        "[text/markdown]": recursive-cn    # MD: 中文标点递归切分(含 overlap)
+        "[text/plain]": recursive-cn       # 纯文本/TXT
+        "[application/pdf]": recursive-cn  # PDF 文本层
+      strategies:                          # 策略参数(策略类按自己 bean 名读本段)
+        fallback:
+          chunk-size: 512
+          min-chunk-chars: 100
+        recursive-cn:
+          chunk-size: 512
+          overlap-tokens: 40
+          min-chunk-chars: 100
   concurrency:
     max-concurrent-per-user: 3            # 超并发返回 429/6010
     acquire-timeout-ms: 1000

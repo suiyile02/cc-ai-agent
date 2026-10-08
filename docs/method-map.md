@@ -408,6 +408,10 @@
 | `toJson(text)` / `toMessage(record)` / `JsonText` | content 列 JSON 序列化与还原 | 内部 |
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
 | `KnowledgeDocumentService.disableDocument/enableDocument(id)` ★新增 | 检索启用开关: 仅 status=2 可切换, 置 `enabled` 列 + `evictAll()`(正/负缓存一并失效) | Controller disable/enable |
+| `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentIngestionService.parseAndSplit` |
+| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap) | 路由调用 |
+| `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
+| `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化(MD 代码块/表格保护); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentVisibility.disabledDocIds()` ★新增 | 禁用文档 ID 集合(实时查询, 查询失败降级空集+WARN 节流); 语义路下推 Qdrant `NIN(doc_id)` 过滤、BM25 路召回后过滤 | `HybridRecaller.recall` |
 | `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |

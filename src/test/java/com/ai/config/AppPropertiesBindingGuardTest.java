@@ -10,6 +10,7 @@ import org.springframework.core.env.PropertySource;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -119,21 +120,72 @@ class AppPropertiesBindingGuardTest {
      */
     private boolean boundToField(String canonicalKey) {
         Object current = appProperties;
-        String[] segments = canonicalKey.split("[.]");
+        String[] segments = splitRespectingBrackets(canonicalKey);
         for (int i = 1; i < segments.length; i++) {
-            // 列表键在 Environment 里带下标(app.cors.allowed-origins[0]), 字段名要先把下标摘掉
-            String segment = segments[i].replaceAll("\\[\\d+]", "");
+            String segment = segments[i];
+            if (current instanceof Map<?, ?> map) {
+                // Map 型配置(如 strategies 的策略名、mime-to-strategy 的 MIME): 段名即 map 键,
+                // 键存在即视为已绑定(键名的合法性由业务侧启动校验兜底, 见 ChunkingConfigValidator)
+                if (!map.containsKey(segment)) {
+                    return false;
+                }
+                current = map.get(segment);
+                continue;
+            }
+            // 段形如 field / field[0](列表下标) / field[key](map 键):
+            // 列表下标摘掉即可(取到 List 非空即已绑定); map 键则先读字段再按键取值
+            String field = segment;
+            String mapKey = null;
+            int bracket = segment.indexOf('[');
+            if (bracket != -1 && segment.endsWith("]")) {
+                field = segment.substring(0, bracket);
+                String inner = segment.substring(bracket + 1, segment.length() - 1);
+                if (!inner.matches("\\d+")) {
+                    mapKey = inner;
+                }
+            }
             try {
-                current = read(current, segment);
+                current = read(current, field);
             } catch (ReflectiveOperationException e) {
                 return false;
             }
             if (current == null) {
                 return false;
             }
+            if (mapKey != null) {
+                if (!(current instanceof Map<?, ?> map) || !map.containsKey(mapKey)) {
+                    return false;
+                }
+                current = map.get(mapKey);
+                if (current == null) {
+                    return false;
+                }
+            }
         }
         // 走到最后一级说明整条路径都有对应字段
         return true;
+    }
+
+    /** 按 "." 切段, 但中括号内的点不切(MIME 键如 [application/vnd.foo.bar] 必须保持完整)。 */
+    private static String[] splitRespectingBrackets(String key) {
+        List<String> out = new ArrayList<>();
+        int depth = 0;
+        StringBuilder sb = new StringBuilder();
+        for (char c : key.toCharArray()) {
+            if (c == '[') {
+                depth++;
+            } else if (c == ']') {
+                depth = Math.max(0, depth - 1);
+            }
+            if (c == '.' && depth == 0) {
+                out.add(sb.toString());
+                sb.setLength(0);
+            } else {
+                sb.append(c);
+            }
+        }
+        out.add(sb.toString());
+        return out.toArray(new String[0]);
     }
 
     /** boolean 字段是 {@code isXxx()}, 其余是 {@code getXxx()}; 两种命名各试一次。 */

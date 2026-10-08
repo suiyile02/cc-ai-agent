@@ -10,7 +10,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.FileSystemResource;
@@ -23,7 +22,7 @@ import java.util.Map;
 
 /**
  * 文档入库业务(需求 2.2, 异步)：
- * 读取(PDF/DOCX/TXT/MD, Tika) → TokenTextSplitter 分块 → 附加元数据
+ * 读取(PDF/DOCX/TXT/MD 等, Tika) → 清洗 → 按 MIME 路由到切分策略分块 → 附加元数据
  * (doc_id/file_name/file_type/chunk_index/collection) → 语义向量化入库 →
  * 同步注册关键词索引 → 更新 knowledge_document 状态与分块数。
  */
@@ -32,12 +31,10 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DocumentIngestionService {
 
-    private static final int CHUNK_SIZE = 512;
-    private static final int MIN_CHUNK_CHARS = 100;
-
-    private final KnowledgeDocumentMapper documentMapper;
-    private final FileStorageService fileStorageService;
+    private final KnowledgeDocumentMapper documentMapper;    private final FileStorageService fileStorageService;
     private final DocumentTextCleaner textCleaner;
+    private final MimeResolver mimeResolver;
+    private final ChunkingStrategyRouter chunkingRouter;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final KeywordIndex keywordIndex;
     private final AppProperties appProperties;
@@ -103,7 +100,7 @@ public class DocumentIngestionService {
     }
 
     /**
-     * 解析文档全文并分块(512 token, 单块最短 100 字符)。
+     * 解析文档全文并分块: 清洗 → 按 MIME 路由到切分策略 → 分块。
      *
      * @param doc 文档记录(含本地存储路径)
      * @return 分块后的 Document 列表
@@ -112,15 +109,28 @@ public class DocumentIngestionService {
     private List<Document> parseAndSplit(KnowledgeDocument doc) {
         TikaDocumentReader reader = new TikaDocumentReader(
                 new FileSystemResource(doc.getStoragePath()));
-        List<Document> docs = textCleaner.clean(reader.get(), doc.getFileType());
-        TokenTextSplitter splitter = TokenTextSplitter.builder()
-                .withChunkSize(CHUNK_SIZE)
-                .withMinChunkSizeChars(MIN_CHUNK_CHARS)
-                .build();
-        List<Document> split = splitter.apply(docs);
+        List<Document> parsed = reader.get();
+        // 清洗(Tika 后、切分前)
+        List<Document> cleaned = textCleaner.clean(parsed, doc.getFileType());
+        if (cleaned == null || cleaned.isEmpty()) {
+            throw new IllegalStateException("未能从文档中解析出有效文本");
+        }
+        // 合并清洗后的全文为单一 Document(通常 Tika 返回 1 个; 多段时拼接收尾)
+        Document full = cleaned.size() == 1 ? cleaned.get(0)
+                : Document.builder()
+                        .text(cleaned.stream().map(Document::getText)
+                                .collect(java.util.stream.Collectors.joining("\n\n")))
+                        .metadata(cleaned.get(0).getMetadata())
+                        .build();
+        // MIME 路由: Tika 直接探测已落盘文件; 不可判定回退扩展名推导
+        String mime = mimeResolver.resolve(doc.getStoragePath(), doc.getFileType());
+        ChunkingStrategy strategy = chunkingRouter.route(mime);
+        List<Document> split = strategy.split(full);
         if (split == null || split.isEmpty()) {
             throw new IllegalStateException("未能从文档中解析出有效文本");
         }
+        log.debug("文档 [{}] 切分: mime={}, 策略={}, 分块={}",
+                doc.getFileName(), mime, strategy.name(), split.size());
         return split;
     }
 

@@ -246,6 +246,23 @@
 验证: KnowledgeDocumentDedupTest 4 例(前置判重/竞态翻译/哈希存储/批量部分失败) +
 FileStorageServiceTest 4 例(已知向量/两入口/内容差异/友好失败), 全量 319 例全绿。
 
+## 已完成记录（2026-10-07 第八批, 切分策略按 MIME 路由——YAML 全量外置）
+
+- 新增 `ChunkingStrategy` 接口 + `ChunkingStrategyRouter`: YAML 决定"什么格式走什么策略"
+  (`app.ingestion.chunking.mime-to-strategy`), 策略类只做切分; Spring 按 bean 名注入 Map 查询,
+  无巨型 if-else; 新增策略 = 新增实现类 + 加配置。
+- **兜底恒存在**: fallback-strategy 必配且启动校验(缺配/引用不存在的策略名 → 拒绝启动,
+  防 YAML 引用漂移静默落兜底)。
+- `MimeResolver`: Tika 直接探测文件内容 MIME(不可判定回退扩展名映射)——注意 Spring AI 的
+  TikaDocumentReader 不保留探测的 content-type, 故在入库层独立探测。
+- 现有策略: `fallback`(等价旧 TokenTextSplitter 512/100, 平滑迁移基线) + `recursive-cn`
+  (中文标点层级回退 。！？→，、→空格 → 硬切兜底; 支持 overlap-tokens, 默认 40)。
+- **刻意偏离登记**: 本段配置与"默认值单一来源=Java"约定刻意偏离, 以 YAML 为唯一来源
+  (路由表属运维可调策略); 由启动校验 + AppPropertiesBindingGuardTest(Map 键支持已扩展)双重兜底。
+- 验证: ChunkingStrategyRouterTest 7 例(路由/归一化/兜底/启动校验各分支) +
+  ChineseRecursiveChunkerTest 5 例(句界切分/无标点硬切不丢内容/overlap 语义);
+  **全量 347 例全绿**(含此前需 Qdrant 的上下文测试, 本次一并跑通)。
+
 ## 已完成记录（2026-10-07 第七批, 上传格式放开——去白名单 + 魔数嗅探）
 
 - 移除 PDF/DOCX/TXT/MD 扩展名白名单; 改为**最小拒绝集**(归档/可执行扩展名) + 内容防线:

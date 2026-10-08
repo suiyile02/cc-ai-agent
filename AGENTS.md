@@ -177,7 +177,15 @@ com.ai
 
 ### 向量化与 RAG 数据规范
 
-- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(**内容清洗 -> ** Tika 解析 -> TokenTextSplitter 512/100 分块 -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(清洗 -> Tika 解析 -> **按 MIME 路由到切分策略** -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- **切分策略路由(2026-10-07)**: `app.ingestion.chunking` 按 MIME 路由切分策略——**刻意外置 YAML**
+  (映射/参数/兜底以 yaml 为唯一来源, 与"默认值单一来源=Java"约定的刻意偏离: 路由表属运维可调策略)。
+  实现: `ChunkingStrategy` 接口(策略名=bean 名) + `ChunkingStrategyRouter`(Spring 注入 Map 查询,
+  无 if-else) + **兜底策略恒存在**(fallback, 未配置 MIME 永不 miss) + `MimeResolver`(Tika 探测内容类型,
+  不可判定回退扩展名) + `ChunkingConfigValidator`(启动校验: fallback 必配、引用不存在的策略名 **拒绝启动**
+  ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100) 与
+  `recursive-cn`(中文标点多级回退 + overlap)。新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
+  MIME 键含特殊字符(如 `application/vnd.x.y`)在 yaml 里用 `[中括号]` 包裹。
   **内容清洗(`DocumentTextCleaner`, 2026-10-07)**: Tika 提取后、分块前执行——控制字符/NBSP/零宽剔除、
   U+FFFD 密度超阈值判乱码失败(默认 5%)、PDF 页眉页脚统计剔除(仅头尾候选区 + ≥3 页 + 60% 频率 + 长度上限
   四重防护防误杀正文)、空白规范化(MD 代码块/表格保护)。配置 `app.ingestion.clean.*`, 总开关关闭即回到
