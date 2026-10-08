@@ -187,13 +187,21 @@ com.ai
   `md-structure`(Markdown 按标题切节, 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
   相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)、`table-row`(表格一行一块: 列名内嵌进行文本
   `列名=值`(表头不单独成块, 裸行脱离表头语义为零), 行组为父块; CSV/TSV 走分隔符嗅探 + RFC4180 引号解析,
-  Excel(xls/xlsx)按 sheet 名单/`\t` 前缀行形状解析, 多 sheet 逐表处理)。
+  Excel(xls/xlsx)按 sheet 名单/`\t` 前缀行形状解析, 多 sheet 逐表处理)、`code-ast`(tree-sitter 按**声明边界**
+  切代码: 超长类拆到字段/方法, 外层声明 ≤ `parent-max-chars` 时子块共享父块=外层(命中方法注入整类);
+  语言按扩展名分派 java/py/js/mjs/cjs/ts/tsx/go; **降级通道恒为 code-line**——无语法包扩展名、原生库加载失败、
+  解析异常或产出为空(纯注释文件)一律整体委托 code-line, 绝不因语法能力缺失破坏入库)。
   新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
+  **tree-sitter 依赖形态**: `io.github.bonede:tree-sitter`(绑定) + 5 个语法包 jar, 每个 jar 自带
+  win/linux/macos × x86_64/aarch64 原生库(无需系统安装); `TSLanguage` 缓存复用(不可变), `TSParser`
+  每次新建(非线程安全); 字节切片取节点文本(非 ASCII 注释下不能按字符下标切)。
   MIME 键含特殊字符(如 `application/vnd.x.y`)在 yaml 里用 `[中括号]` 包裹。
-- **父子文档(小-大检索, 2026-10-08)**: 结构感知策略(`md-structure`/`code-line`/`table-row`)split 时给每个小块写入内部键
-  `_parent_seq`(= 小节/缩进块/行组序号)并 `producesParents()=true`; 入库层按该键聚合小块成父块文本, 存
+- **父子文档(小-大检索, 2026-10-08)**: 结构感知策略(`md-structure`/`code-line`/`table-row`/`code-ast`)split 时给小块写入内部键
+  `_parent_seq`(= 小节/缩进块/行组/外层声明序号)并 `producesParents()=true`; 入库层按该键聚合小块成父块文本, 存
   `knowledge_chunk` 表(MySQL; 不进 Qdrant——避免同一内容重复嵌入与双份存储), 小块元数据转正式
-  `parent_ref` 后入向量库(内部键不泄漏)。检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
+  `parent_ref` 后入向量库(内部键不泄漏)。`everyChunkHasParent()` 默认 true(缺标记=约定漂移, 入库 WARN;
+  曾发生"聚合晚于 addMetadata 导致全量缺键"的顺序错误), `code-ast` 覆写为 false(独立声明无父块合法)。
+  检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
   按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
   `semanticMaxScore` 与计数)仍按小块分数, 只有喂给模型的上下文换成父块全文。
   降级: 父块缺失/读失败保留小块原文(绝不降级为无资料); 写失败仅 WARN(小块照常入库);

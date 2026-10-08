@@ -233,6 +233,26 @@
 
 ---
 
+## 已完成记录（2026-10-08 第十二批, Tree-sitter 语法感知分块——code-ast 策略）
+
+代码切分从"空行/缩进猜边界"升级为"按 AST 声明边界", 切分策略三件套(父子文档/表格/语法感知)自此收口:
+- 新增 `CodeAstChunker`(bean `code-ast`, tree-sitter): 声明 ≤ chunk-size 整块成块; 超长声明拆到其声明类
+  子节点(类 → 各方法/字段), 外层 ≤ `parent-max-chars`(默认 3000)时子块共享父块=外层(命中方法注入整类),
+  外层过大则子节点各管父块; 无更细声明的超长节点(大函数)标点回退再切, 各片共享父块。
+  **独立声明不设父块**(父块=自身时展开无意义) → 接口新增 `everyChunkHasParent()`(默认 true=缺标记算漂移并 WARN,
+  code-ast 覆写 false), 入库聚合跳过无标记块(不再按 chunk_index 造自指父块)。
+- 语言分派按扩展名(java/py/js/mjs/cjs/ts/tsx/go); 紧贴声明上方(无空行)的注释随块切分(文档注释归其对象),
+  空行隔开的注释不并入; go 的 package 声明跳过(无检索价值)。
+- **依赖形态**: `io.github.bonede:tree-sitter` 0.25.3 + 5 语法包 jar, 每个 jar 自带 5 平台原生库
+  (win/linux/macos × x86_64/aarch64, 实测 Windows 本机 + jar 覆盖 Linux 部署), 无需系统安装。
+- **降级(绝不破坏入库)**: 无语法包扩展名(sql/shell 保持 code-line)、原生库加载失败(UnsatisfiedLinkError)、
+  解析异常、产出为空(纯注释文件) → 整体委托 `CodeLineChunker`(与升级前行为逐字一致, 测试钉住)。
+- 踩坑记录: 绑定在无前驱兄弟节点时返回 `isNull()` 包装而非 Java null(直接 getType() 抛 TSException);
+  "class_body" 含 "class" 子串会被声明判定误捕(包装节点需显式排除, 否则父块被内外两层覆盖);
+  节点文本必须按 UTF-8 字节切片(tree-sitter 字节偏移, 中文注释下按字符下标切会错位)。
+验证: CodeAstChunkerTest 11 例(类拆方法共享父块/超长方法分片/独立声明无父块/注释归位/未知扩展名降级逐字一致/
+go package 跳过/内容不丢/损坏代码不崩/纯注释回退/JS+TS 语法接线/接口契约); 全量 405 例全绿。
+
 ## 已完成记录（2026-10-08 第十一批, 表格结构化入库——table-row 切分策略）
 
 按"一行一块、列名内嵌、行组父块"落地表格类(RAG 里表格按通用文本切会丢列语义):

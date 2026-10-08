@@ -318,7 +318,7 @@
 | `DocumentIngestionService` | `ingestDocument(docId)` | `@Async("ingestionExecutor")`：状态机推进 + 解析分块 + 父块聚合写入 + 向量化入库 + 注册 BM25 + `evictAll()` |
 | | `parseAndSplit(doc)` | Tika 读 + 清洗 + `MimeResolver` 按 MIME 路由到切分策略，`Timeouts.call(parse-timeout-ms)`；返回块 + 是否产父块 |
 | | `addMetadata(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`（删除与溯源依据）；`_parent_seq` 转正式 `parent_ref` 且内部键剔除 |
-| | `aggregateParents(chunks)` ★新增 | 按 `_parent_seq` 分组拼接小块文本成父块（无标记小块以 `chunk_index` 兜底各自成块） → `ParentBlockStore.replaceParents` |
+| | `aggregateParents(chunks,strategy,everyChunkHasParent)` ★新增 | 按 `_parent_seq` 分组拼接小块成父块; **必须在 addMetadata 之前调用**(后者把内部键转 parent_ref); 无标记小块不参与聚合(合法: code-ast 独立声明), 但策略声明"每块必有父块"时缺标记记 WARN(顺序 bug 的显性化) → `ParentBlockStore.replaceParents` |
 | `FileStorageService` | `save(file,userId)` | `用户/日期/UUID.ext` 落盘 |
 | | `delete(path)` | 尽力而为（失败仅 WARN） |
 | | `sha256Hex(file)` / `sha256Hex(path)` ★新增 | 流式计算内容 SHA-256(P3-9 判重键; DigestInputStream 不整读内存); 读取失败抛 FILE_SAVE_FAILED | upload 判重、入库补填 |
@@ -415,7 +415,8 @@
 | `MdStructureChunker.split(fullDoc)` ★新增 | Markdown 按标题(#~####)切节, 标题保留在节首(检索语境); 超长节标点回退再切; 无标题文本退化为单节 | 路由 md-structure |
 | `CodeLineChunker.split(fullDoc)` ★新增 | 代码按空行/缩进块切分(顶层行开块、缩进体并入、空行分隔开新块), 保函数/类边界; 超长块再切 | 路由 code-line |
 | `TableRowChunker.split(fullDoc)` ★新增 | 表格一行一块: 列名内嵌(`列名=值`, 表头不单独成块)、行组(`rows-per-parent`)为父块; CSV/TSV=分隔符嗅探+RFC4180 引号解析, Excel=sheet 名单/`\t` 前缀行形状; 空单元格跳过、超长行再切 | 路由 table-row |
-| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`/`table-row`)须写 `PARENT_SEQ_KEY` 并 `producesParents()=true`(父块标记) | 路由调用 |
+| `CodeAstChunker.split(fullDoc)` ★新增 | tree-sitter 语法感知: 声明 ≤ chunk-size 整块; 超长声明拆子声明(类→方法/字段), 外层 ≤ `parent-max-chars` 时子块共享父块=外层; 独立声明无父块; 扩展名分派 java/py/js/ts/go; 无语法包/加载失败/异常/产出为空 → 整体降级 `CodeLineChunker`(逐字一致) | 路由 code-ast |
+| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`/`table-row`/`code-ast`)可写 `PARENT_SEQ_KEY` 且 `producesParents()=true`; `everyChunkHasParent()`(默认 true=缺标记算漂移, inbox WARN; code-ast 覆写 false=允许独立声明无父块) | 路由调用 |
 | `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
 | `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射: md/pdf/txt/csv/tsv/xls/xlsx/代码类), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化保护(MD 代码块/表格对齐; 代码类与表格类 CSV/TSV/XLS/XLSX 整体保留——制表符是列边界); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |

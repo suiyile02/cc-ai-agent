@@ -41,9 +41,22 @@ public interface ChunkingStrategy {
      * 是否产出父块(小-大检索)。结构感知策略(能给出更大语义单元)返回 true,
      * 并在 split 时给小块写入 {@link #PARENT_SEQ_KEY}。
      *
-     * @return true=需要父块
+     * @return true=本策略的小块可以携带父块标记(入库层据此聚合父块)
      */
     default boolean producesParents() {
         return false;
+    }
+
+    /**
+     * 是否**每个**小块都必须携带父块标记。
+     *
+     * <p>结构感知策略(md-structure/code-line/table-row)是"结构一律有父块", 保持 true——
+     * 缺标记视为约定漂移, 入库层 WARN(曾发生"聚合晚于 addMetadata 导致全量缺键"的顺序错误)。
+     * code-ast 允许独立声明不带父块(父块=自身时展开无意义), 覆写为 false。
+     *
+     * @return true=缺标记属于异常(默认); false=允许部分小块无父块
+     */
+    default boolean everyChunkHasParent() {
+        return true;
     }
 }

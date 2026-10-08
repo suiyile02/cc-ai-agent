@@ -152,12 +152,12 @@ app:
         "[text/markdown]": md-structure    # MD: 按标题切节, 超长节标点回退再切
         "[text/plain]": recursive-cn       # 纯文本/TXT
         "[application/pdf]": recursive-cn  # PDF 文本层
-        "[text/x-java-source]": code-line  # 代码类: 按空行/缩进块切分, 保函数边界
-        "[text/x-python]": code-line
-        "[text/javascript]": code-line
-        "[text/typescript]": code-line
-        "[text/x-go]": code-line
-        "[text/x-sql]": code-line
+        "[text/x-java-source]": code-ast  # 代码类: tree-sitter 按声明边界切(加载失败自动降级 code-line)
+        "[text/x-python]": code-ast
+        "[text/javascript]": code-ast
+        "[text/typescript]": code-ast
+        "[text/x-go]": code-ast
+        "[text/x-sql]": code-line          # 无语法包: 保持空行/缩进块切分
         "[text/x-shellscript]": code-line
         "[text/csv]": table-row                        # CSV: 一行一块(列名内嵌), 行组为父块
         "[text/tab-separated-values]": table-row       # TSV
@@ -177,6 +177,9 @@ app:
         code-line:
           chunk-size: 512
           min-indent: 4
+        code-ast:                          # tree-sitter 语法感知(降级走 code-line 的上面这组参数)
+          chunk-size: 512
+          parent-max-chars: 3000           # 外层声明超出该字符数时不再整体做父块(防注入整篇大文件)
         table-row:
           chunk-size: 512
           rows-per-parent: 10              # 多少数据行共用一个父块(小-大检索的上下文粒度)

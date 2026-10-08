@@ -77,5 +77,7 @@ public class IngestionProps {
         private int rowsPerParent = 10;
         /** 表格类: 首行是否表头(表头不单独成块; false 时首行也是数据行) */
         private boolean hasHeader = true;
+        /** 代码 AST 类: 声明超出该字符数时不再整体做父块(避免"命中小块注入整篇大文件") */
+        private int parentMaxChars = 3000;
     }
 }

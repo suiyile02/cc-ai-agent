@@ -251,7 +251,7 @@ flowchart TD
     U9 --> U10["ingestionExecutor 异步 ingestDocument(docId)"]
 
     U10 --> V1["status=1 处理中"]
-    V1 --> V2["Tika 解析 + DocumentTextCleaner 清洗 + MimeResolver 按 MIME 路由到切分策略<br/>(md-structure / code-line / table-row / recursive-cn / fallback ...)<br/>⚠ 受 app.ingestion.parse-timeout-ms=120s 限时"]
+    V1 --> V2["Tika 解析 + DocumentTextCleaner 清洗 + MimeResolver 按 MIME 路由到切分策略<br/>(md-structure / code-ast / code-line / table-row / recursive-cn / fallback ...)<br/>⚠ 受 app.ingestion.parse-timeout-ms=120s 限时"]
     V2 --> V3["addMetadata: doc_id / file_name / chunk_index / collection / parent_ref<br/>(结构策略的 _parent_seq 内部键转正式 parent_ref 并剔除)"]
     V3 --> V3P["结构策略产父块: 按 _parent_seq 聚合小块成父块文本<br/>→ ParentBlockStore.replaceParents (knowledge_chunk 表)<br/>非结构策略: 显式清空历史父块"]
     V3P --> V4["EmbeddingModel 向量化 → Qdrant upsert<br/>集合名以 app.rag.collection-name 为单一事实来源"]

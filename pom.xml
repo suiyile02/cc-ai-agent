@@ -17,6 +17,7 @@
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>2.0.1</spring-ai.version>
+        <tree-sitter.version>0.25.3</tree-sitter.version>
     </properties>
 
     <dependencies>
@@ -89,6 +90,39 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
+        </dependency>
+
+        <!-- Tree-sitter 语法感知分块(code-ast 策略): 绑定 + 5 语言语法包;
+             每个 jar 自带 5 平台原生库(win/linux/macos × x86_64/aarch64), 加载失败时策略自动降级 code-line -->
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter</artifactId>
+            <version>${tree-sitter.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter-java</artifactId>
+            <version>0.23.5</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter-python</artifactId>
+            <version>0.25.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter-javascript</artifactId>
+            <version>0.25.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter-typescript</artifactId>
+            <version>0.23.2</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonede</groupId>
+            <artifactId>tree-sitter-go</artifactId>
+            <version>0.25.0</version>
         </dependency>
 
         <!-- Redis(分布式登录限流/会话缓存; P3 架构项, Redis 服务已就绪) -->

@@ -66,7 +66,7 @@ public class DocumentIngestionService {
             // 父块聚合必须在 addMetadata 之前: 后者会把内部键 _parent_seq 转成正式 parent_ref,
             // 之后聚合已读不到键(曾因此在 markdown 用例里被"节序号==块序号"掩盖)
             Map<Integer, String> parents = parsed.producesParents()
-                    ? aggregateParents(parsed.chunks())
+                    ? aggregateParents(parsed.chunks(), parsed.strategyName(), parsed.everyChunkHasParent())
                     : Map.of();
             parentBlockStore.replaceParents(doc.getId(), parents); // 覆盖写; 空 Map 也清历史父块
             addMetadata(doc, parsed.chunks());
@@ -142,39 +142,43 @@ public class DocumentIngestionService {
         }
         log.debug("文档 [{}] 切分: mime={}, 策略={}, 分块={}",
                 doc.getFileName(), mime, strategy.name(), split.size());
-        return new ParsedResult(split, strategy.producesParents());
+        return new ParsedResult(strategy.name(), split, strategy.producesParents(), strategy.everyChunkHasParent());
     }
 
-    /** 切分结果: 小块列表 + 是否产出父块 */
-    private record ParsedResult(List<Document> chunks, boolean producesParents) {
+    /** 切分结果: 策略名 + 小块列表 + 是否产出父块 + 是否每块必有父块标记 */
+    private record ParsedResult(String strategyName, List<Document> chunks,
+                                boolean producesParents, boolean everyChunkHasParent) {
     }
 
     /**
      * 按小块的 {@code _parent_seq} 内部键聚合父块文本: 同父块序号的小块文本拼接成一个父块。
      *
      * <p><b>必须在 {@link #addMetadata} 之前调用</b>——addMetadata 会把内部键转成正式
-     * {@code parent_ref} 并从 metadata 剔除, 之后本方法会读不到键而退化。为此缺键时兜底按
-     * {@code chunk_index}(每块自身成父块)并 WARN 一次: 不静默合并(合并=整篇文档当一个父块,
-     * 注入会爆预算), 但要让约定漂移在日志里可见。
+     * {@code parent_ref} 并从 metadata 剔除, 之后本方法会读不到键而退化。无标记的小块不参与
+     * 聚合(如 code-ast 的独立声明: 父块=自身时展开无意义); 但策略声明"每块必有父块"时,
+     * 缺标记属于约定漂移(曾发生"聚合晚于 addMetadata"的顺序错误), 记 WARN 让问题可见。
      *
-     * @param chunks 切分产出的小块(带内部键)
+     * @param chunks            切分产出的小块(带内部键)
+     * @param strategyName      策略名(告警用)
+     * @param everyChunkHasParent 策略是否声明每块必有父块标记
      * @return 父块序号 → 父块文本
      */
-    private Map<Integer, String> aggregateParents(List<Document> chunks) {
+    private Map<Integer, String> aggregateParents(List<Document> chunks, String strategyName,
+                                                  boolean everyChunkHasParent) {
         Map<Integer, StringBuilder> acc = new java.util.LinkedHashMap<>();
-        boolean warned = false;
+        int keyless = 0;
         for (Document chunk : chunks) {
             Object seqObj = chunk.getMetadata().get(ChunkingStrategy.PARENT_SEQ_KEY);
-            if (seqObj == null && !warned) {
-                warned = true;
-                log.warn("分块缺内部键 {}(策略声明产出父块却未写入?)——按 chunk_index 兜底, "
-                        + "每块自成一个父块; 调用顺序错误也会触发本告警",
-                        ChunkingStrategy.PARENT_SEQ_KEY);
+            if (!(seqObj instanceof Number n)) {
+                keyless++;
+                continue;
             }
-            int seq = seqObj instanceof Number n ? n.intValue()
-                    : chunk.getMetadata().get("chunk_index") instanceof Number c ? c.intValue() : 0;
-            acc.computeIfAbsent(seq, k -> new StringBuilder())
+            acc.computeIfAbsent(n.intValue(), k -> new StringBuilder())
                     .append(chunk.getText()).append('\n');
+        }
+        if (keyless > 0 && everyChunkHasParent) {
+            log.warn("策略 {} 声明每块必有父块, 但 {} 个块缺内部键 {}——按无父块处理(顺序错误或约定漂移?)",
+                    strategyName, keyless, ChunkingStrategy.PARENT_SEQ_KEY);
         }
         Map<Integer, String> parents = new java.util.LinkedHashMap<>();
         acc.forEach((seq, sb) -> {
