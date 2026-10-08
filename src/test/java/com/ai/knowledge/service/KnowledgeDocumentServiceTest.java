@@ -70,6 +70,26 @@ class KnowledgeDocumentServiceTest {
     }
 
     @Test
+    void rejectedExtArchiveRejectedWith1002() {
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.upload(file("压缩包.zip", "文本内容"), 1L));
+        assertEquals(ErrorCode.FILE_TYPE_NOT_SUPPORTED, e.getErrorCode());
+        verify(documentMapper, never()).insert(any(KnowledgeDocument.class));
+    }
+
+    @Test
+    void nonWhitelistedTextExtNowAccepted() throws Exception {
+        // 去白名单: .java 等文本扩展名放行(魔数/提取兜底), 不再被扩展名白名单拒绝
+        when(fileStorageService.sha256Hex(any(MultipartFile.class))).thenReturn("e".repeat(64));
+        when(documentMapper.selectCount(any())).thenReturn(0L);
+        when(fileStorageService.save(any(MultipartFile.class), any())).thenReturn("/tmp/a.java");
+
+        service.upload(file("Utils.java", "public class Utils {}"), 1L);
+
+        verify(documentMapper).insert(any(KnowledgeDocument.class));
+    }
+
+    @Test
     void emptyFileNameRejected() {
         BusinessException e = assertThrows(BusinessException.class,
                 () -> service.upload(file("", "内容"), 1L));

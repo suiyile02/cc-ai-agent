@@ -184,12 +184,22 @@ public class DocumentTextCleaner {
         return line.trim().replaceAll("\\s+", " ");
     }
 
+    /** 代码/脚本类扩展名(缩进与对齐有语义, 空白规范化需与 MD 同等保守保护) */
+    private static final Set<String> CODE_EXT = Set.of(
+            "JAVA", "PY", "JS", "TS", "GO", "RUST", "C", "CPP", "H", "CS", "PHP", "RB",
+            "SCALA", "KT", "SWIFT", "SQL", "SH", "YAML", "YML", "JSON", "XML", "HTML",
+            "CSS", "SCSS", "VUE", "PROPERTIES", "TOML");
+
     /**
      * 空白规范化: 行尾空白裁剪; 2+ 连续空行收敛为 1 空行;
-     * 非 MD 类型收敛行中连续空格(保行首缩进); MD 代码块内除行尾空白外原样保留。
+     * 文档类(PDF/DOCX/TXT 等)收敛行中连续空格(保行首缩进);
+     * MD 的代码块内、代码/脚本类文件**整体**只裁行尾——缩进/对齐/空行结构是语法或语义,
+     * 不得收敛(如 Python 缩进、代码对齐)。
      */
     private String normalizeWhitespace(String text, String fileType, IngestionProps.Clean cfg) {
         boolean isMd = "MD".equalsIgnoreCase(fileType);
+        boolean isCode = CODE_EXT.contains(fileType.toUpperCase());
+        boolean preserveWhitespace = isMd || isCode;
         String[] lines = text.split("\n", -1);
         StringBuilder sb = new StringBuilder(text.length());
         boolean inCode = false;
@@ -202,8 +212,8 @@ public class DocumentTextCleaner {
                     inCode = !inCode;
                 }
             }
-            if (inCode) {
-                // 代码块内仅裁行尾, 空行/缩进原样(语法相关)
+            if (inCode || isCode) {
+                // MD 代码块内 / 代码类文件: 仅裁行尾, 空行/缩进/对齐原样(语法相关)
                 sb.append(t).append('\n');
                 continue;
             }

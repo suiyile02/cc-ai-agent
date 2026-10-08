@@ -192,7 +192,11 @@ com.ai
   ——同会话重问时模型会复述禁用前的回答。防线是 `kb-only-system.st` 第 2 条的显式声明
   ("历史旧回答不构成知识库资料", 由 `PromptServiceTest#strictTemplateDeclaresHistoryAnswersAreNotSources` 钉住);
   验证过滤是否生效用 `/api/system/rag-decisions` 的 semantic_hits 判断。
-- **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名白名单(1002) -> 单文件大小 ≤50MB(1003) -> 魔数/ZIP炸弹校验(1002) -> **内容 SHA-256 判重(2003, P3-9: 流式计算, 魔数之后/落盘之前;
+- **上传格式放开(2026-10-07)**: 原 PDF/DOCX/TXT/MD 白名单已移除——扩展名只做**最小拒绝集**(归档 zip/rar/7z/tar/gz/... 与可执行 exe/dll/sh/..., 满足"不支持压缩文件"), 其余格式放行由内容防线兜底:
+  `validateContent` 按**魔数嗅探**(%PDF→放行; PK→ZIP 容器统一过炸弹预检, 覆盖 docx/xlsx/pptx/odt; 其余文本类拒绝含 NUL 的二进制伪装), 提取不出有效文本→status=3 友好失败。Tika 单读取器自动分派解析所有文本类格式。
+  `DocumentTextCleaner` 新增**代码类保护**(JAVA/PY/JS/... 整体保留缩进/对齐/空行结构, 与 MD 同保守; CSV 等文档类照常收敛行中空格)。
+  已知限制(未做): 分块器 512 token 硬切会断代码结构、短代码文件 <100 字符可能被丢弃——登记 roadmap。
+- **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名最小拒绝集(归档/可执行, 1002) -> 单文件大小 ≤50MB(1003) -> 魔数嗅探+ZIP炸弹预检(1002) -> **内容 SHA-256 判重(2003, P3-9: 流式计算, 魔数之后/落盘之前;
   两层防护=应用层 WHERE file_hash 友好提示 + 唯一索引 uk_file_hash 兜并发竞态; 存量行 file_hash 为 NULL
   不参与判重, 入库成功/重处理时补填)** -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。

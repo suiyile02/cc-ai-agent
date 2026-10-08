@@ -131,6 +131,24 @@ class DocumentTextCleanerTest {
         assertEquals(md, out, "MD 的表格对齐空格不得收敛");
     }
 
+    /* ---------------- 代码类保护(2026-10-07 去白名单) ---------------- */
+
+    @Test
+    void codeFileWhitespaceStructurePreserved() {
+        // Python 缩进是语法; 代码对齐/空行分组有语义——不得被空白规范化破坏
+        String py = "def f():\n    a  =  1\n\n\n    return  a\n";
+        String out = clean(py, "PY");
+        assertEquals("def f():\n    a  =  1\n\n\n    return  a", out,
+                "代码类文件必须整体保留缩进/对齐/空行结构(仅裁行尾)");
+    }
+
+    @Test
+    void csvIsCollapsedLikeDocument() {
+        // CSV 非代码类: 行中连续空格照常收敛(文档类行为)
+        String out = clean("列A  列B\n值1  值2", "CSV");
+        assertEquals("列A 列B\n值1 值2", out);
+    }
+
     /* ---------------- 开关与边界 ---------------- */
 
     @Test

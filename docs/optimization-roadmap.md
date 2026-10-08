@@ -246,6 +246,20 @@
 验证: KnowledgeDocumentDedupTest 4 例(前置判重/竞态翻译/哈希存储/批量部分失败) +
 FileStorageServiceTest 4 例(已知向量/两入口/内容差异/友好失败), 全量 319 例全绿。
 
+## 已完成记录（2026-10-07 第七批, 上传格式放开——去白名单 + 魔数嗅探）
+
+- 移除 PDF/DOCX/TXT/MD 扩展名白名单; 改为**最小拒绝集**(归档/可执行扩展名) + 内容防线:
+  `validateContent` 按魔数嗅探(PDF/ZIP容器/文本), ZIP 容器统一过炸弹预检(覆盖 docx/xlsx/pptx/odt),
+  文本类拒绝含 NUL 二进制伪装; 提取不出文本由入库层友好失败。Tika 单读取器自动分派解析所有文本类格式。
+- `DocumentTextCleaner` 新增代码类保护: JAVA/PY/JS/... 整体保留缩进/对齐/空行结构(与 MD 同保守),
+  避免空白规范化破坏 Python 缩进等语法; CSV 等文档类照常收敛行中空格。
+- 入库失败提示通用化; ErrorCode 1002 文案去掉"仅支持 PDF/DOCX/TXT/MD"。
+- 前端: accept 与上传提示更新(标注代码/CSV/JSON 等文本格式, 归档/可执行除外)。
+验证: FileStorageValidateContentTest 4 例(嗅探各分支) + Cleaner 代码类 2 例 + 上传拒绝/放行 2 例,
+全量 327 例全绿。
+已知限制(登记未做): 分块器 512 token 硬切断代码结构、短代码文件 <100 字符可能被丢弃——
+检索质量待代码类文档真实入库后评估。
+
 ## 已完成记录（2026-10-07 第五批, 文档内容清洗）
 
 入库管线新增 `DocumentTextCleaner`(Tika 提取后、分块前): 控制字符/NBSP/零宽剔除、

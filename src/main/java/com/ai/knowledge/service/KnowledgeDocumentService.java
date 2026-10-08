@@ -52,7 +52,13 @@ import java.util.concurrent.TimeUnit;
 public class KnowledgeDocumentService {
 
     private static final long MAX_FILE_SIZE = 50L * 1024 * 1024; // 50MB
-    private static final Set<String> ALLOWED_EXT = Set.of("pdf", "docx", "txt", "md");
+    /**
+     * 明确拒绝的扩展名(最小黑名单): 归档压缩包(Tika 会提取内部条目文本, 与"不支持压缩文件"冲突)
+     * 与可执行文件(无文本入库价值且上传即风险)。其余扩展名一律放行, 由魔数嗅探+入库提取兜底。
+     */
+    private static final Set<String> REJECTED_EXT = Set.of(
+            "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz",
+            "exe", "dll", "so", "dylib", "bat", "bin", "sh");
     private static final int MAX_DELETE_SCAN = 10_000;
 
     private final KnowledgeDocumentMapper documentMapper;
@@ -86,9 +92,11 @@ public class KnowledgeDocumentService {
             throw new BusinessException(ErrorCode.FILE_NAME_EMPTY);
         }
         String ext = FileStorageService.extensionOf(originalName);
-        if (!ALLOWED_EXT.contains(ext)) {
+        // 扩展名只做"明确拒绝"判定(归档/可执行文件), 不再做白名单限制——其余格式由
+        // 魔数嗅探 + 入库文本提取兜底(提取不出有效文本 → status=3 友好失败)
+        if (REJECTED_EXT.contains(ext)) {
             throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED,
-                    "不支持的文件格式 ." + ext + "，仅支持 PDF/DOCX/TXT/MD");
+                    "不支持的文件格式 ." + ext + "(归档压缩包/可执行文件不在支持范围)");
         }
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new BusinessException(ErrorCode.FILE_TOO_LARGE);

@@ -93,7 +93,7 @@ public class DocumentIngestionService {
             // 空文件已在上传入口拦截(FILE_EMPTY), 此处多为"非空但解析不出有效文本"
             String message = e.getMessage() == null ? "入库失败"
                     : (e.getMessage().contains("未能从文档中解析出有效文本")
-                            ? "文件内容为空或无法解析出有效文本(可能为纯图片/扫描件)"
+                            ? "文件内容为空或无法解析出有效文本(可能为纯图片/音视频/扫描件, 或格式不受支持)"
                             : (e.getMessage().contains("疑似乱码")
                                     ? "文档内容疑似乱码(编码异常)，无法入库"
                                     : Strings.truncate(e.getMessage(), 500)));

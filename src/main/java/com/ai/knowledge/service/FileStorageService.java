@@ -81,13 +81,14 @@ public class FileStorageService {
     }
 
     /**
-     * 校验文件内容与扩展名一致(魔数检查, P2-1)：
-     * PDF 必须以 %PDF- 开头; DOCX 必须为 ZIP 容器(PK);
-     * TXT/MD 拒绝伪装成文本的二进制(以 PK/%PDF 开头或头部含 NUL 字节)。
+     * 校验文件内容可入库(魔数嗅探, P2-1 扩展)：不再按扩展名分派——
+     * PDF(%PDF- 开头)放行; ZIP 容器(PK 开头, 覆盖 docx/xlsx/pptx/odt 等)放行并统一过
+     * 解压炸弹预检; 其余按文本类处理, 拒绝头部含 NUL 的二进制伪装。
+     * 扩展名只用于错误提示(归档/可执行文件由上传层 REJECTED_EXT 提前拒绝)。
      *
      * @param file 上传文件
-     * @param ext  扩展名(小写)
-     * @throws BusinessException 内容与扩展名不符
+     * @param ext  扩展名(小写, 仅提示用)
+     * @throws BusinessException 内容不可作为文本文档入库
      */
     public void validateContent(MultipartFile file, String ext) {
         byte[] head;
@@ -100,7 +101,6 @@ public class FileStorageService {
                 && head[3] == 0x46 && head[4] == 0x2D;
         boolean isZip = head.length >= 4 && head[0] == 0x50 && head[1] == 0x4B
                 && head[2] == 0x03 && head[3] == 0x04;
-        boolean binaryHead = head.length >= 4 && (isZip || isPdf);
         boolean hasNul = false;
         for (byte b : head) {
             if (b == 0x00) {
@@ -108,26 +108,20 @@ public class FileStorageService {
                 break;
             }
         }
-        switch (ext) {
-            case "pdf" -> {
-                if (!isPdf) {
-                    throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED, "文件内容不是有效的 PDF");
-                }
-            }
-            case "docx" -> {
-                if (!isZip) {
-                    throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED, "文件内容不是有效的 DOCX(应为 ZIP 容器)");
-                }
-                checkZipBomb(file);
-            }
-            default -> {
-                // txt/md: 拒绝伪装成文本的二进制
-                if (binaryHead || hasNul) {
-                    throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED,
-                            "文件内容为二进制数据, 与 ." + ext + " 不符");
-                }
-            }
+        if (isPdf) {
+            return; // PDF 类: Tika 提取
         }
+        if (isZip) {
+            // ZIP 容器: docx/xlsx/pptx/odt 等 Office/OpenDocument 统一过炸弹预检(解压超限/条目过多拒绝)
+            checkZipBomb(file);
+            return;
+        }
+        if (hasNul) {
+            // 文本类拒绝伪装: 头部含 NUL 的是二进制, 无文本入库价值
+            throw new BusinessException(ErrorCode.FILE_TYPE_NOT_SUPPORTED,
+                    "文件内容为二进制数据, 无法作为文本文档入库" + (ext.isEmpty() ? "" : " (." + ext + ")"));
+        }
+        // 其余视为文本类放行: Tika 按内容自动分派解析, 提取不出有效文本由入库层友好失败
     }
 
     /**
