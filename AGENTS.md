@@ -183,8 +183,10 @@ com.ai
   实现: `ChunkingStrategy` 接口(策略名=bean 名) + `ChunkingStrategyRouter`(Spring 注入 Map 查询,
   无 if-else) + **兜底策略恒存在**(fallback, 未配置 MIME 永不 miss) + `MimeResolver`(Tika 探测内容类型,
   不可判定回退扩展名) + `ChunkingConfigValidator`(启动校验: fallback 必配、引用不存在的策略名 **拒绝启动**
-  ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100) 与
-  `recursive-cn`(中文标点多级回退 + overlap)。新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
+  ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100)、`recursive-cn`(中文标点多级回退 + overlap)、
+  `md-structure`(Markdown 按标题切节, 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
+  相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)。
+  新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
   MIME 键含特殊字符(如 `application/vnd.x.y`)在 yaml 里用 `[中括号]` 包裹。
   **内容清洗(`DocumentTextCleaner`, 2026-10-07)**: Tika 提取后、分块前执行——控制字符/NBSP/零宽剔除、
   U+FFFD 密度超阈值判乱码失败(默认 5%)、PDF 页眉页脚统计剔除(仅头尾候选区 + ≥3 页 + 60% 频率 + 长度上限

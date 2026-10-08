@@ -149,9 +149,16 @@ app:
       enabled: true
       fallback-strategy: fallback          # 兜底策略名(必配)
       mime-to-strategy:                    # MIME → 策略名(唯一映射来源; 含特殊字符的键用 [ ] 包裹)
-        "[text/markdown]": recursive-cn    # MD: 中文标点递归切分(含 overlap)
+        "[text/markdown]": md-structure    # MD: 按标题切节, 超长节标点回退再切
         "[text/plain]": recursive-cn       # 纯文本/TXT
         "[application/pdf]": recursive-cn  # PDF 文本层
+        "[text/x-java-source]": code-line  # 代码类: 按空行/缩进块切分, 保函数边界
+        "[text/x-python]": code-line
+        "[text/javascript]": code-line
+        "[text/typescript]": code-line
+        "[text/x-go]": code-line
+        "[text/x-sql]": code-line
+        "[text/x-shellscript]": code-line
       strategies:                          # 策略参数(策略类按自己 bean 名读本段)
         fallback:
           chunk-size: 512
@@ -160,6 +167,12 @@ app:
           chunk-size: 512
           overlap-tokens: 40
           min-chunk-chars: 100
+        md-structure:
+          chunk-size: 512
+          min-chunk-chars: 100
+        code-line:
+          chunk-size: 512
+          min-indent: 4
   concurrency:
     max-concurrent-per-user: 3            # 超并发返回 429/6010
     acquire-timeout-ms: 1000

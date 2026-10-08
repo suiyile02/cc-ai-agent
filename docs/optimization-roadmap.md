@@ -246,6 +246,19 @@
 验证: KnowledgeDocumentDedupTest 4 例(前置判重/竞态翻译/哈希存储/批量部分失败) +
 FileStorageServiceTest 4 例(已知向量/两入口/内容差异/友好失败), 全量 319 例全绿。
 
+## 已完成记录（2026-10-07 第九批, 新增 md-structure + code-line 切分策略）
+
+- `MdStructureChunker`(md-structure): Markdown 按标题(#~####)切节, 标题保留在节首(检索语境);
+  超长节用标点回退再切; 无标题文本退化为单节; 不丢内容。
+- `CodeLineChunker`(code-line): 代码按空行/缩进块切分——相邻顶层行合并(纯脚本不切碎)、
+  空行分隔开新块、缩进体结束回顶层开新块, 保函数/类边界; 超长块再切。
+- 共享工具抽取: 标点回退切分抽成 `RecursivePunctuationSplitter`(ChineseRecursiveChunker 与新策略共用,
+  行为不变, 原 5 例回归通过)。
+- 配置: application.yaml 的 mime-to-strategy 将 text/markdown 切到 md-structure、代码类 MIME
+  (java/python/js/ts/go/sql/shell) 切到 code-line; strategies 段补 md-structure/code-line 参数。
+验证: MdStructureChunkerTest 5 例 + CodeLineChunkerTest 5 例(含超长再切不丢内容、无结构退化),
+全量 357 例全绿。
+
 ## 已完成记录（2026-10-07 第八批, 切分策略按 MIME 路由——YAML 全量外置）
 
 - 新增 `ChunkingStrategy` 接口 + `ChunkingStrategyRouter`: YAML 决定"什么格式走什么策略"

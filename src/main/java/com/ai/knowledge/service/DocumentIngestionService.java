@@ -31,7 +31,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DocumentIngestionService {
 
-    private final KnowledgeDocumentMapper documentMapper;    private final FileStorageService fileStorageService;
+    private final KnowledgeDocumentMapper documentMapper;
+    private final FileStorageService fileStorageService;
     private final DocumentTextCleaner textCleaner;
     private final MimeResolver mimeResolver;
     private final ChunkingStrategyRouter chunkingRouter;

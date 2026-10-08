@@ -409,6 +409,8 @@
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
 | `KnowledgeDocumentService.disableDocument/enableDocument(id)` ★新增 | 检索启用开关: 仅 status=2 可切换, 置 `enabled` 列 + `evictAll()`(正/负缓存一并失效) | Controller disable/enable |
 | `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentIngestionService.parseAndSplit` |
+| `MdStructureChunker.split(fullDoc)` ★新增 | Markdown 按标题(#~####)切节, 标题保留在节首(检索语境); 超长节标点回退再切; 无标题文本退化为单节 | 路由 md-structure |
+| `CodeLineChunker.split(fullDoc)` ★新增 | 代码按空行/缩进块切分(顶层行开块、缩进体并入、空行分隔开新块), 保函数/类边界; 超长块再切 | 路由 code-line |
 | `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap) | 路由调用 |
 | `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
 | `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
