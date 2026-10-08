@@ -539,6 +539,12 @@ com.ai
 - 严格模板的拒答措辞与 `ChatSourceDisplay.NO_RESULT_ANSWER`(语义负缓存命中时的固定回答)必须逐字一致;
   因 `prompt` 模块禁止依赖 `chat` 模块(ArchUnit 规则 5), 两处不能共享常量, 由
   `PromptServiceTest#strictRefusalSentenceMatchesNegativeCacheConstant` 钉住, **改措辞时两处同改**。
+- **"未找到相关信息"只用于"完全无资料/资料无关"(2026-10-09 拆分)**; "部分命中但不足"(如要"全部内容"
+  而库里只有部分章节)时必须走"先答可答部分 + 说明其余未涉及 + 建议换更具体的问题", **不得**复用那句
+  固定拒答——否则会出现"既说未找到又透出部分内容"的自相矛盾回答, 且会被前端/负缓存逐字识别为"无据拒答"。
+  三处模板口径一致: `kb-only-system.st`(严格)、`base-system.st`(宽松)、`rag-context.st`(有命中时拼接的资料块,
+  旧文案"资料不足以回答时明确说明未找到"正是该矛盾的直接来源)。
+  `PromptServiceTest#strictTemplateSplitsInsufficientEvidenceFromNoEvidence` 钉住拆分。
 
 ---
 

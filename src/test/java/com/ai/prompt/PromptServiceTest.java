@@ -125,6 +125,36 @@ class PromptServiceTest {
     }
 
     /**
+     * 回归(2026-10-09): "知识库中未找到相关信息"这句固定拒答**只**用于"完全无资料/资料无关"——
+     * "部分命中但不足"(如要"全部内容"而库里只有部分章节)时若也按这句拒, 会既说"未找到"
+     * 又透出部分章节, 用户看到自相矛盾的两段; 且会被前端/负缓存逐字识别为"无据拒答"。
+     */
+    @Test
+    void strictTemplateSplitsInsufficientEvidenceFromNoEvidence() {
+        givenKbOnly(true);
+
+        // ① 无资料/无关: 固定拒答句必须保留(负缓存命中/前端识别都逐字依赖它)
+        String refused = service.systemFor(SessionType.RAG, ChatOutcome.REFUSED_NO_EVIDENCE, false, null);
+        assertTrue(refused.contains(ChatSourceDisplay.NO_RESULT_ANSWER),
+                "无资料分支必须保留固定拒答句");
+
+        // ② 有资料但不足: kb-only-system 必须给出"先答可答部分+说明未涉及+换更具体问题"的引导,
+        //    且明确禁止复用固定拒答句(部分命中不算未找到)
+        String strictSystem = service.template("prompts/kb-only-system.st");
+        assertTrue(strictSystem.contains("不足以完整回答"), "严格模板必须区分'不足'分支");
+        assertTrue(strictSystem.contains("先据资料回答能回答的部分"),
+                "不足分支必须要求先答可答部分");
+        assertTrue(strictSystem.contains("部分命中不算"), "不足分支必须显式禁止复用固定拒答句");
+
+        // ③ rag-context(有命中时拼接的那段)不得再强制"资料不足以回答时说明未找到"——
+        //    旧文案正是"员工手册的全部内容"既说未找到又透章节的自相矛盾来源
+        String ragContext = service.template("prompts/rag-context.st");
+        assertTrue(ragContext.contains("不要编造缺失部分"), "资料块不足引导必须保留(不拼凑)");
+        assertTrue(!ragContext.contains("资料不足以回答时，明确说明"),
+                "rag-context 不得再把'不足'强制成'未找到相关信息'");
+    }
+
+    /**
      * 回归(2026-10-06 生产故障): 禁用知识库文档后, 同一会话重问同一问题, 模型把
      * 历史窗口里禁用前的旧回答当作资料来源复述——检索排除被对话记忆旁路。
      * 严格模板必须显式声明"历史旧回答不构成知识库资料"。
