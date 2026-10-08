@@ -22,7 +22,8 @@ const STATUS = {
 const fileInput = ref(null)
 const uploading = ref(false)
 const progress = ref(0)
-const acceptExts = '.pdf,.docx,.txt,.md'
+// 2026-10-07 后端已去扩展名白名单(魔数嗅探+内容兜底), 前端放开 accept 提示
+const acceptExts = '.pdf,.docx,.txt,.md,.java,.py,.js,.ts,.csv,.json,.xml,.html,.sql,.md,.yaml,.yml,.go,.c,.cpp,.cs,.sh'
 
 function pickFile() {
   fileInput.value?.click()
@@ -186,7 +187,7 @@ onUnmounted(() => clearInterval(pollTimer))
     <header class="page-header">
       <div>
         <div class="title"><Icon name="database" :size="18" style="color: var(--accent)" /> 知识库管理</div>
-        <div class="sub">上传 PDF / DOCX / TXT / MD（≤50MB），异步入库后用于 RAG 检索</div>
+        <div class="sub">上传文本文档（PDF/DOCX/代码/CSV/JSON 等，≤50MB，归档/可执行除外），异步入库后用于 RAG 检索</div>
       </div>
       <button class="btn primary" :disabled="uploading" @click="pickFile">
         <span v-if="uploading" class="spinner" />
