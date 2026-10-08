@@ -190,16 +190,19 @@ public class DocumentTextCleaner {
             "SCALA", "KT", "SWIFT", "SQL", "SH", "YAML", "YML", "JSON", "XML", "HTML",
             "CSS", "SCSS", "VUE", "PROPERTIES", "TOML");
 
+    /** 表格类扩展名(制表符是列边界、空单元格是数据, 空白规范化必须整体跳过——收敛会错列) */
+    private static final Set<String> TABLE_EXT = Set.of("CSV", "TSV", "XLS", "XLSX");
+
     /**
      * 空白规范化: 行尾空白裁剪; 2+ 连续空行收敛为 1 空行;
      * 文档类(PDF/DOCX/TXT 等)收敛行中连续空格(保行首缩进);
-     * MD 的代码块内、代码/脚本类文件**整体**只裁行尾——缩进/对齐/空行结构是语法或语义,
-     * 不得收敛(如 Python 缩进、代码对齐)。
+     * MD 的代码块内、代码/脚本类与表格类文件**整体**只裁行尾——缩进/对齐/空行结构是语法或语义,
+     * 不得收敛(如 Python 缩进、代码对齐、Excel 单元格间的 {@code \t\t} 空列)。
      */
     private String normalizeWhitespace(String text, String fileType, IngestionProps.Clean cfg) {
         boolean isMd = "MD".equalsIgnoreCase(fileType);
         boolean isCode = CODE_EXT.contains(fileType.toUpperCase());
-        boolean preserveWhitespace = isMd || isCode;
+        boolean isTable = TABLE_EXT.contains(fileType.toUpperCase());
         String[] lines = text.split("\n", -1);
         StringBuilder sb = new StringBuilder(text.length());
         boolean inCode = false;
@@ -212,8 +215,8 @@ public class DocumentTextCleaner {
                     inCode = !inCode;
                 }
             }
-            if (inCode || isCode) {
-                // MD 代码块内 / 代码类文件: 仅裁行尾, 空行/缩进/对齐原样(语法相关)
+            if (inCode || isCode || isTable) {
+                // MD 代码块内 / 代码类 / 表格类: 仅裁行尾, 空行/缩进/制表符原样(语法/列语义)
                 sb.append(t).append('\n');
                 continue;
             }

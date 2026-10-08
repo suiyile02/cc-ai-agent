@@ -73,5 +73,9 @@ public class IngestionProps {
         private int minChunkChars = 100;
         /** 代码类: 视为独立缩进块的最小行首缩进(空格数) */
         private int minIndent = 4;
+        /** 表格类: 多少个数据行共用一个父块(小-大检索的上下文粒度) */
+        private int rowsPerParent = 10;
+        /** 表格类: 首行是否表头(表头不单独成块; false 时首行也是数据行) */
+        private boolean hasHeader = true;
     }
 }

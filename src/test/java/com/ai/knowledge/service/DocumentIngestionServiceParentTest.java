@@ -168,4 +168,56 @@ class DocumentIngestionServiceParentTest {
         assertFalse(chunks.get(0).getMetadata().containsKey("parent_ref"),
                 "无父块的文档不得携带 parent_ref(检索层据此跳过父块查询)");
     }
+
+    @Test
+    void oversizeSectionYieldsOneParentDespiteManyChunks() throws Exception {
+        // 顺序回归锁: 父块聚合必须在 addMetadata(把 _parent_seq 转成 parent_ref)之前执行——
+        // 曾因顺序颠倒而读不到内部键, 退化为"每块一个父块"; 节序号与块序号重合的用例掩盖了它,
+        // 这里一个超长节切成多块, 父块数必须仍是 1。
+        Path file = Files.createTempFile("ingest-oversize", ".md");
+        StringBuilder md = new StringBuilder("# 大节\n");
+        for (int i = 0; i < 500; i++) {
+            md.append("这是第").append(i).append("句,内容足够长使本节能被再次切分。");
+        }
+        Files.writeString(file, md.toString());
+        KnowledgeDocument d = doc(file, "MD");
+        when(documentMapper.selectById(1L)).thenReturn(d);
+        when(mimeResolver.resolve(any(), any())).thenReturn("text/markdown");
+        when(chunkingRouter.route("text/markdown")).thenReturn(new MdStructureChunker(props));
+
+        service.ingestDocument(1L);
+
+        assertTrue(addedChunks.get(0).size() > 1, "前置确认: 超长节被切成多块");
+        assertEquals(1, capturedParents.get(1L).size(),
+                "同节所有小块必须聚合成一个父块(顺序颠倒会退化为每块一个父块)");
+    }
+
+    @Test
+    void csvRowsBecomeChunksWithColumnNamesAndRowGroupParents() throws Exception {
+        Path file = Files.createTempFile("ingest-table", ".csv");
+        Files.writeString(file, "等级,住宿标准,交通标准\n经理,500元,高铁二等座\n总监,\"800元,含补贴\",飞机经济舱\n");
+        KnowledgeDocument d = doc(file, "CSV");
+        when(documentMapper.selectById(1L)).thenReturn(d);
+        when(mimeResolver.resolve(any(), any())).thenReturn("text/csv");
+        when(chunkingRouter.route("text/csv")).thenReturn(new TableRowChunker(props));
+
+        service.ingestDocument(1L);
+
+        // 父块 = 同组数据行(列名内嵌, 引号字段完整), 两行同组 → 一个父块
+        Map<Integer, String> parents = capturedParents.get(1L);
+        assertEquals(1, parents.size(), "两行数据同属一个行组");
+        assertTrue(parents.get(0).contains("住宿标准=500元"), "父块含列名=值");
+        assertTrue(parents.get(0).contains("住宿标准=800元,含补贴"), "引号字段在入库链路中完整保留");
+
+        // 小块 = 一行一块, 带 parent_ref, 不带内部键
+        List<Document> chunks = addedChunks.get(0);
+        assertEquals(2, chunks.size());
+        for (Document chunk : chunks) {
+            assertEquals(0, chunk.getMetadata().get("parent_ref"));
+            assertFalse(chunk.getMetadata().containsKey(ChunkingStrategy.PARENT_SEQ_KEY));
+            assertEquals(1L, chunk.getMetadata().get("doc_id"));
+        }
+        assertTrue(chunks.get(0).getText().contains("等级=经理 | 住宿标准=500元"),
+                "行文本必须内嵌列名(检索/BM25 可匹配列名): " + chunks.get(0).getText());
+    }
 }

@@ -143,10 +143,17 @@ class DocumentTextCleanerTest {
     }
 
     @Test
-    void csvIsCollapsedLikeDocument() {
-        // CSV 非代码类: 行中连续空格照常收敛(文档类行为)
-        String out = clean("列A  列B\n值1  值2", "CSV");
+    void documentClassStillCollapsesMidLineSpaces() {
+        // 文档类(TXT)非代码非表格: 行中连续空格照常收敛(文档类行为)
+        String out = clean("列A  列B\n值1  值2", "TXT");
         assertEquals("列A 列B\n值1 值2", out);
+    }
+
+    @Test
+    void csvBelongsToTableClassAndKeepsWhitespace() {
+        // 2026-10-08 起 CSV/TSV/XLS/XLSX 归表格类(配套 table-row 策略): 空格/制表符是列语义
+        String out = clean("列A  列B\n值1  值2", "CSV");
+        assertEquals("列A  列B\n值1  值2", out);
     }
 
     /* ---------------- 开关与边界 ---------------- */
@@ -166,6 +173,25 @@ class DocumentTextCleanerTest {
         // 整篇仅控制字符: 清洗后为空 → 文档被丢弃, 由入库层"解析不出有效文本"兜底
         List<Document> docs = List.of(Document.builder().text("\u0001\u0002\u0003").build());
         assertTrue(cleaner.clean(docs, "PDF").isEmpty());
+    }
+
+    /* ---------------- 表格类保护(2026-10-08, table-row 策略配套) ---------------- */
+
+    @Test
+    void excelTextKeepsTabsAndEmptyCells() {
+        // Excel 提取文本: 空单元格表现为连续 \t, sheet 间为连续空行——收敛 \t\t 会静默错列
+        String xlsx = "差旅标准\n\t等级\t住宿标准\t交通标准\n\t经理\t\t500元\n\n补贴标准\n\t地区\t日补\n";
+        String out = clean(xlsx, "XLSX");
+        assertTrue(out.contains("\t经理\t\t500元"), "空单元格的连续制表符必须保留(否则列错位)");
+        assertTrue(out.contains("差旅标准\n") && out.contains("补贴标准"), "sheet 名与分隔保留");
+    }
+
+    @Test
+    void csvQuotedSpacesArePreserved() {
+        // CSV 引号内多空格是字段内容(与行对齐无关), 同样不得收敛
+        String csv = "名称,说明\n甲,\"住 宿 标 准\"\n";
+        String out = clean(csv, "CSV");
+        assertTrue(out.contains("\"住 宿 标 准\""), "CSV 引号内多空格是字段值, 不得收敛");
     }
 
     private static void assertFalseContains(String haystack, String needle) {

@@ -414,10 +414,11 @@
 | `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentIngestionService.parseAndSplit` |
 | `MdStructureChunker.split(fullDoc)` ★新增 | Markdown 按标题(#~####)切节, 标题保留在节首(检索语境); 超长节标点回退再切; 无标题文本退化为单节 | 路由 md-structure |
 | `CodeLineChunker.split(fullDoc)` ★新增 | 代码按空行/缩进块切分(顶层行开块、缩进体并入、空行分隔开新块), 保函数/类边界; 超长块再切 | 路由 code-line |
-| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`)须写 `PARENT_SEQ_KEY` 并 `producesParents()=true`(父块标记) | 路由调用 |
+| `TableRowChunker.split(fullDoc)` ★新增 | 表格一行一块: 列名内嵌(`列名=值`, 表头不单独成块)、行组(`rows-per-parent`)为父块; CSV/TSV=分隔符嗅探+RFC4180 引号解析, Excel=sheet 名单/`\t` 前缀行形状; 空单元格跳过、超长行再切 | 路由 table-row |
+| `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`/`table-row`)须写 `PARENT_SEQ_KEY` 并 `producesParents()=true`(父块标记) | 路由调用 |
 | `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
-| `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
-| `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化(MD 代码块/表格保护); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |
+| `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射: md/pdf/txt/csv/tsv/xls/xlsx/代码类), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
+| `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化保护(MD 代码块/表格对齐; 代码类与表格类 CSV/TSV/XLS/XLSX 整体保留——制表符是列边界); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |
 | `DocumentVisibility.disabledDocIds()` ★新增 | 禁用文档 ID 集合(实时查询, 查询失败降级空集+WARN 节流); 语义路下推 Qdrant `NIN(doc_id)` 过滤、BM25 路召回后过滤 | `HybridRecaller.recall` |
 | `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |
 | `ChatMemoryArchive.appendSummary(cid,summary)` ★新增 | 滚动摘要完成后追加 SUMMARY 行(batch=已有最大值+1, 压缩事件自描述) | `ConversationMemoryService.summarizeIfNeededAsync` |

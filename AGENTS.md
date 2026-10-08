@@ -185,11 +185,13 @@ com.ai
   不可判定回退扩展名) + `ChunkingConfigValidator`(启动校验: fallback 必配、引用不存在的策略名 **拒绝启动**
   ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100)、`recursive-cn`(中文标点多级回退 + overlap)、
   `md-structure`(Markdown 按标题切节, 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
-  相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)。
+  相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)、`table-row`(表格一行一块: 列名内嵌进行文本
+  `列名=值`(表头不单独成块, 裸行脱离表头语义为零), 行组为父块; CSV/TSV 走分隔符嗅探 + RFC4180 引号解析,
+  Excel(xls/xlsx)按 sheet 名单/`\t` 前缀行形状解析, 多 sheet 逐表处理)。
   新增策略 = 新增实现类 + 加 YAML, 路由代码零改动。
   MIME 键含特殊字符(如 `application/vnd.x.y`)在 yaml 里用 `[中括号]` 包裹。
-- **父子文档(小-大检索, 2026-10-08)**: 结构感知策略(`md-structure`/`code-line`)split 时给每个小块写入内部键
-  `_parent_seq`(= 小节/缩进块序号)并 `producesParents()=true`; 入库层按该键聚合小块成父块文本, 存
+- **父子文档(小-大检索, 2026-10-08)**: 结构感知策略(`md-structure`/`code-line`/`table-row`)split 时给每个小块写入内部键
+  `_parent_seq`(= 小节/缩进块/行组序号)并 `producesParents()=true`; 入库层按该键聚合小块成父块文本, 存
   `knowledge_chunk` 表(MySQL; 不进 Qdrant——避免同一内容重复嵌入与双份存储), 小块元数据转正式
   `parent_ref` 后入向量库(内部键不泄漏)。检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
   按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
@@ -199,7 +201,8 @@ com.ai
   表 DDL 在 `db/schema-mysql-extra.sql`(需手动执行)。
   **内容清洗(`DocumentTextCleaner`, 2026-10-07)**: Tika 提取后、分块前执行——控制字符/NBSP/零宽剔除、
   U+FFFD 密度超阈值判乱码失败(默认 5%)、PDF 页眉页脚统计剔除(仅头尾候选区 + ≥3 页 + 60% 频率 + 长度上限
-  四重防护防误杀正文)、空白规范化(MD 代码块/表格保护)。配置 `app.ingestion.clean.*`, 总开关关闭即回到
+  四重防护防误杀正文)、空白规范化保护(MD 代码块/表格对齐; 代码类与表格类 CSV/TSV/XLS/XLSX **整体**保留
+  ——制表符是列边界、`\t\t` 空单元格收敛会静默错列)。配置 `app.ingestion.clean.*`, 总开关关闭即回到
   上线前行为; 存量文档不受影响(对旧文档生效需"重新处理")。
 - **文档检索启用/禁用(2026-10-04)**: `knowledge_document.enabled` 列(SSOT) + `DocumentVisibility` 契约
   (knowledge 根包); 语义路下推 Qdrant `NIN(doc_id)` 查询过滤(后过滤会静默缩水有效 K, 禁止),

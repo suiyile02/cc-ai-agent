@@ -63,13 +63,13 @@ public class DocumentIngestionService {
             // 解析限时(A2): 恶意/超复杂文档不再无限占用入库线程
             ParsedResult parsed = Timeouts.call(
                     () -> parseAndSplit(doc), appProperties.getIngestion().getParseTimeoutMs());
+            // 父块聚合必须在 addMetadata 之前: 后者会把内部键 _parent_seq 转成正式 parent_ref,
+            // 之后聚合已读不到键(曾因此在 markdown 用例里被"节序号==块序号"掩盖)
+            Map<Integer, String> parents = parsed.producesParents()
+                    ? aggregateParents(parsed.chunks())
+                    : Map.of();
+            parentBlockStore.replaceParents(doc.getId(), parents); // 覆盖写; 空 Map 也清历史父块
             addMetadata(doc, parsed.chunks());
-            // 父块写入(小-大检索): 策略产出父块时按 _parent_seq 聚合小块成父块文本, 存表
-            if (parsed.producesParents()) {
-                parentBlockStore.replaceParents(doc.getId(), aggregateParents(parsed.chunks()));
-            } else {
-                parentBlockStore.replaceParents(doc.getId(), Map.of()); // 覆盖清除历史父块
-            }
 
             VectorStore vectorStore = vectorStoreProvider.getIfAvailable();
             if (vectorStore == null) {
@@ -93,8 +93,7 @@ public class DocumentIngestionService {
             }
             documentMapper.updateById(doc);
             log.info("文档 [{}] 入库完成, 分块数={}, 父块={}",
-                    doc.getFileName(), parsed.chunks().size(),
-                    parsed.producesParents() ? aggregateParents(parsed.chunks()).size() : 0);
+                    doc.getFileName(), parsed.chunks().size(), parents.size());
         } catch (Exception e) {
             log.error("文档 [{}] 入库失败", doc.getFileName(), e);
             doc.setStatus(3); // 失败
@@ -152,15 +151,26 @@ public class DocumentIngestionService {
 
     /**
      * 按小块的 {@code _parent_seq} 内部键聚合父块文本: 同父块序号的小块文本拼接成一个父块。
-     * 只保留确实有父块标记的小块(无标记的散落块各自成父块, 兜底不丢)。
      *
-     * @param chunks 已附加元数据的小块
+     * <p><b>必须在 {@link #addMetadata} 之前调用</b>——addMetadata 会把内部键转成正式
+     * {@code parent_ref} 并从 metadata 剔除, 之后本方法会读不到键而退化。为此缺键时兜底按
+     * {@code chunk_index}(每块自身成父块)并 WARN 一次: 不静默合并(合并=整篇文档当一个父块,
+     * 注入会爆预算), 但要让约定漂移在日志里可见。
+     *
+     * @param chunks 切分产出的小块(带内部键)
      * @return 父块序号 → 父块文本
      */
     private Map<Integer, String> aggregateParents(List<Document> chunks) {
         Map<Integer, StringBuilder> acc = new java.util.LinkedHashMap<>();
+        boolean warned = false;
         for (Document chunk : chunks) {
             Object seqObj = chunk.getMetadata().get(ChunkingStrategy.PARENT_SEQ_KEY);
+            if (seqObj == null && !warned) {
+                warned = true;
+                log.warn("分块缺内部键 {}(策略声明产出父块却未写入?)——按 chunk_index 兜底, "
+                        + "每块自成一个父块; 调用顺序错误也会触发本告警",
+                        ChunkingStrategy.PARENT_SEQ_KEY);
+            }
             int seq = seqObj instanceof Number n ? n.intValue()
                     : chunk.getMetadata().get("chunk_index") instanceof Number c ? c.intValue() : 0;
             acc.computeIfAbsent(seq, k -> new StringBuilder())

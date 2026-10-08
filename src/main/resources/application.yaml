@@ -159,6 +159,10 @@ app:
         "[text/x-go]": code-line
         "[text/x-sql]": code-line
         "[text/x-shellscript]": code-line
+        "[text/csv]": table-row                        # CSV: 一行一块(列名内嵌), 行组为父块
+        "[text/tab-separated-values]": table-row       # TSV
+        "[application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]": table-row  # XLSX(多 sheet 逐表解析)
+        "[application/vnd.ms-excel]": table-row        # XLS
       strategies:                          # 策略参数(策略类按自己 bean 名读本段)
         fallback:
           chunk-size: 512
@@ -173,6 +177,10 @@ app:
         code-line:
           chunk-size: 512
           min-indent: 4
+        table-row:
+          chunk-size: 512
+          rows-per-parent: 10              # 多少数据行共用一个父块(小-大检索的上下文粒度)
+          has-header: true                 # 首行(每 sheet)为表头: 不单独成块, 列名内嵌进每行
   concurrency:
     max-concurrent-per-user: 3            # 超并发返回 429/6010
     acquire-timeout-ms: 1000

@@ -29,6 +29,8 @@ public class MimeResolver {
             Map.entry("pdf", "application/pdf"),
             Map.entry("txt", "text/plain"),
             Map.entry("csv", "text/csv"),
+            Map.entry("tsv", "text/tab-separated-values"),
+            Map.entry("xls", "application/vnd.ms-excel"),
             Map.entry("json", "application/json"),
             Map.entry("xml", "application/xml"),
             Map.entry("html", "text/html"),
