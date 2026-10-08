@@ -246,20 +246,21 @@ flowchart TD
     U5E -->|是| U5F["1002 中文友好提示（不含堆栈）"]
     U5E -->|否| U6["save() 落盘 ./data/files/用户/日期/UUID.ext"]
     U6 --> U7["insert knowledge_document status=0 待处理"]
-    U7 --> U8["★注册事务提交后回调 ingestAfterCommit<br/>避免 @Async 线程读不到未提交记录"]
+    U7 --> U7B["semanticAnswerCache.evictAll() INCR rag:kb:version ★<br/>(上传事务内立即失效旧缓存; 入库窗口期写入的负缓存受 miss-ttl 约束)"]
+    U7B --> U8["★注册事务提交后回调 ingestAfterCommit<br/>避免 @Async 线程读不到未提交记录"]
     U8 --> U9["@Transactional 提交"]
     U9 --> U10["ingestionExecutor 异步 ingestDocument(docId)"]
 
     U10 --> V1["status=1 处理中"]
     V1 --> V2["Tika 解析 + DocumentTextCleaner 清洗 + MimeResolver 按 MIME 路由到切分策略<br/>(md-structure / code-ast / code-line / table-row / recursive-cn / fallback ...)<br/>⚠ 受 app.ingestion.parse-timeout-ms=120s 限时"]
-    V2 --> V3["addMetadata: doc_id / file_name / chunk_index / collection / parent_ref<br/>(结构策略的 _parent_seq 内部键转正式 parent_ref 并剔除)"]
-    V3 --> V3P["结构策略产父块: 按 _parent_seq 聚合小块成父块文本<br/>→ ParentBlockStore.replaceParents (knowledge_chunk 表)<br/>非结构策略: 显式清空历史父块"]
-    V3P --> V4["EmbeddingModel 向量化 → Qdrant upsert<br/>集合名以 app.rag.collection-name 为单一事实来源"]
+    V2 --> V3P["结构策略产父块: 先于 addMetadata 按 _parent_seq 聚合小块 → ParentBlockStore.replaceParents (knowledge_chunk 表)<br/>非结构策略: 显式清空历史父块"]
+    V3P --> V3["addMetadata: doc_id / file_name / chunk_index / collection / parent_ref<br/>(内部键 _parent_seq 转正式 parent_ref 并剔除, 顺序颠倒会让聚合读不到键)"]
+    V3 --> V4["EmbeddingModel 向量化 → Qdrant upsert<br/>集合名以 app.rag.collection-name 为单一事实来源"]
     V4 --> V5["★KeywordIndex.addDocument 同步注册 BM25（写锁）"]
     V5 --> V6["status=2 成功 + chunk_count"]
     V2 -->|"解析不出有效文本"| VE["status=3 + 中文 error_message"]
     V4 -->|"嵌入/向量库失败"| VE
-    V6 --> V7["semanticAnswerCache.evictAll() INCR rag:kb:version ★"]
+    V6 --> V7["检索侧就绪: 新向量/BM25/父块已可命中(缓存失效已于 U7B 完成)"]
     VE --> V7
 
     B0["POST /upload/batch (files[])"] --> B1["逐文件独立执行 upload 的同一校验链<br/>部分失败语义：单个失败不影响其它"]
