@@ -30,20 +30,15 @@ public interface TokenCounter {
     int count(List<Message> messages);
 
     /**
-     * 按 token 预算截断文本(从头部保留, 超出部分丢弃)。
-     *
-     * <p>先按占比估算截断点, 再逐步回收确保不超预算; 文本已在预算内则原样返回。
-     *
-     * @param text      待截断文本(可为 null)
-     * @param maxTokens token 上限(≤0 视为空)
-     * @return 截断后的文本; 入参为 null 时返回 null
-     */
-    /**
-     * 按 token 上限截断文本(默认实现: 按字符占比估算切点后循环收缩, 精度有限)。
+     * 按 token 上限截断文本(默认实现: 从头部保留, 按字符占比估算切点后循环收缩, 精度有限)。
      *
      * <p>【已被替代】生产实现 JtokTokenCounter 已覆写为本方法(精确编码截断, 见
      * {@link JtokTokenCounter#truncateToTokens}); 此默认实现当前仅被
      * {@code HeuristicTokenCounter}(备用实现, 仅测试引用)间接使用, 生产路径不可达。
+     *
+     * @param text      待截断文本(可为 null)
+     * @param maxTokens token 上限(≤0 视为空)
+     * @return 截断后的文本; 入参为 null 时返回 null
      */
     default String truncateToTokens(String text, int maxTokens) {
         if (text == null) {

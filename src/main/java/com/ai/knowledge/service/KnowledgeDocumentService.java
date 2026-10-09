@@ -1,6 +1,8 @@
 package com.ai.knowledge.service;
 
 import com.ai.knowledge.ParentBlockStore;
+import com.ai.knowledge.ingestion.DocumentIngestionOrchestrator;
+import com.ai.knowledge.storage.FileStorageService;
 
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
@@ -65,7 +67,7 @@ public class KnowledgeDocumentService {
 
     private final KnowledgeDocumentMapper documentMapper;
     private final FileStorageService fileStorageService;
-    private final DocumentIngestionService ingestionService;
+    private final DocumentIngestionOrchestrator ingestionService;
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     private final ObjectProvider<QdrantClient> qdrantClientProvider;
     private final SemanticAnswerCache semanticAnswerCache;
@@ -293,11 +295,12 @@ public class KnowledgeDocumentService {
     /**
      * 按 ID 获取文档, 不存在抛业务异常。
      *
+     * <p>【仅同类内引用】唯一调用方是同类 deleteDocument/reprocess; 无外部调用点, 可降级为 private。
+     *
      * @param id 文档 ID
      * @return 文档实体
      * @throws BusinessException DOCUMENT_NOT_FOUND
      */
-    /** 【仅同类内引用】唯一调用方是同类 deleteDocument/reprocess; 无外部调用点, 可降级为 private。 */
     public KnowledgeDocument requireDocument(Long id) {
         KnowledgeDocument doc = documentMapper.selectById(id);
         if (doc == null) {

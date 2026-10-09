@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.parsing;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;

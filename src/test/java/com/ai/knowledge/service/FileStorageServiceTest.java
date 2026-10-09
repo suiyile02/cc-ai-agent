@@ -2,6 +2,7 @@ package com.ai.knowledge.service;
 
 import com.ai.common.BusinessException;
 import com.ai.config.AppProperties;
+import com.ai.knowledge.storage.FileStorageService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockMultipartFile;

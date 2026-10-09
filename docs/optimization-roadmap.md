@@ -233,6 +233,22 @@
 
 ---
 
+## 已完成记录（2026-10-10 第十五批, 入库失败三道防线——嵌入分批/友好兜底/父块清理）
+
+生产故障: `AlertSeverityHandler.java` 入库失败, 400 `batch size is invalid, it should not be larger than 20`,
+前端文档列表直接显示原始英文异常。三件事一起落地:
+- **嵌入分批按条数 ≤20**: 新增 `config/CountBatchingStrategy`, 覆盖 Spring AI 默认 `TokenCountBatchingStrategy`
+  (按 token 8191 上限分批)——默认只看 token, 一个文档切出几十个小块时整批一次发过去, 被 DashScope 兼容接口
+  拒 400。装配: QdrantVectorStoreAutoConfiguration 的 `batchingStrategy()` 是 `@Bean @ConditionalOnMissingBean`,
+  `ContextConfig.batchingStrategy()` 声明同类型 Bean 即覆盖(单测 6 例钉住分批边界)。
+- **嵌入失败中文兜底**: `IngestionFailureMessages.of` 增加 `isEmbeddingFailure` 特征子串判定
+  (batch size/invalidparameter/internalerror/密钥/余额/限流/400~503), 命中返回"文档向量化失败: 嵌入接口拒绝本次请求
+  (单次条数超限或模型暂不可用)…", 不再把原始英文写进 `error_message`(单测 6 例)。
+- **向量化失败清理本次已写父块**: `DocumentIngestionOrchestrator` 加 `parentsWritten` 局部标记,
+  catch 里 `parentBlockStore.deleteByDocId`——文档置失败(3)时不得残留父块被 `expandToParents` 取到
+  (orchestrator 新增 1 例: 向量化抛 400 → 父块被清 + status=3 + error_message 为中文)。
+验证: 新增 13 例 + 全量 424 例全绿。
+
 ## 已完成记录（2026-10-09 第十四批, 父块预算感知分级展开）
 
 "小-大检索"此前无条件把命中小块替换成整块父块, token 预算只在渲染层硬切——超大父块吃光预算、

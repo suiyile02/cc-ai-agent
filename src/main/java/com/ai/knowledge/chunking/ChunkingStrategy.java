@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.chunking;
 
 import org.springframework.ai.document.Document;
 
@@ -21,7 +21,7 @@ import java.util.List;
  */
 public interface ChunkingStrategy {
 
-    /** split 产物中表示"父块序号"的内部 metadata 键(入库层消费后由 addMetadata 统一重写) */
+    /** split 产物中表示"父块序号"的内部 metadata 键(入库层消费后由 ChunkMetadataEnricher 统一重写) */
     String PARENT_SEQ_KEY = "_parent_seq";
 
     /** 策略名(Spring bean 名, 也是配置里引用的键, 须与 @Component 名字一致) */

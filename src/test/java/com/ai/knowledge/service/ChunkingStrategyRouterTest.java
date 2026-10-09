@@ -2,6 +2,11 @@ package com.ai.knowledge.service;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.IngestionProps;
+import com.ai.knowledge.chunking.ChunkingConfigValidator;
+import com.ai.knowledge.chunking.ChunkingStrategy;
+import com.ai.knowledge.chunking.ChunkingStrategyRouter;
+import com.ai.knowledge.chunking.ChineseRecursiveChunker;
+import com.ai.knowledge.chunking.FallbackChunker;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;

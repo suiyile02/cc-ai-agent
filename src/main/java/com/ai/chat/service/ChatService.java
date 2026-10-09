@@ -168,9 +168,8 @@ public class ChatService {
 
         Flux<org.springframework.ai.chat.model.ChatResponse> upstream = spec.stream().chatResponse();
         if (idleMs > 0) {
-            // 静默超时保护: 相邻增量间隔超过 idleMs(或首增量迟迟不来)抛 TimeoutException。
-            // 早于上游 okhttp 60s read timeout 触发——qwen3 思考模式长推理会整段静默,
-            // 实测曾卡满 60s 被重置(CANCEL), 整轮回答只剩一条中断提示。
+            // 静默超时保护: 相邻增量间隔超过 idleMs(或首增量迟迟不来)抛 TimeoutException,
+            // 早于上游 okhttp 60s read timeout 触发——避免 qwen3 长思考整段静默把整轮拖到被重置、只剩中断提示。
             upstream = upstream.timeout(Duration.ofMillis(idleMs));
         }
         return upstream

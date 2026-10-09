@@ -2,6 +2,7 @@ package com.ai.knowledge.service;
 
 import com.ai.knowledge.entity.KnowledgeChunk;
 import com.ai.knowledge.mapper.KnowledgeChunkMapper;
+import com.ai.knowledge.storage.ParentBlockStoreImpl;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.junit.jupiter.api.BeforeEach;

@@ -35,6 +35,11 @@ com.ai
 │                 ShortQueryExpander
 ├── chat          对话模块: controller/ChatController · service/ChatService · event/审计事件(值对象) · dto
 ├── knowledge     知识库模块: controller/service/entity/mapper/dto
+│   ├── service    KnowledgeDocumentService(上传/列表/删除/重处理/启停门面) · DocumentVisibilityImpl
+│   ├── ingestion  入库编排 DocumentIngestionOrchestrator + 阶段类 ParentBlockAggregator/ChunkMetadataEnricher + IngestionFailureMessages
+│   ├── parsing    TextExtractor(读取→清洗→合并全文) · MimeResolver · DocumentTextCleaner
+│   ├── chunking   ChunkingStrategy(契约) · Router · ConfigValidator · DocumentChunker · ChunkedDocument · 策略族(Fallback/ChineseRecursive/MdStructure/CodeLine/CodeAst/TableRow)
+│   └── storage    FileStorageService(磁盘+SHA256+魔数嗅探) · ParentBlockStoreImpl(knowledge_chunk 表)
 ├── user          用户鉴权模块: controller/service/entity/mapper/dto
 │   └── security  JwtTokenProvider · UserContext · AuthInterceptor · PasswordHasher · RequireSelfOrAdmin
 ├── session       会话模块: SessionType(模块根枚举, 跨模块共享) · controller/service/entity/mapper/dto
@@ -177,7 +182,7 @@ com.ai
 
 ### 向量化与 RAG 数据规范
 
-- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(清洗 -> Tika 解析 -> **按 MIME 路由到切分策略** -> 元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。
+- 入库流程: 上传 -> `knowledge_document(status=0)` -> 异步(`knowledge/ingestion/DocumentIngestionOrchestrator` 编排各阶段: `parsing/TextExtractor` 读取清洗合并全文 -> `chunking/DocumentChunker` 按 MIME 路由到切分策略 -> `ingestion/ParentBlockAggregator` 聚合父块 -> `ingestion/ChunkMetadataEnricher` 打元数据 doc_id/file_name/chunk_index/collection -> 向量化入库) -> 同步注册 `KeywordIndex`(BM25) -> status=2/3。编排类只做生命周期(状态 0→1→2/3)与串阶段, 切分/清洗/聚合算法各归单一职责阶段类。
 - **切分策略路由(2026-10-07)**: `app.ingestion.chunking` 按 MIME 路由切分策略——**刻意外置 YAML**
   (映射/参数/兜底以 yaml 为唯一来源, 与"默认值单一来源=Java"约定的刻意偏离: 路由表属运维可调策略)。
   实现: `ChunkingStrategy` 接口(策略名=bean 名) + `ChunkingStrategyRouter`(Spring 注入 Map 查询,
@@ -234,6 +239,7 @@ com.ai
 - **上传入口校验顺序(禁止跳过)**: **管理员校验(`@RequireAdmin` 切面, 5002/403)** -> 空文件(`FILE_EMPTY` 1005) -> 空文件名(1001) -> 扩展名最小拒绝集(归档/可执行, 1002) -> 单文件大小 ≤50MB(1003) -> 魔数嗅探+ZIP炸弹预检(1002) -> **内容 SHA-256 判重(2003, P3-9: 流式计算, 魔数之后/落盘之前;
   两层防护=应用层 WHERE file_hash 友好提示 + 唯一索引 uk_file_hash 兜并发竞态; 存量行 file_hash 为 NULL
   不参与判重, 入库成功/重处理时补填)** -> 落盘+落库。**批量上传**(`POST /api/knowledge/upload/batch`, multipart 字段 `files`)逐文件独立执行, 单个失败不影响其它, 响应含每文件成败原因; 入库失败(`status=3`)的 `error_message` 必须为友好中文(禁止原始英文异常/堆栈)。
+- **入库失败的三道防线(2026-10-10)**: ① `IngestionFailureMessages.of` 兜底映射——解析不出文本/乱码/嵌入失败(DashScope 批量 400/限流/密钥/余额等特征子串)一律中文; ② 嵌入**分批按条数 ≤20**(`config/CountBatchingStrategy` 覆盖 Spring AI 默认按 token 分批的 `TokenCountBatchingStrategy`——默认只看 token, 文档切成几十小块时整批一次发过去被 DashScope 拒 400 `batch size is invalid`), 由 `ContextConfig.batchingStrategy()` `@Bean @ConditionalOnMissingBean` 注入进 QdrantVectorStore; ③ 向量化/注册失败时 `DocumentIngestionOrchestrator` 清理本次已写父块(`parentsWritten` 标记 + catch 里 `deleteByDocId`), 杜绝"文档置失败但父块残留可被 expandToParents 取到"的脏状态。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
   -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`api`/`llm`/`none`)

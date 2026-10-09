@@ -95,6 +95,8 @@
 | `ChatConfig` | `chatMemoryRepository(...)` | 注册 `DbChatMemoryRepository`（写 `SPRING_AI_CHAT_MEMORY`） |
 | | `chatMemory(...)` | `MessageWindowChatMemory` 窗口 30 条（被 `ChatSessionService` 用于删除会话时清记忆） |
 | `ContextConfig` | `tokenCounter()` | 默认注入 `JtokTokenCounter` |
+| | `batchingStrategy()` ★新增 | 默认注入 `CountBatchingStrategy`(嵌入按条数≤20 分批, 覆盖 Spring AI 默认按 token 分批——DashScope 兼容接口单次限 20 条, 默认策略会把几十个小块整批发出被拒 400) | QdrantVectorStore |
+| `CountBatchingStrategy`（config）★新增 | `batch(docs)` | 按条数每批 ≤20 切分(`MAX_BATCH_SIZE=20`), 保序保内容; 空列表返回空 | 嵌入自动装配 |
 | `MybatisPlusConfig` | `mybatisPlusInterceptor()` | 分页插件 |
 | | `auditMetaObjectHandler()` | `createdAt`/`updatedAt` 自动填充 |
 | | `sqlSessionTemplate(...)` | 手工装配（Boot4 下 MP 需手动接线） |
@@ -154,7 +156,7 @@
 | `RrfOrderReranker` | `rerank(...)` | `none` 模式：保持 RRF 顺序并赋相对顺位分（首位 1.0） | 工厂 |
 | `RerankStrategyFactory` | `current()` | 按 `app.rag.rerank-mode` 取策略；未知值 WARN 回退 score | 编排 |
 | `RagContextRenderer` | `render(hits,tokenBudget)` | Token 预算 + 字符上限双重约束的上下文渲染（含注入防护标记） | 编排 |
-| `DocumentMeta`（静态） | `similarity` / **`semanticScore`** / `keywordScore` / `chunkKey` / `fileName` / `docId` / `chunkIndex` / `snippet` / `fromKeywordHit` | 命中分块的元数据读取口径（与入库 `addMetadata` 对齐）。`similarity` 返回 score 上当前挂的分（重排后即融合分），`semanticScore` 才是原始余弦分 | 融合/重排/渲染/编排 |
+| `DocumentMeta`（静态） | `similarity` / **`semanticScore`** / `keywordScore` / `chunkKey` / `fileName` / `docId` / `chunkIndex` / `snippet` / `fromKeywordHit` | 命中分块的元数据读取口径（与入库 `ChunkMetadataEnricher.enrich` 对齐）。`similarity` 返回 score 上当前挂的分（重排后即融合分），`semanticScore` 才是原始余弦分 | 融合/重排/渲染/编排 |
 
 ### `KeywordIndex`（进程内 BM25）
 | 方法 | 作用 | 调用方 |
@@ -316,10 +318,11 @@
 | | `requireDocument(id)` | 存在性校验（1004） |
 | | `deleteVectorPoints(documentId)` | 按 `doc_id` filter 精确删点（向量库不可用→记日志继续） |
 | | `toVO(d)` | 实体 → VO（含 `errorMessage` 友好化） |
-| `DocumentIngestionService` | `ingestDocument(docId)` | `@Async("ingestionExecutor")`：状态机推进 + 解析分块 + 父块聚合写入 + 向量化入库 + 注册 BM25 + `evictAll()` |
-| | `parseAndSplit(doc)` | Tika 读 + 清洗 + `MimeResolver` 按 MIME 路由到切分策略，`Timeouts.call(parse-timeout-ms)`；返回块 + 是否产父块 |
-| | `addMetadata(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`（删除与溯源依据）；`_parent_seq` 转正式 `parent_ref` 且内部键剔除 |
-| | `aggregateParents(chunks,strategy,everyChunkHasParent)` ★新增 | 按 `_parent_seq` 分组拼接小块成父块; **必须在 addMetadata 之前调用**(后者把内部键转 parent_ref); 无标记小块不参与聚合(合法: code-ast 独立声明), 但策略声明"每块必有父块"时缺标记记 WARN(顺序 bug 的显性化) → `ParentBlockStore.replaceParents` |
+| `DocumentIngestionOrchestrator`（ingestion）★解耦 | `ingestDocument(docId)` | `@Async("ingestionExecutor")` 薄编排：只做生命周期(状态 0→1→2/3) + 串阶段(TextExtractor→DocumentChunker→ParentBlockAggregator→ChunkMetadataEnricher→向量入库→注册 BM25)；解析受 parse-timeout-ms 限时，异常统一转 status=3 友好文案(`IngestionFailureMessages.of`)；**向量化/注册失败时清理本次已写父块**(`parentsWritten` 标记 + `deleteByDocId`) |
+| `TextExtractor`（parsing）★新增 | `extract(doc)` | Tika 读 + `DocumentTextCleaner` 清洗 + 合并为单全文 Document；清洗后空则抛"解析不出有效文本" |
+| `DocumentChunker`（chunking）★新增 | `chunk(fullText,doc)` | `MimeResolver` 探测 + `ChunkingStrategyRouter` 路由 + `strategy.split`；空则抛同类异常；返回 `ChunkedDocument`(块 + 策略父块约定) |
+| `ParentBlockAggregator`（ingestion）★新增 | `aggregate(chunked)` | 按 `_parent_seq` 分组拼接小块成父块; **必须在打标之前**(否则内部键已被转走); 无标记小块不参与聚合(合法: code-ast 独立声明), 策略声明"每块必有父块"时缺标记记 WARN → `ParentBlockStore.replaceParents` |
+| `ChunkMetadataEnricher`（ingestion）★新增 | `enrich(doc,chunks)` | `doc_id`/`file_name`/`chunk_index`/`collection`/`parent_ref`（删除与溯源的跨模块契约）；`_parent_seq` 转正式 `parent_ref` 且内部键剔除 |
 | `FileStorageService` | `save(file,userId)` | `用户/日期/UUID.ext` 落盘 |
 | | `delete(path)` | 尽力而为（失败仅 WARN） |
 | | `sha256Hex(file)` / `sha256Hex(path)` ★新增 | 流式计算内容 SHA-256(P3-9 判重键; DigestInputStream 不整读内存); 读取失败抛 FILE_SAVE_FAILED | upload 判重、入库补填 |
@@ -412,15 +415,15 @@
 | `toJson(text)` / `toMessage(record)` / `JsonText` | content 列 JSON 序列化与还原 | 内部 |
 | `ChatMemoryRecord`(entity) / `ChatMemoryRecordMapper` | 表 `SPRING_AI_CHAT_MEMORY` | — |
 | `KnowledgeDocumentService.disableDocument/enableDocument(id)` ★新增 | 检索启用开关: 仅 status=2 可切换, 置 `enabled` 列 + `evictAll()`(正/负缓存一并失效) | Controller disable/enable |
-| `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentIngestionService.parseAndSplit` |
+| `ChunkingStrategyRouter.route(mime)` ★新增 | 按 MIME 查 `app.ingestion.chunking.mime-to-strategy` → 策略; 未命中恒落 fallback-strategy(无 if-else, Spring 注入 Map 查询) | `DocumentChunker.chunk` |
 | `MdStructureChunker.split(fullDoc)` ★新增 | Markdown 按标题(#~####)切节, 标题保留在节首(检索语境); 超长节标点回退再切; 无标题文本退化为单节 | 路由 md-structure |
 | `CodeLineChunker.split(fullDoc)` ★新增 | 代码按空行/缩进块切分(顶层行开块、缩进体并入、空行分隔开新块), 保函数/类边界; 超长块再切 | 路由 code-line |
 | `TableRowChunker.split(fullDoc)` ★新增 | 表格一行一块: 列名内嵌(`列名=值`, 表头不单独成块)、行组(`rows-per-parent`)为父块; CSV/TSV=分隔符嗅探+RFC4180 引号解析, Excel=sheet 名单/`\t` 前缀行形状; 空单元格跳过、超长行再切 | 路由 table-row |
 | `CodeAstChunker.split(fullDoc)` ★新增 | tree-sitter 语法感知: 声明 ≤ chunk-size 整块; 超长声明拆子声明(类→方法/字段), 外层 ≤ `parent-max-chars` 时子块共享父块=外层; 独立声明无父块; 扩展名分派 java/py/js/ts/go; 无语法包/加载失败/异常/产出为空 → 整体降级 `CodeLineChunker`(逐字一致) | 路由 code-ast |
 | `ChunkingStrategy.split(fullDoc)` ★新增 | 切分策略接口(策略名=bean 名); 实现: `FallbackChunker`(TokenTextSplitter 512/100)、`ChineseRecursiveChunker`(中文标点层级回退 + overlap); 结构感知实现(`md-structure`/`code-line`/`table-row`/`code-ast`)可写 `PARENT_SEQ_KEY` 且 `producesParents()=true`; `everyChunkHasParent()`(默认 true=缺标记算漂移, inbox WARN; code-ast 覆写 false=允许独立声明无父块) | 路由调用 |
 | `ChunkingConfigValidator.run` ★新增 | 启动校验: fallback 必配 + 所有引用的策略名必须存在, 违规拒绝启动(引用漂移防线) | ApplicationRunner |
-| `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射: md/pdf/txt/csv/tsv/xls/xlsx/代码类), 切分路由的键 | `DocumentIngestionService.parseAndSplit` |
-| `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化保护(MD 代码块/表格对齐; 代码类与表格类 CSV/TSV/XLS/XLSX 整体保留——制表符是列边界); 清洗后为空的文档丢弃由兜底提示接管 | `DocumentIngestionService.parseAndSplit` |
+| `MimeResolver.resolve(path,fileType)` ★新增 | Tika 探测内容 MIME(不可判定回退扩展名映射: md/pdf/txt/csv/tsv/xls/xlsx/代码类), 切分路由的键 | `DocumentChunker.chunk` |
+| `DocumentTextCleaner.clean(docs,fileType)` ★新增 | 内容清洗(Tika 后/分块前): 控制字符与不可见残留剔除、U+FFFD 密度乱码判定、PDF 页眉页脚统计剔除(头尾候选区+频率+最小页数三重防护)、空白规范化保护(MD 代码块/表格对齐; 代码类与表格类 CSV/TSV/XLS/XLSX 整体保留——制表符是列边界); 清洗后为空的文档丢弃由兜底提示接管 | `TextExtractor.extract` |
 | `DocumentVisibility.disabledDocIds()` ★新增 | 禁用文档 ID 集合(实时查询, 查询失败降级空集+WARN 节流); 语义路下推 Qdrant `NIN(doc_id)` 过滤、BM25 路召回后过滤 | `HybridRecaller.recall` |
 | `ChatMemoryArchive.append(cid,messages)` ★新增 | **原始轨迹双写**: 每轮写回时与工作表同事务追加原文到 `chat_memory_raw`(append-only) | `ConversationMemoryService.append` |
 | `ChatMemoryArchive.appendSummary(cid,summary)` ★新增 | 滚动摘要完成后追加 SUMMARY 行(batch=已有最大值+1, 压缩事件自描述) | `ConversationMemoryService.summarizeIfNeededAsync` |

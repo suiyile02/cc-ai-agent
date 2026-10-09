@@ -2,6 +2,7 @@ package com.ai.knowledge.service;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.IngestionProps;
+import com.ai.knowledge.parsing.DocumentTextCleaner;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 

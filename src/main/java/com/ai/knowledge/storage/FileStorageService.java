@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.storage;
 
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;

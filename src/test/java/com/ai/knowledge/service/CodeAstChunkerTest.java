@@ -2,6 +2,9 @@ package com.ai.knowledge.service;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.IngestionProps;
+import com.ai.knowledge.chunking.ChunkingStrategy;
+import com.ai.knowledge.chunking.CodeAstChunker;
+import com.ai.knowledge.chunking.CodeLineChunker;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 

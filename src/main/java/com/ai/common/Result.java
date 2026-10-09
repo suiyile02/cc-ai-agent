@@ -102,15 +102,12 @@ public class Result<T> {
     /**
      * 失败(自定义码与消息)。
      *
+     * <p>【未被引用】全项目失败响应统一走 ErrorCode(见 fail(ErrorCode) 两个重载)。
+     *
      * @param code    业务码
      * @param message 错误消息
      * @param <T>     泛型类型
      * @return 失败响应
-     */
-    /**
-     * 失败(自定义码与消息)。
-     *
-     * <p>【未被引用】全项目失败响应统一走 ErrorCode(见 fail(ErrorCode) 两个重载)。
      */
     public static <T> Result<T> fail(int code, String message) {
         return new Result<>(code, message, null);

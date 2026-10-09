@@ -22,7 +22,7 @@ public class RagProps {
     private String collectionName = "rag_knowledge_base";
     /** 检索 Top-K */
     private int topK = 5;
-    /** 相似度阈值(实测该 embedding 模型分数量级偏低, 默认从 0.6 下调至 0.45, 避免误杀正确 chunk) */
+    /** 相似度阈值: 该 embedding 模型分数量级偏低, 默认 0.45 避免误杀正确 chunk(上调前须用 /api/ai/rag/search 观察真实分数分布) */
     private double similarityThreshold = 0.45;
     /** 注入上下文字符上限 */
     private int contextMaxChars = 8000;
@@ -78,12 +78,8 @@ public class RagProps {
     /**
      * 单次检索阶段超时毫秒(整段预算: 嵌入 + 向量库 + 关键词 + 重排, 默认 10s)。
      *
-     * <p>背景: 检索链路的嵌入/向量库调用原先没有任何超时保护, 实测出现过单轮检索卡
-     * 100s 的情况(慢端点挂起 + 内置重试放大)。超时按"检索已执行但无命中"降级,
-     * 对话继续作答不被阻塞——该降级在审计上可区分: {@code executed=true, final_hits=0},
-     * 不会与"语义缓存命中"({@code executed=false})混淆。
-     *
-     * <p>正常耗时参考: 冷启动约 1.7s, 热态 0.2~0.6s, 故 10s 对正常链路足够宽裕。
+     * <p>超时按"检索已执行但零命中"降级(executed=true, final_hits=0), 对话继续作答不被阻塞,
+     * 不会与"语义缓存命中"(executed=false)混淆。0=不保留该保护(不推荐)。
      */
     private long retrieveTimeoutMs = 10_000;
     /**

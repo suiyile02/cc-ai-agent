@@ -13,28 +13,17 @@ import org.springframework.stereotype.Component;
 /**
  * 让 {@link AppProperties#EXEMPT_UNKNOWN_KEYS} 登记的键在严格绑定下合法存在。
  *
- * <h2>要解决的问题</h2>
- * {@code @ConfigurationProperties(ignoreUnknownFields = false)}(见 {@link AppProperties})会把
- * "配置里出现、但没绑到任何字段"的 {@code app.*} 键判为启动失败。绝大多数时候这正是我们要的
- * (拼错键名、重构后残留的死配置会立刻暴露), 但有一类键天生不该有字段: 它在 bean 创建<b>之前</b>就被
- * 消费掉——{@code app.auth.rate-limit-backend} 靠 {@code @ConditionalOnProperty} 在两个限流实现间
- * 二选一, 给它开个字段等于造一个"看着能改其实没用"的假旋钮。
+ * <p>{@code @ConfigurationProperties(ignoreUnknownFields = false)}(见 {@link AppProperties})会把
+ * "配置里出现、但没绑到任何字段"的 {@code app.*} 键判为启动失败——能立刻暴露拼错/死配置;
+ * 但有一类键天生不该有字段(如 {@code app.auth.rate-limit-backend}, 在 bean 创建<b>之前</b>就被
+ * {@code @ConditionalOnProperty} 消费), 给它开字段等于造"看着能改其实没用"的假旋钮。
  *
- * <h2>为什么这样豁免是安全的</h2>
- * 关键在于只放行<b>清单点名的那几条 unbound 记录</b>, 其余原样抛出:
- * <ul>
- *   <li>{@link UnboundConfigurationPropertiesException#getUnboundProperties()} 带回了具体是哪几个键,
- *       于是这里做的是"逐条比对", 不是"吞掉整个异常";</li>
- *   <li>因此把 {@code app.rag.top-k} 写成 {@code app.rag.topk} 依然会启动失败——它不在清单里;</li>
- *   <li>清单本身由 {@code AppPropertiesBindingGuardTest} 反向校验: 清单里有、实际配置里没有时,
- *       测试报"假旋钮", 防止豁免项变成永久僵尸。</li>
- * </ul>
+ * <p><b>豁免安全性</b>：只放行清单点名的 unbound 记录(逐条比对, 非吞掉整个异常), 其余原样抛出——
+ * 把 {@code app.rag.top-k} 写成 {@code app.rag.topk} 依然启动失败。清单本身由
+ * {@code AppPropertiesBindingGuardTest} 反向校验(清单里有但实际配置没有时报"假旋钮"), 防豁免项变僵尸。
  *
- * <h2>为什么不用"改属性源枚举视图"</h2>
- * Boot 的未绑定检查({@code NoUnboundElementsBindHandler})只看可迭代属性源的枚举结果, 理论上把豁免键
- * 从枚举里剔掉更"正统"。实测走不通: 那个可迭代的 {@code configurationSources} 是在 Environment 准备
- * 阶段 attach 的, 缓存按底层源实例键控, 任何 {@code BeanFactoryPostProcessor} 再去替换都晚了一步
- * (要么找不到它, 要么绑定仍读到旧缓存)。这里用的 advisor 是 Boot 自己开放的扩展点, 依赖面反而更小。
+ * <p>未选"改属性源枚举视图"更正统的方案: Boot 未绑定检查读的是 Environment 准备阶段 attach、
+ * 按底层源实例键控缓存的枚举结果, {@code BeanFactoryPostProcessor} 再替换都晚一步; advisor 是 Boot 开放的扩展点。
  */
 @Component
 public class AppPropertiesExemptKeysAdvisor implements ConfigurationPropertiesBindHandlerAdvisor {

@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.chunking;
 
 import com.ai.common.WarnThrottle;
 import com.ai.config.AppProperties;

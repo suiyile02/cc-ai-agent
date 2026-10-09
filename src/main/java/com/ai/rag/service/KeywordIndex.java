@@ -132,11 +132,12 @@ public class KeywordIndex {
     }
 
     /**
-     * 当前索引中的分块总数(可用于能力可用性判断)。
+     * 当前索引中的分块总数。
+     *
+     * <p>【仅测试引用】生产可用性判断统一用 {@link #isEmpty()}; size() 仅供单元测试断言。
      *
      * @return 分块数
      */
-    /** 【仅测试引用】生产可用性判断统一用 {@link #isEmpty()}; size() 仅供单元测试断言。 */
     public int size() {
         lock.readLock().lock();
         try {

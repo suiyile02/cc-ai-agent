@@ -24,28 +24,19 @@ import java.util.Map;
 /**
  * {@code api} 模式：调用 DashScope <b>文本排序</b>接口重排（{@code rerank-mode=api}）。
  *
- * <h2>为什么不是走 Spring AI</h2>
- * Spring AI 2.0.1 的 OpenAI 模块<b>没有</b> rerank 抽象(仓库里曾留过一行
- * {@code spring.ai.openai.rerank.model}, 静默无效, 已删)。DashScope 的排序接口也不是 OpenAI 兼容格式:
- * 它是原生 REST——请求体 {@code {model, input:{query, documents[]}, parameters:{top_n}}}、响应
- * {@code output.results[].{index, relevance_score}}。所以这里直接用 JDK HttpClient 打，不引额外依赖。
+ * <p>DashScope 排序接口非 OpenAI 兼容格式(原生 REST: 请求体 {@code {model, input:{query, documents[]},
+ * parameters:{top_n}}}, 响应 {@code output.results[].{index, relevance_score}}), 且 Spring AI 2.0.1 无
+ * rerank 抽象, 故直接用 JDK HttpClient 打, 不引额外依赖。
  *
- * <h2>失败一律回退，绝不让本轮没有上下文</h2>
- * 未配密钥/超时/非 2xx/响应结构不符/解析异常，全部回退 {@link ScoreFusionReranker} 并 WARN
- * (经 {@link WarnThrottle} 节流——端点持续故障时它每轮都会被触发)。理由与 LLM 重排一致:
- * 重排只影响"哪几段进 Top-K"，属于精度增益，不值得为它牺牲可用性。
+ * <p><b>失败一律回退, 绝不让本轮没有上下文</b>：未配密钥/超时/非 2xx/响应结构不符/解析异常,
+ * 全部回退 {@link ScoreFusionReranker} 并 WARN(经 {@link WarnThrottle} 节流)——重排只是精度增益, 不值得为它牺牲可用性。
  *
- * <h2>分数口径提醒</h2>
- * 本策略写入 {@code fusedScore} 的是模型给的 {@code relevance_score}(0~1 的相关度)，
- * 与 score 模式的融合分<b>不同源</b>；出口判据({@code OutcomeResolver})刻意只看语义路的余弦分，
- * 正是为了不被这种可替换的分数口径影响"有没有依据"的判定。
+ * <p><b>分数口径</b>：本策略写入 {@code fusedScore} 的是模型给的 {@code relevance_score}(0~1),
+ * 与 score 模式融合分不同源; 出口判据({@code OutcomeResolver})刻意只看语义路余弦分, 不受此影响。
  *
- * <h2>实测过的端点行为(排查时先看这里)</h2>
- * 公共端点 {@code dashscope.aliyuncs.com} 下 {@code qwen3.7-text-rerank} 与 {@code gte-rerank-v2}
- * 均可用(同一 DashScope Key)；{@code gte-rerank}(v1) 返回 AccessDenied——别以为配置错了。
- * 另: 该接口会<b>间歇性</b>返回 {@code InvalidParameter: Required body invalid}——同一条请求体
- * 前一次失败、后两次成功。因此看到该报错先重试再怀疑代码; 而本类的降级路径(WARN + 回退 score)
- * 保证了即使端点持续抽风, 对话也只是失去重排增益而已。
+ * <p><b>端点行为(排查先看)</b>：公共端点下 {@code qwen3.7-text-rerank} 与 {@code gte-rerank-v2} 可用,
+ * {@code gte-rerank}(v1) 返回 AccessDenied(非配置错); 接口会<b>间歇性</b>返回 {@code InvalidParameter: Required body invalid}
+ * (同请求体时而失败时而成功), 见该报错先重试再疑代码。
  */
 @Slf4j
 @Component

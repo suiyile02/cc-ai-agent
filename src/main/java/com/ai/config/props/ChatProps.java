@@ -11,17 +11,9 @@ public class ChatProps {
     /**
      * 主对话注入 enable_thinking=false(默认 true 关闭思维链)。
      *
-     * <p>关闭思维链的原因(2026-09 实测):
-     * <ol>
-     *   <li><b>稳定性</b>: qwen3 思考模式在长推理时可能整段静默不出字(>60s),
-     *       撞上 OpenAI 客户端 okhttp 的 60s read timeout, 流被重置
-     *       ({@code InterruptedIOException + StreamResetException: CANCEL}),
-     *       整轮回答变成一条中断提示——线上"流式对话中断"的根因;</li>
-     *   <li><b>延迟</b>: 关闭后首字秒级、总耗时从 10~60s 降到 3~8s
-     *       (改写/摘要早已关闭思维链, 质量无碍)。</li>
-     * </ol>
-     * 若确需向用户展示思考过程, 可置 false 恢复, 但需把
-     * {@code stream-idle-timeout-ms} 调大或关闭以容忍长思考静默。
+     * <p>默认关闭: qwen3 长思考会整段静默(&gt;60s) 撞上下游 okhttp read timeout 导致流被重置
+     * (线上"流式对话中断"根因), 关闭后首字秒级、总耗时 3~8s。若需展示思考过程可置 false 恢复,
+     * 但需调大或关闭 {@code stream-idle-timeout-ms} 以容忍长静默。
      */
     private boolean disableThinking = true;
     /**
@@ -53,10 +45,7 @@ public class ChatProps {
     private int toolResultTurnMaxChars = 12_000;
     /**
      * 流式静默超时毫秒(默认 20s): 相邻两个增量间隔超过该值(或首增量迟迟不来)即主动终止本轮
-     * 并降级为友好提示, 早于上游 okhttp 的 60s read timeout 触发。
-     *
-     * <p>背景: 模型长思考/网络挂起时会长时间无输出, 若不主动止损, 请求会卡到 okhttp 超时
-     * 才被重置(实测整轮 61s 只返回一条 19 字提示)。0=关闭该保护(不推荐)。
+     * 并降级为友好提示, 早于上游 okhttp 的 60s read timeout 触发, 避免请求卡到超时才被重置。0=关闭该保护(不推荐)。
      */
     private long streamIdleTimeoutMs = 20_000;
     /**

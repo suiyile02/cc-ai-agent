@@ -14,8 +14,8 @@ package com.ai.rag;
  *       不直接拒答，交给模型按工具描述裁决（调工具作答或固定口径拒答）；</li>
  *   <li>零命中且无工具可调（纯 RAG 会话）→ 严格模式固定口径拒答。</li>
  * </ol>
- * 旧"工具轮优先短路成 TOOL_DATA、跳过检索"已废除——词表按实体名词预判会把知识库能答的
- * 问题错拒，现在 RAG/HYBRID 一律检索后按事实分叉（设计取舍见 docs/optimization-roadmap.md）。
+ * 旧"工具轮短路跳过检索"已废除(词表按实体名词预判会错拒知识库能答的问题),
+ * 现在 RAG/HYBRID 一律检索后按事实分叉（设计取舍见 docs/optimization-roadmap.md）。
  */
 public final class OutcomeResolver {
 

@@ -103,7 +103,7 @@ mvn -DskipTests package && java -jar target/ai-agent-0.0.1-SNAPSHOT.jar
 | `POST /api/knowledge/documents/{id}/disable` | 禁用文档检索（管理员：语义+BM25 两路不再召回，不删向量/索引/文件，启用零成本恢复；切换即失效语义缓存）。**注意：已发生的对话历史不追溯**——同一会话重问时请开新会话验证 |
 | `POST /api/knowledge/documents/{id}/enable` | 启用文档检索（管理员：恢复召回，不重新向量化） |
 
-入库链路：上传 → `knowledge_document(status=0)` → `DocumentIngestionService`(@Async ingestionExecutor) → Tika 解析 → **内容清洗**(控制字符/乱码判定/PDF 页眉页脚剔除/空白规范化) → TokenTextSplitter 分块(512/100) → 附加元数据(doc_id/file_name/chunk_index…) → 向量化写入 VectorStore → status=2/3（分块数与真实 chunk 一致，记录于 chunk_count）。
+入库链路：上传 → `knowledge_document(status=0)` → `DocumentIngestionOrchestrator`(@Async ingestionExecutor) 编排各阶段 → `TextExtractor`(Tika 解析 + **内容清洗**) → `DocumentChunker`(按 MIME 路由到切分策略) → `ParentBlockAggregator`(聚合父块) → `ChunkMetadataEnricher`(附加元数据 doc_id/file_name/chunk_index…) → 向量化写入 VectorStore + 注册 `KeywordIndex`(BM25) → status=2/3（分块数与真实 chunk 一致，记录于 chunk_count）。编排类只做生命周期与串阶段，解析/清洗/切分/聚合/打标各归 `parsing`/`chunking`/`ingestion` 下的单一职责阶段类。
 
 ### 3.2 智能对话（需求第 3 章）
 | 方法/路径 | 说明 |
@@ -227,7 +227,7 @@ com.ai
 │   ├── entity|mapper  ConversationSummary
 │   └── service        ContextAssembler · ConversationMemoryService · ConversationSummarizer · QueryRewriter
 ├── chat        【对话模块】controller/ChatController · service/ChatService(门面)+ChatPreparationService(前置)+ChatCompletionService(收尾)+ChatSourceDisplay(来源口径)+ChatConcurrencyGuard(并发) · event/审计事件 · dto
-├── knowledge   【知识库模块】controller/service(上传入库/文档管理/文件存储)/entity/mapper/dto
+├── knowledge   【知识库模块】controller/service(文档管理门面)·ingestion(入库编排 DocumentIngestionOrchestrator + 阶段类)·parsing(TextExtractor/MimeResolver/DocumentTextCleaner)·chunking(切分策略族与路由)·storage(FileStorageService/ParentBlockStoreImpl)/entity/mapper/dto
 ├── user        【用户鉴权模块】controller/service/entity(SysUser)/mapper/dto
 │   └── security       JwtTokenProvider · UserContext · AuthInterceptor · PasswordHasher · RequireSelfOrAdmin
 ├── session     【会话模块】controller/service/entity(ChatSession)/mapper/dto

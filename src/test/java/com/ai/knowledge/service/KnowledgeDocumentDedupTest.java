@@ -8,7 +8,9 @@ import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.ParentBlockStore;
+import com.ai.knowledge.ingestion.DocumentIngestionOrchestrator;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
+import com.ai.knowledge.storage.FileStorageService;
 import com.ai.rag.service.KeywordIndex;
 import com.ai.rag.service.SemanticAnswerCache;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,7 +51,7 @@ class KnowledgeDocumentDedupTest {
     void setUp() {
         documentMapper = mock(KnowledgeDocumentMapper.class);
         fileStorageService = mock(FileStorageService.class);
-        var ingestion = mock(DocumentIngestionService.class);
+        var ingestion = mock(DocumentIngestionOrchestrator.class);
         semanticAnswerCache = mock(SemanticAnswerCache.class);
         ObjectProvider<VectorStore> vs = mock(ObjectProvider.class);
         when(vs.getIfAvailable()).thenReturn(mock(VectorStore.class));

@@ -1,10 +1,19 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.ingestion;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.IngestionProps;
 import com.ai.knowledge.ParentBlockStore;
+import com.ai.knowledge.chunking.ChunkingStrategy;
+import com.ai.knowledge.chunking.ChunkingStrategyRouter;
+import com.ai.knowledge.chunking.DocumentChunker;
+import com.ai.knowledge.chunking.MdStructureChunker;
+import com.ai.knowledge.chunking.TableRowChunker;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
+import com.ai.knowledge.parsing.DocumentTextCleaner;
+import com.ai.knowledge.parsing.MimeResolver;
+import com.ai.knowledge.parsing.TextExtractor;
+import com.ai.knowledge.storage.FileStorageService;
 import com.ai.rag.service.KeywordIndex;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,18 +38,21 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DocumentIngestionService} 父子文档接线测试: 走真实解析链路(Tika 读文件 → 清洗 →
- * 结构策略切分), 验证"策略写 {@code _parent_seq} → 入库层聚合父块写库 → 小块元数据转
- * {@code parent_ref} 且不残留内部键"的完整接缝。
+ * {@link DocumentIngestionOrchestrator} 父子文档接线测试: 走真实解析链路(Tika 读文件 → 清洗 →
+ * 结构策略切分 → 聚合父块 → 打标), 验证"策略写 {@code _parent_seq} → 入库层聚合父块写库 →
+ * 小块元数据转 {@code parent_ref} 且不残留内部键"的完整接缝。
  *
- * <p>用真实 Tika + 真实 {@link MdStructureChunker} 而非 mock 策略: 接缝两端任何一侧的
- * 元数据约定漂移(键名/类型/清理时点)只有真实链路能暴露。
+ * <p>用真实 Tika + 真实 {@link MdStructureChunker}/{@link TableRowChunker} + 真实
+ * {@link TextExtractor}/{@link DocumentChunker}/{@link ParentBlockAggregator}/{@link ChunkMetadataEnricher}
+ * 而非 mock 策略/阶段: 接缝两端任何一侧的元数据约定漂移(键名/类型/清理时点)只有真实链路能暴露。
  */
-class DocumentIngestionServiceParentTest {
+class DocumentIngestionOrchestratorTest {
 
     private final KnowledgeDocumentMapper documentMapper = mock(KnowledgeDocumentMapper.class);
     private final FileStorageService fileStorageService = mock(FileStorageService.class);
@@ -58,7 +70,7 @@ class DocumentIngestionServiceParentTest {
     private final List<List<Document>> addedChunks = new ArrayList<>();
 
     private AppProperties props;
-    private DocumentIngestionService service;
+    private DocumentIngestionOrchestrator service;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -81,9 +93,13 @@ class DocumentIngestionServiceParentTest {
             return null;
         }).when(vectorStore).add(anyList());
 
-        service = new DocumentIngestionService(documentMapper, fileStorageService,
-                new DocumentTextCleaner(props), mimeResolver, chunkingRouter, parentBlockStore,
-                vectorStoreProvider, keywordIndex, props);
+        // 真实阶段组件接线, 只有依赖外部能力处用 mock
+        service = new DocumentIngestionOrchestrator(documentMapper,
+                new TextExtractor(new DocumentTextCleaner(props)),
+                new DocumentChunker(mimeResolver, chunkingRouter),
+                new ParentBlockAggregator(),
+                new ChunkMetadataEnricher(),
+                parentBlockStore, fileStorageService, vectorStoreProvider, keywordIndex, props);
     }
 
     private KnowledgeDocument doc(Path file, String fileType) {
@@ -171,7 +187,7 @@ class DocumentIngestionServiceParentTest {
 
     @Test
     void oversizeSectionYieldsOneParentDespiteManyChunks() throws Exception {
-        // 顺序回归锁: 父块聚合必须在 addMetadata(把 _parent_seq 转成 parent_ref)之前执行——
+        // 顺序回归锁: 父块聚合必须在打标(把 _parent_seq 转成 parent_ref)之前执行——
         // 曾因顺序颠倒而读不到内部键, 退化为"每块一个父块"; 节序号与块序号重合的用例掩盖了它,
         // 这里一个超长节切成多块, 父块数必须仍是 1。
         Path file = Files.createTempFile("ingest-oversize", ".md");
@@ -219,5 +235,31 @@ class DocumentIngestionServiceParentTest {
         }
         assertTrue(chunks.get(0).getText().contains("等级=经理 | 住宿标准=500元"),
                 "行文本必须内嵌列名(检索/BM25 可匹配列名): " + chunks.get(0).getText());
+    }
+
+    @Test
+    void vectorizationFailureCleansUpWrittenParentsAndMarksFailed() throws Exception {
+        // 回归: 父块先于向量化写入, 一旦嵌入失败(如 DashScope 批量 400)文档置 3,
+        // 但父块残留在 knowledge_chunk 会让"失败文档仍可被 expandToParents 取到内容"
+        Path file = Files.createTempFile("ingest-vec-fail", ".md");
+        Files.writeString(file, "# 第一章\n内容。\n# 第二章\n内容。\n");
+        KnowledgeDocument d = doc(file, "MD");
+        when(documentMapper.selectById(1L)).thenReturn(d);
+        when(mimeResolver.resolve(any(), any())).thenReturn("text/markdown");
+        when(chunkingRouter.route("text/markdown")).thenReturn(new MdStructureChunker(props));
+        doThrow(new RuntimeException("400: batch size is invalid, it should not be larger than 20"))
+                .when(vectorStore).add(anyList());
+
+        service.ingestDocument(1L);
+
+        // ① 父块确实先被写入过(否则谈不上清理)
+        assertNotNull(capturedParents.get(1L), "前置确认: 向量化前父块已写入");
+        // ② 失败后必须清理本次父块(文档置失败不得残留可检索内容)
+        verify(parentBlockStore).deleteByDocId(1L);
+        // ③ 状态为失败 + 中文错误(不是原始英文)
+        assertEquals(3, d.getStatus());
+        assertTrue(d.getErrorMessage().contains("文档向量化失败"),
+                "error_message 必须是中文兜底而非原始英文: " + d.getErrorMessage());
+        assertTrue(!d.getErrorMessage().contains("batch size"), "不得透出原始英文异常");
     }
 }

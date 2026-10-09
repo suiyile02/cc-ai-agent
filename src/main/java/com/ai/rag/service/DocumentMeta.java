@@ -10,7 +10,7 @@ import java.util.Map;
  *
  * <p>键名与入库时写入的 payload 一一对应（{@code doc_id}/{@code file_name}/{@code chunk_index}），
  * 是"删除按文档精确清理""两路召回按分块去重"的依据，改动必须与
- * {@code DocumentIngestionService.addMetadata} 同步。
+ * {@code com.ai.knowledge.ingestion.ChunkMetadataEnricher.enrich} 同步。
  */
 final class DocumentMeta {
 

@@ -8,7 +8,9 @@ import com.ai.knowledge.ParentBlockStore;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
+import com.ai.knowledge.ingestion.DocumentIngestionOrchestrator;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
+import com.ai.knowledge.storage.FileStorageService;
 import com.ai.rag.service.KeywordIndex;
 import com.ai.rag.service.SemanticAnswerCache;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,7 +42,7 @@ class KnowledgeDocumentServiceTest {
 
     private KnowledgeDocumentMapper documentMapper;
     private FileStorageService fileStorageService;
-    private DocumentIngestionService ingestionService;
+    private DocumentIngestionOrchestrator ingestionService;
     private SemanticAnswerCache semanticAnswerCache;
     private KeywordIndex keywordIndex;
     private ParentBlockStore parentBlockStore;
@@ -51,7 +53,7 @@ class KnowledgeDocumentServiceTest {
     void setUp() {
         documentMapper = mock(KnowledgeDocumentMapper.class);
         fileStorageService = mock(FileStorageService.class);
-        ingestionService = mock(DocumentIngestionService.class);
+        ingestionService = mock(DocumentIngestionOrchestrator.class);
         semanticAnswerCache = mock(SemanticAnswerCache.class);
         keywordIndex = mock(KeywordIndex.class);
         parentBlockStore = mock(ParentBlockStore.class);

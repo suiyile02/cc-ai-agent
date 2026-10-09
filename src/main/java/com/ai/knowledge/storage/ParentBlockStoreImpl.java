@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.storage;
 
 import com.ai.knowledge.ParentBlockStore;
 import com.ai.knowledge.entity.KnowledgeChunk;

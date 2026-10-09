@@ -1,4 +1,4 @@
-package com.ai.knowledge.service;
+package com.ai.knowledge.chunking;
 
 import com.ai.config.AppProperties;
 import com.ai.config.props.IngestionProps;
@@ -56,6 +56,7 @@ public class ChineseRecursiveChunker implements ChunkingStrategy {
         return Math.min(text.length(), (int) (overlapTokens * 1.5));
     }
 
+    /** 取当前策略的分块配置, 缺失时回退默认空配置 */
     private IngestionProps.ChunkingStrategyProps props() {
         IngestionProps.Chunking cfg = appProperties.getIngestion().getChunking();
         return cfg.getStrategies().getOrDefault(name(), new IngestionProps.ChunkingStrategyProps());

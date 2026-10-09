@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>不能用 {@code @ConditionalOnBean(ChatModel.class)} 在配置类上创建 ChatClient——
  * 用户配置类的处理先于自动配置, 此时 ChatModel 的 Bean 定义尚不存在, 条件永远不成立,
- * 导致 ChatClient 缺失、对话接口全部降级(实测踩坑)。因此改为运行时从
+ * 会导致 ChatClient 缺失、对话接口全部降级。因此改为运行时从
  * {@link ObjectProvider} 惰性获取 ChatModel 并缓存构建结果。
  *
  * <p>本类同时是"当前实际生效模型名"的单一事实来源({@link #modelLabel()}),

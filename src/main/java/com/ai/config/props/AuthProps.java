@@ -29,9 +29,7 @@ public class AuthProps {
      * 它是<b>装配期</b>开关, 由 {@code @ConditionalOnProperty} 在两个
      * {@code LoginAttemptLimiter} 实现之间二选一, 并直接被 RedisReadinessProbe 读原文。
      *
-     * <p>为什么不开个字段接住它: 条件装配发生在 bean 创建之前, 字段值拿到也来不及参与决策,
-     * 反而会多出一个"看起来能改其实没用"的假旋钮。聚合根开了严格绑定(ignoreUnknownFields=false),
-     * 因此该键必须在 {@code AppProperties#EXEMPT_UNKNOWN_KEYS} 里登记豁免——登记而非静默忽略,
-     * 是为了让"哪些 app.* 键不走绑定"这件事有一份可审的清单。
+     * <p>条件装配发生在 bean 创建之前, 开个字段既来不及参与决策又是"假旋钮"; 因聚合根开了严格绑定,
+     * 该键必须在 {@code AppProperties#EXEMPT_UNKNOWN_KEYS} 登记豁免(可审清单, 而非静默忽略)。
      */
 }
