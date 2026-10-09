@@ -467,7 +467,7 @@ flowchart TD
     R10 --> R12
     R11 --> R8
     R12 --> R12B["filterByThreshold（重排之后收口, 只裁语义路低分; 读 metadata.semantic_score 非 doc.score）"]
-    R12B --> R12C["expandToParents ★父块展开(小-大检索): 命中小块带 doc_id+parent_ref → ParentBlockStore.findParents 按文档批量取(序号去重)父块全文替换注入文本<br/>缺父块/读失败回退小块原文; semanticMaxScore 与计数不受影响(判据按小块分数)"]
+    R12B --> R12C["expandToParents ★父块预算感知展开(小-大检索): 命中小块带 doc_id+parent_ref → ParentBlockStore.findParents 按文档批量取(序号去重)<br/>按 RAG 段 Token 预算(ragTokenBudget)三级降级: 整父块 → 命中小块附近窗口(indexOf 定位+行对齐) → 小块原文; 预算按重排顺序消耗<br/>缺父块/读失败回退小块原文; semanticMaxScore 与计数不受影响(判据按小块分数)"]
     R12C --> R13["RetrievalOutcome(hits, executed=true, semantic, keyword, degraded=false)"]
     R3 -->|"超时/异常 ⚠"| R14["executedEmpty()：记为『已执行、零命中』<br/>★ 保持审计不变式：KB+未执行=false 只可能是缓存命中"]
     R14 --> R15["降级为不注入上下文继续对话"]
@@ -483,7 +483,8 @@ flowchart TD
 
 阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
 
-**父块展开（2026-10-08, 父子文档/小-大检索）**：阈值过滤之后执行 `expandToParents`——召回/排序/阈值/出口判据全部按小块分数(semanticMaxScore 读未展开值)，只有注入给模型的文本换成父块全文（`toSources` 来源展示仍指向命中小块）；父块缺失/读取失败一律回退小块原文。父块来自 `knowledge_chunk` 表，由入库层在结构策略产 `_parent_seq` 时聚合写入。
+**父块展开（2026-10-08 起, 父子文档/小-大检索）**：阈值过滤之后执行 `expandToParents`——召回/排序/阈值/出口判据全部按小块分数(semanticMaxScore 读未展开值)，只有注入给模型的文本换成父块全文（`toSources` 来源展示仍指向命中小块）；父块缺失/读取失败一律回退小块原文。父块来自 `knowledge_chunk` 表，由入库层在结构策略产 `_parent_seq` 时聚合写入。
+**预算感知分级展开（2026-10-09）**：展开按 RAG 段 Token 预算（与装配层共用 `ContextProps.ragTokenBudget()`，默认 2676）按重排顺序消耗——预算够装整父块→整父块；不够但够装命中小块附近窗口（以小块原文 `indexOf` 在父块内定位，两侧各 `app.rag.parent-window-chars`(500) 字符、对齐行边界）→窗口；再不够→回退小块原文。彻底解决"超大父块吃光预算、其余命中被渲染层硬切/挤占"；渲染层 `RagContextRenderer` 保留为最终防线。
 
 **阈值只作用于语义一路，且在重排之后收口**：`HybridRecaller.recall` 不做任何阈值过滤（原样交出候选），过滤在 `RagRetrievalService.filterByThreshold`——排在重排之后是为了让低余弦分但可能答得上问题的候选先被重排捞一次。它只裁语义路低分（读 `metadata.semantic_score`，非 `doc.getScore()`——重排后 score 已被融合/相关度分占用），BM25-only 命中无语义分故不受约束、保留。出口判定读的是未截断的 `semanticMaxScore`，与过滤时机无关。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
 **阈值以 0 下发向量库、召回层不过滤**（`HybridRecaller.recall` 用 `similarityThreshold(0.0)`）：一旦让向量库先过滤，低于阈值的分块永不返回，日志里只见 ≥阈值的分数，

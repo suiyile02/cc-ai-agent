@@ -46,7 +46,8 @@ class RagRetrievalTimeoutTest {
                 props);
         return new RagRetrievalService(props, recaller, rerankers,
                 new RagContextRenderer(props, new HeuristicTokenCounter()),
-                mock(com.ai.knowledge.ParentBlockStore.class));
+                mock(com.ai.knowledge.ParentBlockStore.class),
+                new HeuristicTokenCounter());
     }
 
     @Test

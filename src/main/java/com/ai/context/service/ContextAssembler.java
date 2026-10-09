@@ -55,10 +55,10 @@ public class ContextAssembler {
     public AssembledPrompt assemble(ChatSession session, String userMessage,
             List<Document> ragHits, ChatOutcome outcome, boolean rewritten) {
         ContextProps cfg = appProperties.getContext();
-        // 获取会话的 Token 默认预算配置
+        // 获取会话的 Token 默认预算配置; RAG 段预算与检索展开层共用同一公式(ragTokenBudget)
         int total = Math.max(0, cfg.getModelMaxTokens() - cfg.getReservedForAnswer());
         ContextProps.Budget budget = cfg.getBudget();
-        int ragBudget = (int) (total * budget.getRag());
+        int ragBudget = cfg.ragTokenBudget();
         int historyBudget = (int) (total * budget.getHistory());
         int userBudget = (int) (total * budget.getUser());
 

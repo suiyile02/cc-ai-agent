@@ -26,6 +26,19 @@ public class ContextProps {
     /** 历史窗口配置 */
     private History history = new History();
 
+    /**
+     * RAG 段 Token 预算(装配层与检索展开层共用的单一来源)。
+     *
+     * <p>总预算 = max(0, modelMaxTokens - reservedForAnswer), RAG 段按占比 {@code budget.rag}
+     * 折算。检索层的预算感知父块展开与装配层的注入共用此值, 避免两处公式漂移。
+     *
+     * @return RAG 段可用 token 数
+     */
+    public int ragTokenBudget() {
+        int total = Math.max(0, modelMaxTokens - reservedForAnswer);
+        return (int) (total * budget.getRag());
+    }
+
     /** 上下文各段 token 预算占比(总预算 = modelMaxTokens - reservedForAnswer) */
     @Data
     public static class Budget {
@@ -53,16 +66,15 @@ public class ContextProps {
         /** 触发改写所需的最小历史轮数(首轮跳过) */
         private int minHistoryTurns = 1;
         /**
-         * 改写调用超时(ms), 超时回退原始问题。
+         * 改写调用超时(ms), 超时回退原始问题; 连续失败≥2 次熔断 60s。
          *
-         * <p>默认给到 30s 而非"看起来更合理"的几秒: 实测该端点单次改写要 10.7~28.9s,
-         * 预算小于真实耗时时改写永远在超时——等于白等一次又退回原问题。连续失败≥2 次熔断 60s。
+         * <p>默认 30s: 预算小于端点真实耗时时改写永远超时(白等一次又退回原问题)。
          */
         private long timeoutMs = 30_000;
         /**
          * 指代线索启发式(默认开启): 仅当问题包含 {@link #referenceHints} 中的
          * 指代/省略线索词才触发改写——完整问题(如"张三在哪个部门？")零等待直接检索,
-         * 避免每轮多等一次 LLM 改写(实测 10~29s)。
+         * 避免每轮多等一次 LLM 改写。
          */
         private boolean referenceHintRequired = true;
         /** 指代/省略线索词表(问题含任一词即触发改写) */
@@ -76,9 +88,8 @@ public class ContextProps {
     /**
      * 短查询扩展({@code app.context.short-query.*})：把"产品""报销"这类过短提问补全成可检索的完整问题。
      *
-     * <p>存在的理由：embedding 对 2~4 字的裸词给出的余弦分显著偏低(实测"产品"0.410 vs
-     * 完整句"你们产品的定价和套餐分别是什么"0.720, 同一文档同一分块), 而出口判据要求向量路过阈值,
-     * 于是"库里明明有却答无据"。扩展只改检索用词, 不改用户原问题(对话与日志仍用原文)。
+     * <p>存在的理由：embedding 对裸词给出的余弦分显著偏低, 而出口判据要求向量路过阈值——短词
+     * 于是被误判为"知识库无依据"。扩展只改检索用词, 不改用户原问题(详见 {@code ShortQueryExpander})。
      *
      * <p><b>扩展成功的轮次等同"已改写"</b>：语义缓存的准入据此排除——缓存条目跨用户共享,
      * 用扩写词检索出来的答案挂到原始短词键上会让后来者拿到跑题的回答。

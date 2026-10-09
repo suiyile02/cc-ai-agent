@@ -39,7 +39,24 @@ public interface RagRetriever {
      * @param threshold 语义路相似度阈值
      * @return 检索结果详情（命中 + 各路过计数 + 是否执行/是否降级）
      */
-    RetrievalOutcome retrieveOutcome(String query, int topK, double threshold);
+    default RetrievalOutcome retrieveOutcome(String query, int topK, double threshold) {
+        // 无预算重载: 等价"不限预算"(≤0), 父块全量展开的旧行为; 生产链路走带预算版本
+        return retrieveOutcome(query, topK, threshold, 0);
+    }
+
+    /**
+     * 混合检索主流程（多路召回 + RRF + 重排），返回各路命中明细供审计。
+     *
+     * <p>带 RAG 段 Token 预算的重载: 预算下传到父块展开层, 对命中小块按剩余预算分级降级
+     * (整父块 → 命中小块附近窗口 → 回退小块原文), 避免超大父块吃光预算、其余被硬切。
+     *
+     * @param query       用户问题
+     * @param topK        最终注入 Top-K
+     * @param threshold   语义路相似度阈值
+     * @param tokenBudget RAG 段 Token 预算(≤0 表示不限, 退化为全量展开)
+     * @return 检索结果详情（命中 + 各路过计数 + 是否执行/是否降级）
+     */
+    RetrievalOutcome retrieveOutcome(String query, int topK, double threshold, int tokenBudget);
 
     /**
      * 组装注入 LLM 的上下文文本（按相关度累加，受 Token 预算与字符上限双重约束）。

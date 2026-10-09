@@ -101,7 +101,7 @@ class ChatPreparationServiceTest {
     void negativeCacheSavesTheModelCallButNotTheRetrieval() {
         givenCacheEligibleBaseline();
         // 本轮检索执行了但无语义证据(默认 kb-only=true → 出口 REFUSED_NO_EVIDENCE)
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.31));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(true);
@@ -114,7 +114,7 @@ class ChatPreparationServiceTest {
         assertNull(prep.assembled(), "负缓存命中不装配上下文");
         verify(semanticAnswerCache).isMiss(QUESTION);
         // 与改造前唯一的区别: 检索必须真的跑过——出口不能靠猜
-        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt());
         verify(contextAssembler, never()).assemble(any(), anyString(), anyList(), any(), anyBoolean());
         verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
     }
@@ -123,7 +123,7 @@ class ChatPreparationServiceTest {
     void negativeCacheMissRunsFullRetrieval() {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -133,7 +133,7 @@ class ChatPreparationServiceTest {
 
         assertNull(prep.cachedAnswer());
         verify(semanticAnswerCache).isMiss(QUESTION);
-        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt());
         verify(contextAssembler).assemble(any(), anyString(), anyList(), any(), anyBoolean());
     }
 
@@ -145,7 +145,7 @@ class ChatPreparationServiceTest {
                 ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService,
                 shortQueryExpander);
         givenCacheEligibleBaseline();
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -165,7 +165,7 @@ class ChatPreparationServiceTest {
     void toolRoutedQuestionStillRetrievesAndKeepsAuditLabel() {
         givenCacheEligibleBaseline();
         when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.31));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -176,7 +176,7 @@ class ChatPreparationServiceTest {
         assertEquals(RagMode.TOOL, prep.rag().mode(), "词表预判应如实留痕为 TOOL(仅审计)");
         assertEquals(ChatOutcome.NO_EVIDENCE_WITH_TOOLS, prep.rag().chatOutcome(),
                 "零命中 + HYBRID 会话有工具 → 交给模型裁决");
-        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt());
         verify(eventPublisher).publishEvent(any(ChatDecisionEvent.class));
     }
 
@@ -188,7 +188,7 @@ class ChatPreparationServiceTest {
     void misroutedToolKeywordStillAnswersFromKb() {
         givenCacheEligibleBaseline();
         when(intentRouter.route(anyString())).thenReturn(RagMode.TOOL);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(
                         List.of(mock(org.springframework.ai.document.Document.class)),
                         true, 2, 5, false, 0.72));
@@ -208,7 +208,7 @@ class ChatPreparationServiceTest {
     void firstTurnTriggersTitleFallbackAndRefine() {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -225,7 +225,7 @@ class ChatPreparationServiceTest {
     void sessionWithExistingTitleSkipsRefine() {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -253,14 +253,14 @@ class ChatPreparationServiceTest {
         verify(eventPublisher).publishEvent(sent.capture());
         assertNull(sent.getValue().semanticMaxScore(), "未执行检索时语义最高分应为 null");
         assertFalse(sent.getValue().retrievalExecuted());
-        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble());
+        verify(ragRetriever, never()).retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt());
     }
 
     @Test
     void executedRetrievalRecordsObservedMaxScore() {
         givenCacheEligibleBaseline();
         when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 3, 10, false, 0.72));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -285,7 +285,7 @@ class ChatPreparationServiceTest {
         when(intentRouter.route(anyString())).thenReturn(RagMode.GENERAL);
         when(semanticAnswerCache.get(anyString())).thenReturn(null);
         when(semanticAnswerCache.isMiss(anyString())).thenReturn(false);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 10, false, 0.2046));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
         when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
@@ -312,7 +312,7 @@ class ChatPreparationServiceTest {
         when(shortQueryExpander.expand(any(), anyString()))
                 .thenReturn(new ShortQueryExpander.ExpandResult(expanded, true));
         when(intentRouter.route(anyString())).thenReturn(RagMode.KB);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(mock(org.springframework.ai.document.Document.class)),
                         true, 2, 5, false, 0.72));
         when(ragRetriever.toSources(anyList())).thenReturn(List.of());
@@ -323,7 +323,7 @@ class ChatPreparationServiceTest {
 
         assertTrue(prep.rag().chatOutcome() == ChatOutcome.ANSWERED_FROM_KB, "扩展后过阈值, 判有据作答");
         assertFalse(prep.cacheEligible(), "扩展轮不得读写语义缓存");
-        verify(ragRetriever).retrieveOutcome(eq(expanded), anyInt(), anyDouble());
+        verify(ragRetriever).retrieveOutcome(eq(expanded), anyInt(), anyDouble(), anyInt());
         verify(semanticAnswerCache, never()).get(anyString());
     }
 
@@ -335,7 +335,7 @@ class ChatPreparationServiceTest {
                 ragRetriever, contextAssembler, props, eventPublisher, sessionTitleService,
                 shortQueryExpander);
         when(intentRouter.route(anyString())).thenReturn(RagMode.GENERAL);
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 5, false, 0.4097));
 
         ChatPreparationService.DebugSearch debug = service.debugSearch("产品", null, null, false);
@@ -354,7 +354,7 @@ class ChatPreparationServiceTest {
     void debugSearchPredictsToolAdjudicationAndReportsExpandedQuery() {
         when(shortQueryExpander.expand(any(), anyString()))
                 .thenReturn(new ShortQueryExpander.ExpandResult("订单的物流状态是什么", true));
-        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble()))
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
                 .thenReturn(new RetrievalOutcome(List.of(), true, 0, 3, false, 0.31));
 
         ChatPreparationService.DebugSearch debug = service.debugSearch("订单", 5, 0.45, true);
@@ -362,6 +362,25 @@ class ChatPreparationServiceTest {
         assertTrue(debug.expanded());
         assertEquals("订单的物流状态是什么", debug.retrievalQuery());
         assertEquals(ChatOutcome.NO_EVIDENCE_WITH_TOOLS, debug.chatOutcome());
-        verify(ragRetriever).retrieveOutcome("订单的物流状态是什么", 5, 0.45);
+        verify(ragRetriever).retrieveOutcome(eq("订单的物流状态是什么"), eq(5), eq(0.45), eq(2676));
+    }
+
+    /**
+     * 预算感知展开: 生产链路必须把 RAG 段 Token 预算下传到检索层(父块分级降级的前提)。
+     * 默认配置 (modelMaxTokens=8192, reservedForAnswer=1500, rag=0.40) → ragBudget=2676。
+     */
+    @Test
+    void productionRetrievalPassesRagTokenBudgetDownToRetriever() {
+        givenCacheEligibleBaseline();
+        when(semanticAnswerCache.isMiss(QUESTION)).thenReturn(false);
+        when(ragRetriever.retrieveOutcome(anyString(), anyInt(), anyDouble(), anyInt()))
+                .thenReturn(new RetrievalOutcome(List.of(), true, 0, 0, false, 0.0));
+        when(ragRetriever.toSources(anyList())).thenReturn(List.of());
+        when(contextAssembler.assemble(any(), anyString(), anyList(), any(), anyBoolean()))
+                .thenReturn(mock(AssembledPrompt.class));
+
+        service.prepare(session(), QUESTION);
+
+        verify(ragRetriever).retrieveOutcome(anyString(), anyInt(), anyDouble(), eq(2676));
     }
 }

@@ -204,6 +204,11 @@ com.ai
   检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
   按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
   `semanticMaxScore` 与计数)仍按小块分数, 只有喂给模型的上下文换成父块全文。
+  **预算感知分级展开(2026-10-09)**: 展开按 RAG 段 Token 预算(与装配层共用
+  `ContextProps.ragTokenBudget()`)分级降级——预算够装整父块→整父块; 不够但够装命中小块附近窗口
+  (以小块原文在父块内 `indexOf` 定位, 两侧各 `app.rag.parent-window-chars`(默认 500)字符、对齐行边界)
+  →窗口; 再不够→回退小块原文。预算按重排顺序消耗, 后续命中自动降级, 不再出现"超大父块吃光预算、
+  其余被渲染层硬切"。渲染层 `RagContextRenderer` 保留为最终防线。
   降级: 父块缺失/读失败保留小块原文(绝不降级为无资料); 写失败仅 WARN(小块照常入库);
   非结构策略入库时显式清空历史父块(覆盖重处理换策略场景); 删除/重处理文档清父块。
   表 DDL 在 `db/schema-mysql-extra.sql`(需手动执行)。

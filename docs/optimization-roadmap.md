@@ -233,6 +233,20 @@
 
 ---
 
+## 已完成记录（2026-10-09 第十四批, 父块预算感知分级展开）
+
+"小-大检索"此前无条件把命中小块替换成整块父块, token 预算只在渲染层硬切——超大父块吃光预算、
+其余命中被腰斩/挤占(对话呈现"父块发不全")。落地:
+- 预算单一来源: `ContextProps.ragTokenBudget()`(装配层与检索前共用, 默认 2676), 防两处公式漂移。
+- `RagRetriever.retrieveOutcome` 新增带预算重载(4 参); 3 参保留为 default 委托传 0(=不限, 向后兼容,
+  现有测试零改动); `ChatPreparationService` 生产与调试链路均下传预算。
+- `expandToParents(hits, tokenBudget)` 按重排顺序消耗预算, 三级降级: 整父块 → 命中小块附近窗口
+  (以小块原文在父块内 `indexOf` 定位, 两侧各 `app.rag.parent-window-chars`(默认 500)字符、对齐行边界)
+  → 小块原文; 预算耗尽后命中保留小块(不扣预算, 交渲染层最终把关), 来源/计数/出口判据不受影响。
+- 渲染层 `RagContextRenderer` 不变(保留为最终防线); `knowledge_chunk` 表/切分策略/入库零改动。
+验证: RagRetrievalParentExpansionTest 新增 4 例(整父块/窗口降级/极小预算回退小块/预算按序消耗后降级) +
+ChatPreparationServiceTest 新增 1 例(生产调用下传 eq(2676)), 全量 411 例全绿。
+
 ## 已完成记录（2026-10-09 第十三批, 拒答口径拆分——"无据"与"不足"分家）
 
 生产反馈: "员工手册的全部内容"既说"知识库中未找到相关信息"又透出部分章节标题, 自相矛盾。根因:

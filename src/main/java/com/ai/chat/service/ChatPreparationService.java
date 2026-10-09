@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 避免"调试页能查到、对话却拒答"这类口径分叉。
  *
  * <p><b>检索先于缓存查询</b>(P3-7)：出口只能由检索事实算出，词表不再预判"该不该检索"，
- * 因此正缓存命中时本轮确实付了一次检索(代价实测 159~321ms)；换来的收益是
+ * 因此正缓存命中时本轮确实付了一次检索；换来的收益是
  * "知识库里的内容能否被问到"不再取决于有人记得改配置。缓存命中不再由"KB+未执行检索"推断，
  * 而是记为一等出口 {@code ANSWERED_FROM_CACHE}。
  *
@@ -218,10 +218,11 @@ public class ChatPreparationService {
         if (!ragSession) {
             return RagContext.empty();
         }
-        // 混合检索
+        // 混合检索(预算下传: 父块展开按 RAG 段 Token 预算分级降级, 与装配层共用 ragTokenBudget)
         RetrievalOutcome outcome = ragRetriever.retrieveOutcome(
                 userMessage, appProperties.getRag().getTopK(),
-                appProperties.getRag().getSimilarityThreshold());
+                appProperties.getRag().getSimilarityThreshold(),
+                appProperties.getContext().ragTokenBudget());
         // 出口判定(决定是由大模型自由发挥, 还是严格按照内部知识库/数据库作答)。
         // toolsAvailable 是会话级静态事实: HYBRID 注册了 BusinessTools, RAG 没有。
         boolean toolsAvailable = session.getSessionType() == SessionType.HYBRID;
@@ -301,7 +302,8 @@ public class ChatPreparationService {
                 expanded = true;
             }
         }
-        RetrievalOutcome outcome = ragRetriever.retrieveOutcome(query, effectiveTopK, effectiveThreshold);
+        RetrievalOutcome outcome = ragRetriever.retrieveOutcome(query, effectiveTopK, effectiveThreshold,
+                appProperties.getContext().ragTokenBudget());
         // 调试页按 HYBRID 口径预测出口(尚未建会话, 假定工具可用); 零命中 → NO_EVIDENCE_WITH_TOOLS
         ChatOutcome chatOutcome = OutcomeResolver.resolve(outcome, true,
                 appProperties.getChat().isKbOnly(), effectiveThreshold);

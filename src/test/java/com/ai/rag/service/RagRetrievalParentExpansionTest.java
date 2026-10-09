@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -43,7 +44,8 @@ class RagRetrievalParentExpansionTest {
         AppProperties props = new AppProperties();
         props.getRag().setRetrieveTimeoutMs(0); // 直接执行, 不包限时线程
         service = new RagRetrievalService(props, recaller, mock(RerankStrategyFactory.class),
-                new RagContextRenderer(props, new HeuristicTokenCounter()), parentBlockStore);
+                new RagContextRenderer(props, new HeuristicTokenCounter()), parentBlockStore,
+                new HeuristicTokenCounter());
     }
 
     /** 语义路小块: doc/parent_ref 用 Number(向量库回填类型), 携带语义分以便过阈值。 */
@@ -147,5 +149,91 @@ class RagRetrievalParentExpansionTest {
 
         assertTrue(out.hits().isEmpty(), "0.30 < 0.45 不得进上下文");
         verifyNoInteractions(parentBlockStore);
+    }
+
+    /* ---------------- 预算感知分级展开(小-大检索 × token 预算) ---------------- */
+
+    /**
+     * 构造一个确定性父块: 前 60 行中文 padding + 命中小块原文行 + 后 60 行 padding。
+     * 每行 40 个汉字(HeuristicTokenCounter: 每个 CJK=1 token), 因此:
+     * 父块 ≈ 60×40 + 小块 + 60×40 ≈ 4800+ token; 命中点居中。
+     * 窗口(windowChars=500, 行对齐): 命中点前 500 字符≈12 行 + 后 500 字符≈12 行 ≈ 25 行 ≈ 1000 token。
+     * 三档预算: 极大(整父块) / 1500(够窗口, 不够父块) / 5(连窗口都不够, 回退小块)。
+     */
+    private static String bigParent(String smallText) {
+        String line = "字".repeat(40) + "\n";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 60; i++) {
+            sb.append(line);
+        }
+        sb.append(smallText).append('\n');
+        for (int i = 0; i < 60; i++) {
+            sb.append(line);
+        }
+        return sb.toString();
+    }
+
+    /** 预算充足: 整个父块展开(分级第一档) */
+    @Test
+    void ampleBudgetExpandsToFullParent() {
+        String smallText = "命中:报销标准为五百元整。";
+        String parent = bigParent(smallText);
+        recallReturns(small(smallText, 7L, 2));
+        when(parentBlockStore.findParents(anyLong(), anyList())).thenReturn(Map.of(2, parent));
+
+        RetrievalOutcome out = service.retrieveOutcome("报销标准", 5, 0.45, 100_000);
+
+        assertEquals(parent, out.hits().get(0).getText(), "预算充足必须整父块展开");
+    }
+
+    /** 预算只够装窗口: 命中点附近的行级窗口注入, 而非整个父块 */
+    @Test
+    void tightBudgetFallsBackToWindowAroundHit() {
+        String smallText = "命中:报销标准为五百元整。";
+        String parent = bigParent(smallText);
+        recallReturns(small(smallText, 7L, 2));
+        when(parentBlockStore.findParents(anyLong(), anyList())).thenReturn(Map.of(2, parent));
+
+        // 预算(1500)远小于父块(~4800), 但足够装下命中点附近窗口(~1000)
+        RetrievalOutcome out = service.retrieveOutcome("报销标准", 5, 0.45, 1500);
+
+        String text = out.hits().get(0).getText();
+        assertNotEquals(parent, text, "预算不足不得整父块展开");
+        assertTrue(text.contains(smallText), "窗口必须保留命中小块原文: " + text);
+        assertTrue(text.length() < parent.length(), "窗口必须小于父块(降级生效): " + text);
+        assertTrue(parent.contains(text), "窗口必须是父块的子串(未跨出父块边界)");
+    }
+
+    /** 预算连窗口都装不下: 回退命中小块原文 */
+    @Test
+    void exhaustedBudgetFallsBackToSmallChunk() {
+        String smallText = "命中:报销标准为五百元整。";
+        String parent = bigParent(smallText);
+        recallReturns(small(smallText, 7L, 2));
+        when(parentBlockStore.findParents(anyLong(), anyList())).thenReturn(Map.of(2, parent));
+
+        // 预算极小(连"命中小块+行对齐窗口"都放不下)
+        RetrievalOutcome out = service.retrieveOutcome("报销标准", 5, 0.45, 5);
+
+        assertEquals(smallText, out.hits().get(0).getText(), "预算耗尽必须回退小块原文");
+    }
+
+    /** 预算按命中顺序消耗: 前面父块吃掉预算后, 后面的命中只能降级 */
+    @Test
+    void budgetConsumesInRelevanceOrderAndDegradesLaterHits() {
+        String smallA = "命中A:报销标准为五百元整。";
+        String smallB = "命中B:交通标准为高铁二等座。";
+        String parentA = bigParent(smallA);
+        String parentB = bigParent(smallB);
+        recallReturns(small(smallA, 7L, 2), small(smallB, 7L, 3));
+        when(parentBlockStore.findParents(eq(7L), anyList())).thenReturn(Map.of(2, parentA, 3, parentB));
+
+        // 预算(5000)约等于单个父块(~4900): 命中A 整父块吃光预算, 命中B 连窗口(~1000)都放不下 → 回退小块
+        RetrievalOutcome out = service.retrieveOutcome("报销", 5, 0.45, 5000);
+
+        assertEquals(2, out.hits().size());
+        assertEquals(parentA, out.hits().get(0).getText(), "首个命中预算充足整父块展开");
+        assertNotEquals(parentB, out.hits().get(1).getText(), "第二个命中预算已耗尽, 不得整父块展开");
+        assertEquals(smallB, out.hits().get(1).getText(), "后续命中回退小块原文");
     }
 }

@@ -1,6 +1,7 @@
 package com.ai.rag.service;
 
 import com.ai.common.Timeouts;
+import com.ai.common.TokenCounter;
 import com.ai.config.AppProperties;
 import com.ai.observability.ChatMetrics;
 import com.ai.rag.RagRetriever;
@@ -25,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  * 对外以 {@link RagRetriever} 契约暴露，供 chat/context 模块依赖接口调用。
  *
  * <p>整体受 {@code app.rag.retrieve-timeout-ms} 限时：嵌入与向量库是外部网络调用，
- * 无超时时端点挂起会把对话整体拖住（实测出现过 100s）。
+ * 无超时时端点挂起会把对话整体拖住。
  */
 @Slf4j
 @Service
@@ -37,6 +38,7 @@ public class RagRetrievalService implements RagRetriever {
     private final RerankStrategyFactory rerankers;
     private final RagContextRenderer renderer;
     private final com.ai.knowledge.ParentBlockStore parentBlockStore;
+    private final TokenCounter tokenCounter;
 
     /**
      * 按指定 Top-K / 阈值检索（检索调试接口使用）。
@@ -57,19 +59,20 @@ public class RagRetrievalService implements RagRetriever {
      * <p>超时/异常降级为 {@link RetrievalOutcome#executedEmpty()}（已执行、零命中），
      * 与"未执行检索"区分开——后者是语义缓存命中的专属标记（审计不变式）。
      *
-     * @param query     检索问题
-     * @param topK      最终注入 Top-K
-     * @param threshold 语义路相似度阈值
+     * @param query       检索问题
+     * @param topK        最终注入 Top-K
+     * @param threshold   语义路相似度阈值
+     * @param tokenBudget RAG 段 Token 预算(≤0 不限; 展开层据此对父块分级降级)
      * @return 检索结果（命中 + 各路过计数 + 是否执行）
      */
     @Override
-    public RetrievalOutcome retrieveOutcome(String query, int topK, double threshold) {
+    public RetrievalOutcome retrieveOutcome(String query, int topK, double threshold, int tokenBudget) {
         long timeoutMs = appProperties.getRag().getRetrieveTimeoutMs();
         long start = System.currentTimeMillis();
         try {
             RetrievalOutcome outcome = timeoutMs > 0
-                    ? Timeouts.call(() -> doRetrieve(query, topK, threshold), timeoutMs)
-                    : doRetrieve(query, topK, threshold);
+                    ? Timeouts.call(() -> doRetrieve(query, topK, threshold, tokenBudget), timeoutMs)
+                    : doRetrieve(query, topK, threshold, tokenBudget);
             long cost = System.currentTimeMillis() - start;
             Metrics
                     .timer(ChatMetrics.RETRIEVAL)
@@ -90,17 +93,19 @@ public class RagRetrievalService implements RagRetriever {
     /**
      * 检索执行体（被 {@link #retrieveOutcome} 包在限时调用内）。
      *
-     * <p>顺序是 <b>召回 → 融合 → 重排 → 阈值过滤 → Top-K</b>：阈值刻意排在重排之后。
+     * <p>顺序是 <b>召回 → 融合 → 重排 → 阈值过滤 → 父块展开</b>：阈值刻意排在重排之后。
      * 判"有没有依据"用的是语义路最大分({@code semanticMaxScore}, 见
      * {@link com.ai.rag.OutcomeResolver}), 它与过滤时机无关, 所以出口结论不变；变的是注入内容——
      * 重排得以看到全部候选，第 6 名那种"余弦分低但确实答得上"的段落才有机会被捞进上下文。
+     * 父块展开在阈值过滤后按剩余预算分级(见 {@link #expandToParents})。
      *
-     * @param query     检索问题
-     * @param topK      最终注入 Top-K
-     * @param threshold 语义路相似度阈值
+     * @param query       检索问题
+     * @param topK        最终注入 Top-K
+     * @param threshold   语义路相似度阈值
+     * @param tokenBudget RAG 段 Token 预算(≤0 不限)
      * @return 检索结果
      */
-    private RetrievalOutcome doRetrieve(String query, int topK, double threshold) {
+    private RetrievalOutcome doRetrieve(String query, int topK, double threshold, int tokenBudget) {
         // 两路召回
         HybridRecaller.Recall recall = recaller.recall(query, topK);
         if (recall.nothingUsable()) {
@@ -111,7 +116,7 @@ public class RagRetrievalService implements RagRetriever {
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
                 : mergeAndRerank(query, recall, topK);
-        List<Document> finalHits = expandToParents(filterByThreshold(hits, threshold));
+        List<Document> finalHits = expandToParents(filterByThreshold(hits, threshold), tokenBudget);
         return new RetrievalOutcome(finalHits, true,
                 countPassed(recall.semantic(), threshold), recall.keyword().size(),
                 false, recall.semanticMaxScore());
@@ -163,10 +168,20 @@ public class RagRetrievalService implements RagRetriever {
      * 父子文档(小-大检索)展开: 命中小块若带 {@code doc_id + parent_ref}, 用其父块文本替换小块文本,
      * 使"检索粒度(小块)"与"上下文粒度(父块)"分离——召回仍按小块分数, 注入喂给模型的是完整父块。
      *
+     * <p><b>预算感知分级展开(2026-10-09)</b>: 按剩余 Token 预算对每个命中选择注入粒度——
+     * 预算够装整父块 → 整父块; 不够但够装"命中小块附近窗口" → 窗口; 再不够 → 回退小块原文。
+     * 避免"一个超大父块吃光全部预算、后面父块被渲染层硬切"的旧问题(预算只在渲染层截断,
+     * 会把父块拦腰砍断且互相挤占)。预算耗尽后的命中仍保留(不扣预算, 交给渲染层最终把关),
+     * 保证来源/计数/出口判定不受影响。
+     *
      * <p>降级: 父块读取失败/父块缺失时保留小块原文(不因父块查询失败而降级为无资料)。
      * 父块展开后 text 变化, 但 source 展示仍指向命中小块(来源正确)。
+     *
+     * @param hits        阈值过滤后的命中小块(按重排分数降序)
+     * @param tokenBudget RAG 段 Token 预算(≤0 表示不限, 退化为全量展开的旧行为)
+     * @return 展开/降级后的命中文档(数量与顺序不变)
      */
-    private List<Document> expandToParents(List<Document> hits) {
+    private List<Document> expandToParents(List<Document> hits, int tokenBudget) {
         if (hits == null || hits.isEmpty()) {
             return hits;
         }
@@ -191,7 +206,9 @@ public class RagRetrievalService implements RagRetriever {
         if (parentTexts.isEmpty()) {
             return hits;
         }
-        // 替换命中小块文本为父块文本
+        // 按剩余预算对每个命中分级展开
+        int windowChars = Math.max(0, appProperties.getRag().getParentWindowChars());
+        int remaining = tokenBudget > 0 ? tokenBudget : Integer.MAX_VALUE;
         List<Document> expanded = new java.util.ArrayList<>(hits.size());
         for (Document hit : hits) {
             Object docIdObj = hit.getMetadata().get("doc_id");
@@ -200,18 +217,60 @@ public class RagRetrievalService implements RagRetriever {
             if (docIdObj instanceof Number d && parentRefObj instanceof Number pr) {
                 parentText = parentTexts.get(d.longValue() + ":" + pr.intValue());
             }
-            if (parentText != null && !parentText.isBlank()) {
-                expanded.add(Document.builder()
-                        .id(hit.getId())
-                        .text(parentText)
-                        .score(hit.getScore())
-                        .metadata(hit.getMetadata())
-                        .build());
-            } else {
+            if (parentText == null || parentText.isBlank()) {
                 expanded.add(hit); // 无父块: 保留小块原文
+                continue;
             }
+            int parentTokens = tokenCounter.count(parentText);
+            if (parentTokens <= remaining) {
+                remaining -= parentTokens;
+                expanded.add(withText(hit, parentText));
+                continue;
+            }
+            // 预算不够装整父块: 尝试命中小块附近窗口(父块内以小块原文为锚点)
+            String smallText = hit.getText();
+            String window = windowAround(parentText, smallText, windowChars);
+            if (window != null) {
+                int windowTokens = tokenCounter.count(window);
+                if (windowTokens <= remaining) {
+                    remaining -= windowTokens;
+                    expanded.add(withText(hit, window));
+                    continue;
+                }
+            }
+            // 窗口也放不下: 回退小块原文(不扣预算, 渲染层最终把关)
+            expanded.add(hit);
         }
         return expanded;
+    }
+
+    /** 以小块原文在父块内的位置为中心, 取两侧各 {@code windowChars} 字符(对齐到行边界)的窗口。 */
+    private String windowAround(String parentText, String smallText, int windowChars) {
+        if (smallText == null || smallText.isBlank() || windowChars <= 0) {
+            return null;
+        }
+        int idx = parentText.indexOf(smallText);
+        if (idx < 0) {
+            return null;
+        }
+        int start = Math.max(0, idx - windowChars);
+        int end = Math.min(parentText.length(), idx + smallText.length() + windowChars);
+        // 对齐到最近的行边界, 避免窗口从句子中间切开
+        int lineStart = parentText.lastIndexOf('\n', start);
+        start = lineStart < 0 ? 0 : lineStart + 1;
+        int lineEnd = parentText.indexOf('\n', end);
+        end = lineEnd < 0 ? parentText.length() : lineEnd;
+        return start < end ? parentText.substring(start, end) : null;
+    }
+
+    /** 用新文本重建 Document(id/score/metadata 原样, 仅替换 text)。 */
+    private Document withText(Document hit, String text) {
+        return Document.builder()
+                .id(hit.getId())
+                .text(text)
+                .score(hit.getScore())
+                .metadata(hit.getMetadata())
+                .build();
     }
 
     /**

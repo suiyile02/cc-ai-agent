@@ -136,10 +136,11 @@
 ### `RagRetrievalService` + 四个协作类（2026-09 拆分）
 | 类 | 方法 | 作用 | 调用方 |
 |---|---|---|---|
-| `RagRetrievalService` | `retrieveOutcome(query,topK,threshold)` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()` | 前置 |
-| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块展开** → 组装 `RetrievalOutcome` | 内部 |
+| `RagRetrievalService` | `retrieveOutcome(query,topK,threshold[,tokenBudget])` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()`；**带预算重载**(默认)把 RAG 段 Token 预算下传到父块展开层 | 前置 |
+| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome` | 内部 |
 | | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
-| | `expandToParents(hits)` ★新增 | 父子文档(小-大检索)：命中小块带 `doc_id+parent_ref` 时按文档批量取父块(序号去重)替换注入文本; 缺父块/读失败回退小块原文; 排序/阈值/判据仍读小块分数 | 内部 |
+| | `expandToParents(hits,tokenBudget)` ★新增 | 父子文档(小-大检索)预算感知分级展开：按剩余预算三级降级(整父块→命中小块附近窗口→小块原文, 窗口以 indexOf 定位+行对齐, 半径 `app.rag.parent-window-chars`=500)；按重排顺序消耗预算, 后续命中自动降级; 缺父块/读失败回退小块原文; 排序/阈值/判据仍读小块分数 | 内部 |
+| | `windowAround(parent,small,chars)` ★新增 | 父块内以命中小块原文为锚点取两侧窗口并对齐行边界 | 内部 |
 | | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
 | | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
 | `HybridRecaller` | `recall(query,topK)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、本类不做任何阈值过滤**——把候选原样交给重排, 过滤在 `RagRetrievalService.filterByThreshold`(重排之后)收口; 下发给向量库会让低于阈值的分数永不可见、分布被底部截断无法定标 | 编排 |
