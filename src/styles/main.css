@@ -305,6 +305,15 @@ table.data tbody tr:last-child td { border-bottom: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 长文本截断修正: .cell-truncate 用在 <span> 上时是 inline 元素, max-width 不生效,
+   错误信息/文件名会把列撑宽、窄窗口下右侧列被挤出可视区。补 inline-block 使其生效。
+   只作用于 span——SystemView 有 <td class="cell-truncate"> 依赖 table-cell 布局(文本已由
+   truncate() 预缩短, 无需 CSS 截断), 不能全局改 display。 */
+span.cell-truncate {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 220px;
+}
 
 /* ---------- 筛选条 ---------- */
 .filter-bar {
