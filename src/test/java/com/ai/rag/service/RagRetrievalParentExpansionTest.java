@@ -94,6 +94,24 @@ class RagRetrievalParentExpansionTest {
                 "父块缺失不得降级为无资料: 保留小块原文注入");
     }
 
+    /** P3-10 回归: Qdrant payload 的 doc_id/parent_ref 以字符串存储时展开必须照常生效。 */
+    @Test
+    void expandsWhenVectorPayloadValuesStoredAsStrings() {
+        Document stringTyped = Document.builder().id("pt-str").text("年假小块")
+                .metadata(new java.util.HashMap<>(Map.of(
+                        "doc_id", "76", "parent_ref", "3",
+                        "file_name", "员工手册示例.md", "chunk_index", "3", "semantic_score", 0.61)))
+                .build();
+        recallReturns(stringTyped);
+        when(parentBlockStore.findParents(eq(76L), anyList()))
+                .thenReturn(Map.of(3, "父块: 整节年假规定全文"));
+
+        RetrievalOutcome out = service.retrieveOutcome("年假", 5, 0.45);
+
+        assertEquals("父块: 整节年假规定全文", out.hits().get(0).getText(),
+                "字符串形态元数据同样要取到父块(曾因 instanceof Number 判空而静默不展开)");
+    }
+
     @Test
     void hitsWithoutParentRefSkipParentLookupEntirely() {
         Document noRef = Document.builder().text("无父块文档的小块").score(0.9)

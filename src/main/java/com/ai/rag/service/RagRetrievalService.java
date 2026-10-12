@@ -246,14 +246,13 @@ public class RagRetrievalService implements RagRetriever {
         if (hits == null || hits.isEmpty()) {
             return hits;
         }
-        // 收集需要展开的 (docId, parentRef) 去重
+        // 收集需要展开的 (docId, parentRef) 去重; Number/数字串都认(同 DocumentMeta.docId 口径)
         Map<Long, Set<Integer>> need = new java.util.LinkedHashMap<>();
         for (Document hit : hits) {
-            Object docIdObj = hit.getMetadata().get("doc_id");
-            Object parentRefObj = hit.getMetadata().get("parent_ref");
-            if (docIdObj instanceof Number d && parentRefObj instanceof Number pr) {
-                need.computeIfAbsent(d.longValue(), k -> new java.util.HashSet<>())
-                        .add(pr.intValue());
+            Long docId = DocumentMeta.docId(hit);
+            Integer parentRef = metaInt(hit.getMetadata().get("parent_ref"));
+            if (docId != null && parentRef != null) {
+                need.computeIfAbsent(docId, k -> new java.util.HashSet<>()).add(parentRef);
             }
         }
         if (need.isEmpty()) {
@@ -272,12 +271,10 @@ public class RagRetrievalService implements RagRetriever {
         int remaining = tokenBudget > 0 ? tokenBudget : Integer.MAX_VALUE;
         List<Document> expanded = new java.util.ArrayList<>(hits.size());
         for (Document hit : hits) {
-            Object docIdObj = hit.getMetadata().get("doc_id");
-            Object parentRefObj = hit.getMetadata().get("parent_ref");
-            String parentText = null;
-            if (docIdObj instanceof Number d && parentRefObj instanceof Number pr) {
-                parentText = parentTexts.get(d.longValue() + ":" + pr.intValue());
-            }
+            Long docId = DocumentMeta.docId(hit);
+            Integer parentRef = metaInt(hit.getMetadata().get("parent_ref"));
+            String parentText = (docId == null || parentRef == null)
+                    ? null : parentTexts.get(docId + ":" + parentRef);
             if (parentText == null || parentText.isBlank()) {
                 expanded.add(hit); // 无父块: 保留小块原文
                 continue;
@@ -332,6 +329,21 @@ public class RagRetrievalService implements RagRetriever {
                 .score(hit.getScore())
                 .metadata(hit.getMetadata())
                 .build();
+    }
+
+    /** metadata 数值读取: Number 与数字串都认(向量库 payload 可能以字符串存储)。 */
+    private static Integer metaInt(Object v) {
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        if (v != null) {
+            try {
+                return Integer.parseInt(v.toString().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**

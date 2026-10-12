@@ -490,7 +490,9 @@ flowchart TD
 
 **检索过程 INFO 日志（2026-10-12）**：`doRetrieve` 内四处 `log.info` 输出排查用的中间态——检索关键字（扩展/改写后的实际检索句）、语义路过阈值前的全部召回、BM25 路召回、重排+Top-K 后的候选；每条候选渲染 `[doc_id:chunk_index cos=余弦分 kw=BM25分] ≤80字片段`（私有 `describe()`，缺分显示 `-`）。口径与既有"分段耗时必须打 INFO 日志"约定一致，禁止删除；注意父块展开发生在这些日志之后，日志里看到的是小块原文。**BM25 那一路刻意在融合前用 `describeKeyword()` 打索引主键 `key=docId:chunkIndex`**——`RrfFuser` 两路同块时保留语义路 Document，合并后关键词路的合成 id（`kw-{key}`）即丢失，只有召回现场能暴露键位问题（见下）。
 
-**BM25 重建键位（2026-10-12 修复）**：`KeywordIndex.addDocumentLocked` 的索引主键改为**优先取分块 metadata 的 `chunk_index`**（缺失回退列表下标）。旧实现用注册列表下标当序号，而启动重建(`KeywordIndexRebuilder`)按 Qdrant 滚动顺序分组——下标 ≠ 原始序号，实测漂移（key=`76:12` 装着真序号 3 的年假块），后果是 RRF 两路去重对不上同一分块、注入内容重复。回归测试 `KeywordIndexTest#registersByMetadataChunkIndexNotListPosition`（已在旧代码验证会红）。⚠ **遗留**：两路都命中的块在 `ScoreFusionReranker` 里因量纲混用（BM25 原始分 vs 余弦×0.6）反而排在单路版本之后，注入重复段落——待修，见 roadmap。
+**BM25 重建键位（2026-10-12 修复）**：`KeywordIndex.addDocumentLocked` 的索引主键改为**优先取分块 metadata 的 `chunk_index`**（缺失回退列表下标）。旧实现用注册列表下标当序号，而启动重建(`KeywordIndexRebuilder`)按 Qdrant 滚动顺序分组——下标 ≠ 原始序号，实测漂移（key=`76:12` 装着真序号 3 的年假块），后果是 RRF 两路去重对不上同一分块、注入内容重复。回归测试 `KeywordIndexTest#registersByMetadataChunkIndexNotListPosition`（已在旧代码验证会红）。
+
+**语义路 doc_id 字符串口径（2026-10-12 同日修复, P3-10 附带项坐实）**：Qdrant payload 把 `doc_id` 存成**字符串**（Spring AI `toDocument` 原样回填 metadata），而 `DocumentMeta.docId/chunkKey` 与 `expandToParents` 只认 `instanceof Number` → 语义路全部判 null：RRF 两路同块永不合并（"年假规定"以仅词面版+纯语义版重复占两个 Top-K 席位）、父块展开静默失效、来源展示读不到 doc_id。现统一兼容 Number 与数字串（回归测试 `RrfFuserTest#mergesSameChunkWhenSemanticDocIdStoredAsString`、`RagRetrievalParentExpansionTest#expandsWhenVectorPayloadValuesStoredAsStrings`，均在旧代码上验证会红；线上实测两路 cos+kw 已合并为同一候选）。⚠ **遗留待修(登记 roadmap)**：出口判据与 `rag_decision_log.semantic_max_score` 读的是 Spring AI 的 `Document.score`，而 Qdrant Cosine 距离下 `score = 1 - distance`（自搜最近邻实测 0.9991 为证）——它不是真余弦相似度，与 0.45 阈值比较的量纲错位，P3-6 定标前必须先换算或统一读取口径。
 **阈值以 0 下发向量库、召回层不过滤**（`HybridRecaller.recall` 用 `similarityThreshold(0.0)`）：一旦让向量库先过滤，低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
 分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**最大相似度**写入
 `rag_decision_log.semantic_max_score`，它是 P3-6 定标与 P3-7 相关性判据的唯一未截断观察值。

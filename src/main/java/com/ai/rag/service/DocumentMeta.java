@@ -70,13 +70,17 @@ final class DocumentMeta {
     /**
      * 两路召回的去重主键：{@code doc_id:chunk_index}。
      *
+     * <p>doc_id 兼容 Number 与数字串——Qdrant payload 存字符串(早期入库即如此)，
+     * 只认 Number 会让语义路全部退化成点 UUID、两路永远对不上同一分块(P3-10)。
+     *
      * @param doc 命中分块
      * @return 去重键；元数据缺失时退回文档 id（再缺失用身份哈希，保证不相撞）
      */
     static String chunkKey(Document doc) {
         Map<String, Object> md = doc.getMetadata();
-        if (md.get("doc_id") instanceof Number d && md.get("chunk_index") instanceof Number c) {
-            return d.longValue() + ":" + c.intValue();
+        Long d = docId(doc);
+        if (d != null && md.get("chunk_index") instanceof Number c) {
+            return d + ":" + c.intValue();
         }
         return doc.getId() == null ? "unknown:" + System.identityHashCode(doc) : doc.getId();
     }
@@ -87,14 +91,36 @@ final class DocumentMeta {
         return v == null ? "未知来源" : String.valueOf(v);
     }
 
-    /** 文档 ID（knowledge_document.id），缺失 null */
+    /** 文档 ID（knowledge_document.id）：兼容 Number 与数字串(Qdrant payload 存字符串)；缺失 null */
     static Long docId(Document doc) {
-        return doc.getMetadata().get("doc_id") instanceof Number n ? n.longValue() : null;
+        Object v = doc.getMetadata().get("doc_id");
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        if (v != null) {
+            try {
+                return Long.parseLong(v.toString().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
-    /** 分块序号，缺失 null */
+    /** 分块序号：兼容 Number 与数字串；缺失 null */
     static Integer chunkIndex(Document doc) {
-        return doc.getMetadata().get("chunk_index") instanceof Number n ? n.intValue() : null;
+        Object v = doc.getMetadata().get("chunk_index");
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        if (v != null) {
+            try {
+                return Integer.parseInt(v.toString().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** 展示用片段（≤300 字符，按码点安全截断并加省略号） */
