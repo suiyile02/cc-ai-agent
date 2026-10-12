@@ -10,6 +10,7 @@ import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.knowledge.parsing.TextExtractor;
 import com.ai.knowledge.storage.FileStorageService;
 import com.ai.rag.service.KeywordIndex;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -99,8 +100,13 @@ public class DocumentIngestionOrchestrator {
     /** 置处理中(状态 0/2/3 → 1)并清空上次失败原因。 */
     private void markProcessing(KnowledgeDocument doc) {
         doc.setStatus(1);
-        doc.setErrorMessage(null);
         documentMapper.updateById(doc);
+        // 显式清空 error_message: updateById 默认忽略 null 字段(FieldStrategy.NOT_NULL),
+        // setErrorMessage(null) 不会落库, 处理中阶段旧错误仍会残留——补一条显式置 NULL。
+        // 用字符串 UpdateWrapper 而非 Lambda(纯 Mockito 测试无 TableInfo 缓存, lambda 解析会抛异常)。
+        documentMapper.update(null, new UpdateWrapper<KnowledgeDocument>()
+                .eq("id", doc.getId())
+                .set("error_message", null));
     }
 
     /** 置完成(状态 2)+分块数; 存量行补填判重键(P3-9, 失败仅忽略不参与判重); 打完成日志。 */
@@ -118,6 +124,11 @@ public class DocumentIngestionOrchestrator {
             }
         }
         documentMapper.updateById(doc);
+        // 显式清空 error_message: updateById 默认忽略 null 字段, setErrorMessage(null) 不会落库——
+        // "错误文档重处理成功"场景下旧错误永久残留(生产实测 400 错误挂在 status=2 的文档上)。
+        documentMapper.update(null, new UpdateWrapper<KnowledgeDocument>()
+                .eq("id", doc.getId())
+                .set("error_message", null));
         log.info("文档 [{}] 入库完成, 分块数={}, 父块={}", doc.getFileName(), chunkCount, parentCount);
     }
 

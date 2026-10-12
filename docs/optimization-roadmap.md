@@ -233,6 +233,23 @@
 
 ---
 
+## 已完成记录（2026-10-12 第十六批, 重处理成功后清空 error_message——MP 空值策略 bug）
+
+生产反馈: 错误文档(400 batch)重处理成功后, 文档列表里 status=2(已完成)、chunk 也更新了,
+但 errorMessage 仍残留旧错误(通过 API 实测确认: 文档 68 status=2 却挂着 `400: batch size is invalid`)。
+根因: `DocumentIngestionOrchestrator.markProcessing/markDone` 里 `setErrorMessage(null)` 想清空旧错误,
+但 **MyBatis-Plus `updateById` 默认忽略 null 字段(FieldStrategy.NOT_NULL)**, null 从没写进 SQL,
+`error_message` 永久保留旧值——status/chunkCount 等非 null 字段能更新, 唯独"清空"这条路被堵死。
+- 修复: 处理中/完成两条路径各补 `documentMapper.update(null, new UpdateWrapper<>().eq("id",...).set("error_message", null))`
+  显式置 NULL(方案1, 最小改动, 不动实体注解/全局空值策略)。
+- 坑: 用**字符串 UpdateWrapper 而非 LambdaUpdateWrapper**——纯 Mockito 测试无 TableInfo 缓存,
+  lambda 解析抛 `can not find lambda cache`(项目既有坑, ParentBlockStoreImpl 同款), 字符串 wrapper 可测。
+- 验证: 新增 `DocumentIngestionOrchestratorTest#successfulIngestionExplicitlyClearsErrorMessage`
+  (ArgumentCaptor 断言成功路径存在 set error_message 的 update); 已做"还原旧 bug 代码 → 测试红 / 修复代码 → 测试绿"
+  双向验证, 证明测试能抓住该 bug。全量 425 例全绿。
+- 注: 运行中后端(19:23 启动的 IDEA 进程)跑的是修复前字节码, 实测 reprocess 仍残留属预期;
+  重启/重新部署后生效。
+
 ## 已完成记录（2026-10-10 第十五批, 入库失败三道防线——嵌入分批/友好兜底/父块清理）
 
 生产故障: `AlertSeverityHandler.java` 入库失败, 400 `batch size is invalid, it should not be larger than 20`,

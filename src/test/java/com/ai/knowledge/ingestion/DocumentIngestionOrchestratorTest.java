@@ -17,6 +17,7 @@ import com.ai.knowledge.storage.FileStorageService;
 import com.ai.rag.service.KeywordIndex;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -261,5 +263,33 @@ class DocumentIngestionOrchestratorTest {
         assertTrue(d.getErrorMessage().contains("文档向量化失败"),
                 "error_message 必须是中文兜底而非原始英文: " + d.getErrorMessage());
         assertTrue(!d.getErrorMessage().contains("batch size"), "不得透出原始英文异常");
+    }
+
+    @Test
+    void successfulIngestionExplicitlyClearsErrorMessage() throws Exception {
+        // 回归(2026-10-12 生产): 错误文档重处理成功后 status=2/chunk 都更新了,
+        // 但 errorMessage 永久残留旧错误——markProcessing/markDone 的 setErrorMessage(null)
+        // 被 MyBatis-Plus updateById 的空值策略(忽略 null 字段)吞掉, 从未落库。
+        // 必须在成功路径用 update 显式 set error_message = NULL。
+        Path file = Files.createTempFile("ingest-clear-err", ".md");
+        Files.writeString(file, "# 第一章\n内容。\n");
+        KnowledgeDocument d = doc(file, "MD");
+        d.setErrorMessage("400: 旧错误, 应被重处理成功清空");
+        when(documentMapper.selectById(1L)).thenReturn(d);
+        when(mimeResolver.resolve(any(), any())).thenReturn("text/markdown");
+        when(chunkingRouter.route("text/markdown")).thenReturn(new MdStructureChunker(props));
+
+        service.ingestDocument(1L);
+
+        // ① 成功路径必须显式把 error_message 置 NULL(仅 updateById 会因空值策略跳过)
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<KnowledgeDocument>> wrapper =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(documentMapper, atLeastOnce()).update(any(), wrapper.capture());
+        boolean hasClear = wrapper.getAllValues().stream()
+                .anyMatch(w -> String.valueOf(w.getSqlSet()).contains("error_message"));
+        assertTrue(hasClear, "成功路径必须有一条 update 显式设置 error_message(NULL)");
+        // ② 内存对象状态已置成功(回显)
+        assertEquals(2, d.getStatus());
+        assertEquals(1, d.getChunkCount());
     }
 }
