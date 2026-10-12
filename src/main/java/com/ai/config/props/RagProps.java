@@ -22,8 +22,13 @@ public class RagProps {
     private String collectionName = "rag_knowledge_base";
     /** 检索 Top-K */
     private int topK = 5;
-    /** 相似度阈值: 该 embedding 模型分数量级偏低, 默认 0.45 避免误杀正确 chunk(上调前须用 /api/ai/rag/search 观察真实分数分布) */
-    private double similarityThreshold = 0.45;
+    /**
+     * 相似度阈值: 证据门槛。2026-10-13 用 qwen3.7-text-embedding-flash + 全库重嵌入后定标
+     * (正答 24 条 min=0.499 / 无关 20 条 max=0.369, 间隙 [0.37,0.50] 内取偏正答侧):
+     * 旧默认 0.45 是旧模型时代"踩一例反例"定的, flash 分数轴整体下移后正答余量仅 0.049,
+     * 已实测误拒两例(数据出境 0.401 / 绩效处理 0.413)。调整前必须重新观察分布(见 flow-map §11)。
+     */
+    private double similarityThreshold = 0.43;
     /** 注入上下文字符上限 */
     private int contextMaxChars = 8000;
     /**

@@ -481,7 +481,9 @@ flowchart TD
 `RagContextRenderer`，元数据口径集中在 `DocumentMeta`。接入真实重排模型（roadmap D3）＝新增一个
 `RerankStrategy` 实现，`RerankStrategyFactory` 按 `mode()` 自动收录，编排层零改动。
 
-阈值提醒：`similarity-threshold` 默认 0.45，该 embedding 模型分数量级偏低（正确块常 0.5~0.6），**上调到 0.6 会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
+阈值提醒：`similarity-threshold` 默认 **0.43**（2026-10-13 P3-6 定标, 见下）。该 embedding 模型分数量级偏低，**上调会误杀正确答案**——调整前必须用 `/api/ai/rag/search` 看真实分布。
+
+**P3-6 定标记录（2026-10-13, qwen3.7-text-embedding-flash + 全库重嵌入 + 冷缓存）**：正答 26 条(其中 2 条当时被旧阈值 0.45 误拒)分数带 [0.499, 0.811]，无关 20 条 max=0.369——两组无重叠，间隙 [0.37, 0.50]；取偏正答侧的 **0.43**（两侧各留 ≥0.05 余量; 旧 0.45 距最险正答仅 0.049, 已实测误拒"数据出境审批"0.401/"绩效处理"0.413）。语料变更或换 embedding 模型后须重跑此采集再定标。
 
 **父块展开（2026-10-08 起, 父子文档/小-大检索）**：阈值过滤之后执行 `expandToParents`——召回/排序/阈值/出口判据全部按小块分数(semanticMaxScore 读未展开值)，只有注入给模型的文本换成父块全文（`toSources` 来源展示仍指向命中小块）；父块缺失/读取失败一律回退小块原文。父块来自 `knowledge_chunk` 表，由入库层在结构策略产 `_parent_seq` 时聚合写入。
 **预算感知分级展开（2026-10-09）**：展开按 RAG 段 Token 预算（与装配层共用 `ContextProps.ragTokenBudget()`，默认 2676）按重排顺序消耗——预算够装整父块→整父块；不够但够装命中小块附近窗口（以小块原文 `indexOf` 在父块内定位，两侧各 `app.rag.parent-window-chars`(500) 字符、对齐行边界）→窗口；再不够→回退小块原文。彻底解决"超大父块吃光预算、其余命中被渲染层硬切/挤占"；渲染层 `RagContextRenderer` 保留为最终防线。
