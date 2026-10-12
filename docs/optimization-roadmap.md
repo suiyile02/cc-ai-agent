@@ -188,6 +188,12 @@
   无关问题（天气/写诗）仍不进知识库作答（出口判据不回退）。
 - **附带项**：排查 `documentId=null` 的向量点（早期入库或 reprocess 漏写 `doc_id`）——它使两路同一分块
   无法按 `doc_id:chunk_index` 去重，白占 Top-K 名额。
+  **进展(2026-10-12)**：BM25 重建键位漂移已修复(`KeywordIndex.addDocumentLocked` 改取 metadata `chunk_index`)，
+  但线上实测确认 **Qdrant 语义路 Document 的 `getDocId()` 为 null**(检索日志显示 `[null:3 cos=…]`，
+  而 BM25 合成 Document 有 doc_id)——键位对齐后 RRF 仍无法合并两路同块，同一"年假规定"在注入 Top-5 里
+  出现两次(仅词面版 fused=0.927 + 纯语义版 fused=0.82)，重复挤占名额。**下一步先查 Qdrant 点 payload 是否
+  真有 doc_id(有则为本实现读取口径问题，无则为早期入库缺字段需回填/重处理)**；修好后本条"仅词面排前"的量纲
+  缺陷仍是独立待办(方案③最简单且与出口判据同口径)。
 
 ### P3-8 联网搜索工具（"外部作答"出口的真实实现；触发条件：确需实时外部信息 且 部署允许出网）
 
