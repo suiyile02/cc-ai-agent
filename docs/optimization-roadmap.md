@@ -397,6 +397,8 @@ FileStorageServiceTest 4 例(已知向量/两入口/内容差异/友好失败), 
 
 - `MdStructureChunker`(md-structure): Markdown 按标题(#~####)切节, 标题保留在节首(检索语境);
   超长节用标点回退再切; 无标题文本退化为单节; 不丢内容。
+  **【已被替代→2026-10-12】**"每个标题独立成节"产生零正文光杆标题块(占召回名额/喂不出内容/BM25 短块分数虚高),
+  已改为只在最浅标题层级断节、次级标题连正文并入大节——见 flow-map §11 与本文件 P3-10 附近记录。
 - `CodeLineChunker`(code-line): 代码按空行/缩进块切分——相邻顶层行合并(纯脚本不切碎)、
   空行分隔开新块、缩进体结束回顶层开新块, 保函数/类边界; 超长块再切。
 - 共享工具抽取: 标点回退切分抽成 `RecursivePunctuationSplitter`(ChineseRecursiveChunker 与新策略共用,

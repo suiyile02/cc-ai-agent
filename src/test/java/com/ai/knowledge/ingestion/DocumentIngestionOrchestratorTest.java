@@ -129,19 +129,19 @@ class DocumentIngestionOrchestratorTest {
 
         service.ingestDocument(1L);
 
-        // ① 三个小节 → 三个父块(父块文本 = 同节小块拼接, 含标题)
+        // ① 顶级(#)断节、次级(##)并入 → 两个父块(父块文本 = 同节小块拼接, 含标题)
         Map<Integer, String> parents = capturedParents.get(1L);
         assertNotNull(parents, "结构策略必须触发父块写入");
-        assertEquals(3, parents.size(), "三个小节三个父块");
+        assertEquals(2, parents.size(), "两个 # 节两个父块(## 小节并入第一章)");
         assertTrue(parents.get(0).contains("# 第一章 总则") && parents.get(0).contains("这是总则内容。"),
                 "父块 0 = 第一章整节");
-        assertTrue(parents.get(1).contains("## 1.1 适用范围") && parents.get(1).contains("适用于全体员工。"),
-                "父块 1 = 1.1 节");
-        assertTrue(parents.get(2).contains("# 第二章 附则"), "父块 2 = 第二章");
+        assertTrue(parents.get(0).contains("## 1.1 适用范围") && parents.get(0).contains("适用于全体员工。"),
+                "二级标题连正文并入第一章父块(零正文标题块已消除)");
+        assertTrue(parents.get(1).contains("# 第二章 附则"), "父块 1 = 第二章");
 
         // ② 向量库收到的小块: 带 parent_ref(指向父块), 不带内部键 _parent_seq
         List<Document> chunks = addedChunks.get(0);
-        assertEquals(3, chunks.size());
+        assertEquals(2, chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
             Map<String, Object> md = chunks.get(i).getMetadata();
             assertEquals(i, md.get("parent_ref"), "第 " + i + " 小块的 parent_ref 应为节序号 " + i);
@@ -155,7 +155,7 @@ class DocumentIngestionOrchestratorTest {
         assertTrue(parents.get(0).contains(chunks.get(0).getText()),
                 "父块必须包含命中小块原文");
         assertEquals(2, d.getStatus(), "入库完成状态");
-        assertEquals(3, d.getChunkCount());
+        assertEquals(2, d.getChunkCount());
         assertNull(d.getErrorMessage());
         // ④ 全文留档: 入库成功必须把提取清洗后的全文写进 knowledge_document.full_text
         assertNotNull(d.getFullText(), "入库成功必须留档全文");

@@ -189,7 +189,8 @@ com.ai
   无 if-else) + **兜底策略恒存在**(fallback, 未配置 MIME 永不 miss) + `MimeResolver`(Tika 探测内容类型,
   不可判定回退扩展名) + `ChunkingConfigValidator`(启动校验: fallback 必配、引用不存在的策略名 **拒绝启动**
   ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100)、`recursive-cn`(中文标点多级回退 + overlap)、
-  `md-structure`(Markdown 按标题切节, 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
+  `md-structure`(Markdown **按最浅标题层级断节**(首标题前有引言时以 # 为界), 次级标题连同正文并入大节——
+  杜绝零正文光杆标题块; 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
   相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)、`table-row`(表格一行一块: 列名内嵌进行文本
   `列名=值`(表头不单独成块, 裸行脱离表头语义为零), 行组为父块; CSV/TSV 走分隔符嗅探 + RFC4180 引号解析,
   Excel(xls/xlsx)按 sheet 名单/`\t` 前缀行形状解析, 多 sheet 逐表处理)、`code-ast`(tree-sitter 按**声明边界**

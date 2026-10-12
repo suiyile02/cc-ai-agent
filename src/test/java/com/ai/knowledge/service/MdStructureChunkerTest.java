@@ -35,12 +35,12 @@ class MdStructureChunkerTest {
         String md = "# 第一章 总则\n这是总则内容。\n\n## 1.1 适用范围\n适用于全体员工。\n\n### 1.1.1 细则\n细则内容。";
         List<Document> chunks = split(md);
 
-        assertTrue(chunks.size() >= 3, "按标题应切出至少 3 节");
-        // 每个标题行保留在所属节首(语境携带)
-        String joined = String.join("\n", chunks.stream().map(Document::getText).toList());
-        assertTrue(joined.contains("# 第一章 总则\n这是总则内容。"), "标题应与其正文在同一节");
-        assertTrue(joined.contains("## 1.1 适用范围\n适用于全体员工。"), "二级标题节");
-        assertTrue(joined.contains("### 1.1.1 细则\n细则内容。"), "三级标题节");
+        // 只在最高层级标题断节: 本例全部归入 # 一级节(次级标题连正文并入)
+        assertEquals(1, chunks.size(), "非顶级标题不再独立成节");
+        String text = chunks.get(0).getText();
+        assertTrue(text.contains("# 第一章 总则\n这是总则内容。"), "标题应与其正文在同一节");
+        assertTrue(text.contains("## 1.1 适用范围\n适用于全体员工。"), "二级标题连正文并入同一父块");
+        assertTrue(text.contains("### 1.1.1 细则\n细则内容。"), "三级标题连正文并入同一父块");
     }
 
     @Test
@@ -82,11 +82,67 @@ class MdStructureChunkerTest {
         String md = "# h1\n内容1。\n## h2\n内容2。\n### h3\n内容3。\n#### h4\n内容4。";
         List<Document> chunks = split(md);
 
-        assertTrue(chunks.size() >= 4, "1~4 级标题都应被识别为节边界");
+        // 顶级(#/无标题前缀)断节; 次级标题全部并入所在大节——识别≠断节
+        assertTrue(chunks.size() >= 1, "至少成节");
         String joined = String.join("\n", chunks.stream().map(Document::getText).toList());
         for (String h : new String[]{"# h1", "## h2", "### h3", "#### h4"}) {
             assertTrue(joined.contains(h), "标题应保留: " + h);
         }
+    }
+
+    /* ---------------- 零正文标题块消除(2026-10-12 检索质量修复) ---------------- */
+
+    /**
+     * 线上事故回归: 旧规则让 ## 章标题独立成节 → 光杆标题块既占召回名额又喂不出内容,
+     * 且短块在 BM25(B=0.75 长度归一)下分数虚高, "问章节"类查询的 Top-K 被标题刷满。
+     * 新规则只在最浅层级标题断节, 任何父块都必须含正文。
+     */
+    @Test
+    void chapterHeadingNeverFormsBareSection() {
+        String md = """
+                # 《员工手册》示例知识库文档（V1.0）
+
+                ## 第 1 章 考勤与休假制度
+
+                ### 1.1 工作时间
+                公司实行标准工时制：周一至周五 9:00-18:00，午休 12:00-13:30。
+
+                ### 1.2 年假规定
+                入职满 1 年不满 10 年的员工，每年享有 5 天带薪年假。
+
+                ## 第 2 章 薪酬与报销
+
+                ### 2.1 发薪日
+                每月 10 日发放上月工资。
+                """;
+        List<Document> chunks = split(md);
+
+        // 父块聚合视角: 同 _parent_seq 拼接后不得出现"只有标题"的节
+        java.util.Map<Integer, StringBuilder> parents = new java.util.TreeMap<>();
+        for (Document c : chunks) {
+            int seq = parentSeq(c);
+            parents.computeIfAbsent(seq, k -> new StringBuilder()).append(c.getText()).append('\n');
+        }
+        for (var e : parents.entrySet()) {
+            String[] lines = e.getValue().toString().trim().split("\n");
+            boolean headingOnly = lines.length == 1 && lines[0].startsWith("#");
+            assertTrue(!headingOnly, "父块 " + e.getKey() + " 是零正文标题块: " + lines[0]);
+        }
+        // 最浅层级(##)断节 → 每章一个父块; 封面 # 行并入第一节
+        assertEquals(2, parents.size(), "最浅标题层级是 ## → 两个章父块");
+        assertTrue(parents.get(0).toString().contains("### 1.1 工作时间"));
+        assertTrue(parents.get(0).toString().contains("公司实行标准工时制"), "章标题连正文同父块");
+    }
+
+    /** 无封面引言、以 # 直接开头的文档: # 成为断节层级, ## 仍并入其下。 */
+    @Test
+    void topLevelIsShallowestHeadingWhenNoPreamble() {
+        String md = "# 第 1 章 考勤\n\n## 1.1 工作时间\n朝九晚六。\n\n# 第 2 章 薪酬\n\n## 2.1 发薪\n每月十日。";
+        List<Document> chunks = split(md);
+
+        assertEquals(2, chunks.size(), "两个 # 节(## 并入其中)");
+        assertTrue(chunks.get(0).getText().contains("## 1.1 工作时间\n朝九晚六。"));
+        assertTrue(chunks.get(1).getText().contains("## 2.1 发薪"));
     }
 
     /* ---------------- 父子文档(小-大检索): 小节序号 = 父块序号 ---------------- */
@@ -102,8 +158,8 @@ class MdStructureChunkerTest {
         String md = "# 甲\n甲正文。\n\n## 乙\n乙正文。\n\n# 丙\n丙正文。";
         List<Document> chunks = split(md);
 
-        assertEquals(3, chunks.size(), "三个短节各成一块");
-        assertEquals(List.of(0, 1, 2), chunks.stream().map(MdStructureChunkerTest::parentSeq).toList(),
+        assertEquals(2, chunks.size(), "顶级断节: # 甲(含 ## 乙)与 # 丙 两节");
+        assertEquals(List.of(0, 1), chunks.stream().map(MdStructureChunkerTest::parentSeq).toList(),
                 "父块序号按节出现顺序编号(入库层据此拼父块)");
     }
 
