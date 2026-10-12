@@ -44,12 +44,18 @@ public class RagProps {
      */
     private boolean hybridEnabled = true;
     /**
-     * 重排模式：score=分数融合重排(默认, 语义相似度+BM25 归一化加权)；
-     * api=调用专用重排模型(DashScope 文本排序接口, 失败自动回退 score)；
+     * 重排模式：score=分数融合重排(语义相似度+BM25 归一化加权)；
+     * api=调用专用重排模型(DashScope 文本排序接口, 失败自动回退 score, **当前默认**)；
      * llm=让对话大模型排序(需要模型可用, 失败自动回退 score)；
      * none=只做 RRF 排序、不做分数融合。
+     *
+     * <p><b>2026-10-13 默认由 score 切 api</b>：离线评测(`docs/eval/rag_eval.py`, P3-6 定标集 23 题)
+     * 显示 Top-1 命中 19/23 → 22/23, Top-3/Top-5 不变(23/23), 无关题误判 grounded 仍为 0。
+     * 代价是每轮多一次外部调用(实测 ~200-500ms, 在 3s 超时与 10s 检索预算内)与按条计费;
+     * 端点不可用时 `DashScopeReranker` 自动回退 score, 不会让本轮无上下文。
+     * 若成本/延迟不可接受, 改回 {@code score} 即可(评测数据与回退路径均已留存)。
      */
-    private String rerankMode = "score";
+    private String rerankMode = "api";
     /**
      * 重排服务地址({@code rerank-mode=api} 时使用), <b>填到 host(可带前缀)、不含排序路径</b>。
      *

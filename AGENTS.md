@@ -189,7 +189,9 @@ com.ai
   无 if-else) + **兜底策略恒存在**(fallback, 未配置 MIME 永不 miss) + `MimeResolver`(Tika 探测内容类型,
   不可判定回退扩展名) + `ChunkingConfigValidator`(启动校验: fallback 必配、引用不存在的策略名 **拒绝启动**
   ——防"YAML 引用漂移静默落兜底")。现有策略: `fallback`(TokenTextSplitter 512/100)、`recursive-cn`(中文标点多级回退 + overlap)、
-  `md-structure`(Markdown **按最浅标题层级断节**(首标题前有引言时以 # 为界), 次级标题连同正文并入大节——
+  `md-structure`(Markdown **按最浅标题层级断节**(首标题前有引言时以 # 为界; **封面单标题识别**: 最浅标题
+  唯一且在首个非空白行、其下一层出现 ≥2 次时改用下一层断节, 封面行并入第一章——"封面 # + 多个 ## 章"的
+  手册因此按章成父块, 不再整篇挤成单一超大父块), 次级标题连同正文并入大节——
   杜绝零正文光杆标题块; 超长节标点回退再切)、`code-line`(代码按空行/缩进块切分, 保函数边界;
   相邻顶层行合并、空行分隔开新块、缩进体结束回顶层开新块)、`table-row`(表格一行一块: 列名内嵌进行文本
   `列名=值`(表头不单独成块, 裸行脱离表头语义为零), 行组为父块; CSV/TSV 走分隔符嗅探 + RFC4180 引号解析,
@@ -245,11 +247,25 @@ com.ai
 - **入库失败的三道防线(2026-10-10)**: ① `IngestionFailureMessages.of` 兜底映射——解析不出文本/乱码/嵌入失败(DashScope 批量 400/限流/密钥/余额等特征子串)一律中文; ② 嵌入**分批按条数 ≤20**(`config/CountBatchingStrategy` 覆盖 Spring AI 默认按 token 分批的 `TokenCountBatchingStrategy`——默认只看 token, 文档切成几十小块时整批一次发过去被 DashScope 拒 400 `batch size is invalid`), 由 `ContextConfig.batchingStrategy()` `@Bean @ConditionalOnMissingBean` 注入进 QdrantVectorStore; ③ 向量化/注册失败时 `DocumentIngestionOrchestrator` 清理本次已写父块(`parentsWritten` 标记 + catch 里 `deleteByDocId`), 杜绝"文档置失败但父块残留可被 expandToParents 取到"的脏状态。
 - **error_message 清空必须显式置 NULL(2026-10-12)**: `markProcessing`/`markDone` 里 `setErrorMessage(null)` 不会落库——MyBatis-Plus `updateById` 默认忽略 null 字段(FieldStrategy.NOT_NULL), 导致"错误文档重处理成功(status=2/chunk 更新)但旧错误永久残留"(生产实测 400 错误挂在已完成文档上)。修复: 成功/处理中路径用 `documentMapper.update(null, new UpdateWrapper<>().eq("id",...).set("error_message", null))` 显式置 NULL。注意用**字符串 UpdateWrapper 而非 LambdaUpdateWrapper**——纯 Mockito 测试无 TableInfo 缓存, lambda 解析会抛异常(项目既有坑, ParentBlockStoreImpl 同款)。`DocumentIngestionOrchestratorTest#successfulIngestionExplicitlyClearsErrorMessage` 钉住(已在旧 bug 代码上验证会红)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
-- 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
+- **全库重建入口(2026-10-13)**: `POST /api/knowledge/reindex-all`(管理员, `KnowledgeDocumentService.reindexAll`)——
+  逐篇按"重新处理"语义重灌(清旧向量/父块/BM25 → 异步入库), 供切分策略/嵌入模型变更后一次性生效,
+  替代手工逐篇点"重新处理"(曾因漏篇且无记录, 出现"改了切块但表现不变"的循环排查)。语义: 跳过
+  status=1(处理中, 避免与在跑任务竞争), 逐篇独立提交、单篇失败仅 WARN 跳过, 不做事务包裹(批处理编排,
+  各步幂等; `ingestAfterCommit` 无事务时直接触发异步)。响应只表示"已提交", 完成看列表 status/chunk_count。
+  `reprocess` 与 `reindexAll` 共用单篇重置体 `resetForIngest`; 架构测试的正则已扩容覆盖 `reindexAll`。
+- 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars`(**默认 7**, 2026-10-13 由 6 上调——
+  6 字基本是名词短语, 实测"信息安全要求"原样检索 0.4151 不过阈值被拒答、扩展后 0.4771 命中正确文档;
+  8 字以上完整问句扩展后普遍略降故不放宽)才触发, 补全成完整检索句)
   -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25; 语义过取 `max(topK*3,15)`、
-  关键词过取 `max(topK*2,10)`) -> RRF -> 重排(`score`/`api`/`llm`/`none`) -> **证据分层取数**
-  -> **相似度阈值过滤** -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门
-  (连旧"工具轮跳过检索"的成本短路也已废除), 详见 P3-7 与"已完成记录(2026-10-04)"。
+  关键词过取 `max(topK*2,10)`) -> RRF -> 重排(`score`/`api`/`llm`/`none`, **默认 `api`**)
+  -> **证据分层取数** -> **相似度阈值过滤** -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。
+  意图路由不再是链路入口的闸门(连旧"工具轮跳过检索"的成本短路也已废除), 详见 P3-7 与"已完成记录(2026-10-04)"。
+- **重排模式默认 `api`(2026-10-13)**: `qwen3.7-text-rerank` 真 cross-encoder 重排, 离线评测
+  (`docs/eval/rag_eval.py`, P3-6 定标集 23 题)Top-1 命中 **19/23 → 22/23**, Top-3/Top-5(23/23)与
+  无关题误判 grounded(0)均不变; 代价为每轮一次外部调用(实测在 3s 超时与 10s 检索预算内)与按条计费。
+  端点不可用/超时自动回退 `score`(见 `DashScopeReranker` 类注释), 改回 `score` 只需改
+  `RagProps.rerankMode` 一行(评测数据与回退路径均已留存)。**改切块/嵌入模型/阈值/重排后必须复跑该评测脚本**,
+  用同一套问题与指标对比, 替代"改完凭感觉看几个问题"的循环。
 - **阈值判定刻意排在重排之后**(召回层与阈值完全无关): 先过滤会让"余弦分偏低但确实答得上"的候选
   (第 6 名那类)连被重排捞一次的机会都没有——这正是"调试页查得到、对话却答无据"的成因之一。
   出口判据读的是 `semanticMaxScore`(未截断的观察值), 因此**移动过滤时机不改变出口结论**, 只改变注入内容;

@@ -11,6 +11,7 @@ import com.ai.config.AppProperties;
 import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
+import com.ai.knowledge.dto.ReindexAllVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
@@ -252,6 +253,57 @@ public class KnowledgeDocumentService {
         if (doc.getStatus() == 1) {
             throw new BusinessException(ErrorCode.DOCUMENT_PROCESSING);
         }
+        resetForIngest(doc);
+    }
+
+    /**
+     * 全库重建：逐篇按 reprocess 语义重灌（清旧向量/父块/关键词索引 → 异步入库）。
+     *
+     * <p><b>为什么需要</b>：切分策略或嵌入模型变更后，旧向量与旧切块结构不会自动更新——
+     * 此前只能手工逐篇点"重新处理"，容易漏、且无记录（曾因此出现"改了切块但表现不变"的
+     * 循环排查）。本入口一次性提交全部候选文档，替代手工操作。
+     *
+     * <p><b>语义边界</b>：① 跳过 status=1(处理中)的文档，避免与在跑的入库任务竞争；
+     * ② 逐篇独立提交，单篇异常仅 WARN 跳过、不影响其余；③ 异步入库在后台进行，
+     * 本方法返回的是"已提交"数——真实完成看列表页 status/chunk_count；
+     * ④ 不做事务包裹（这是批处理编排，非单一原子写）：每篇的清理步骤各自幂等，
+     * 且 {@code ingestAfterCommit} 在无事务时直接触发异步入库，行为与逐篇 reprocess 一致。
+     *
+     * @return 已提交/候选文档数
+     */
+    @RequireAdmin
+    public ReindexAllVO reindexAll() {
+        // SQL 侧排除 status=1: 避免拉取在写入库任务的 full_text 大字段; Java 侧再兜一层(正确性边界)
+        List<KnowledgeDocument> docs = documentMapper.selectList(
+                new LambdaQueryWrapper<KnowledgeDocument>()
+                        .ne(KnowledgeDocument::getStatus, 1));
+        int candidates = 0;
+        int submitted = 0;
+        for (KnowledgeDocument doc : docs) {
+            if (doc.getStatus() != null && doc.getStatus() == 1) {
+                continue; // 处理中的不得重置: 会与在跑的入库任务竞争同一文档
+            }
+            candidates++;
+            try {
+                resetForIngest(doc);
+                submitted++;
+            } catch (Exception e) {
+                log.warn("全库重建: 文档 {} 提交失败, 跳过: {}", doc.getId(), e.getMessage());
+            }
+        }
+        log.info("全库重建已提交: {}/{} 篇(异步入库中, 完成看文档列表状态)", submitted, candidates);
+        return new ReindexAllVO(submitted, candidates);
+    }
+
+    /**
+     * 清旧产物 + 置待处理 + 触发异步入库（reprocess 与 reindexAll 共用的单篇重置体）。
+     *
+     * <p>不含事务注解：由 {@link #reprocess} 的事务边界或 {@link #reindexAll} 的批处理循环负责。
+     * 各步骤幂等（删不存在的向量点/父块为无操作），因此无事务时逐篇自提交也是安全的。
+     *
+     * @param doc 目标文档（调用方已完成状态校验）
+     */
+    private void resetForIngest(KnowledgeDocument doc) {
         deleteVectorPoints(doc.getId());
         keywordIndex.removeDocument(doc.getId()); // 重处理成功后再由入库流程重建
         parentBlockStore.deleteByDocId(doc.getId()); // 清旧父块, 入库成功后再重建
@@ -260,7 +312,8 @@ public class KnowledgeDocumentService {
             try {
                 doc.setFileHash(fileStorageService.sha256Hex(doc.getStoragePath()));
             } catch (Exception e) {
-                log.warn("重处理补填 file_hash 失败(忽略, 不参与判重): id={}, err={}", id, e.getMessage());
+                log.warn("重处理补填 file_hash 失败(忽略, 不参与判重): id={}, err={}",
+                        doc.getId(), e.getMessage());
             }
         }
         doc.setStatus(0);
@@ -268,7 +321,7 @@ public class KnowledgeDocumentService {
         doc.setErrorMessage(null);
         documentMapper.updateById(doc);
         semanticAnswerCache.evictAll(); // 知识库变更 → 语义缓存全部失效(P3-3)
-        // 事务提交后再触发异步入库(与 upload 同理)
+        // 事务提交后再触发异步入库(与 upload 同理); 无事务时(全库重建)直接触发
         ingestAfterCommit(doc.getId());
     }
 

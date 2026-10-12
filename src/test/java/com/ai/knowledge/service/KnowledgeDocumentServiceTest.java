@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -260,5 +261,50 @@ class KnowledgeDocumentServiceTest {
         assertEquals(0, d.getStatus());
         assertEquals(0, d.getChunkCount());
         verify(ingestionService).ingestDocument(6L); // 无活动事务 → 直接触发异步入库
+    }
+
+    /* ---------------- 全库重建(切块策略/嵌入模型变更后一次性重灌) ---------------- */
+
+    @Test
+    void reindexAllResetsEveryCandidateAndSkipsInFlightDocs() {
+        KnowledgeDocument a = completedDoc(7L);
+        a.setFileHash("hash-a"); // 跳过补填判重键分支
+        KnowledgeDocument b = completedDoc(8L);
+        b.setFileHash("hash-b");
+        KnowledgeDocument inFlight = completedDoc(9L);
+        inFlight.setStatus(1); // 处理中: 不得重置(会与在跑的入库任务竞争同一文档)
+        when(documentMapper.selectList(any())).thenReturn(List.of(a, b, inFlight));
+
+        var vo = service.reindexAll();
+
+        assertEquals(2, vo.submitted(), "两篇已完成提交重建");
+        assertEquals(2, vo.total(), "处理中的不计入候选");
+        verify(parentBlockStore).deleteByDocId(7L);
+        verify(parentBlockStore).deleteByDocId(8L);
+        verify(parentBlockStore, never()).deleteByDocId(9L); // 处理中的零触碰
+        assertEquals(0, a.getStatus());
+        assertEquals(0, b.getStatus());
+        assertEquals(1, inFlight.getStatus(), "处理中的状态不得被重置");
+        verify(ingestionService).ingestDocument(7L);
+        verify(ingestionService).ingestDocument(8L);
+        verify(ingestionService, never()).ingestDocument(9L);
+    }
+
+    @Test
+    void reindexAllContinuesWhenOneDocumentFails() {
+        KnowledgeDocument bad = completedDoc(8L);
+        bad.setFileHash("hash-bad");
+        KnowledgeDocument ok = completedDoc(7L);
+        ok.setFileHash("hash-ok");
+        when(documentMapper.selectList(any())).thenReturn(List.of(bad, ok));
+        doThrow(new IllegalStateException("qdrant down"))
+                .when(parentBlockStore).deleteByDocId(8L);
+
+        var vo = service.reindexAll();
+
+        assertEquals(2, vo.total(), "失败篇仍计入候选数");
+        assertEquals(1, vo.submitted(), "单篇失败只跳过该篇, 不影响其余");
+        verify(ingestionService).ingestDocument(7L);
+        verify(ingestionService, never()).ingestDocument(8L); // 失败篇不得触发入库
     }
 }

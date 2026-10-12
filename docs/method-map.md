@@ -237,7 +237,7 @@
 | `rewrite(sessionId,sessionType,userMessage)` | 指代消解：非 AGENT + 有历史 + 含线索词 + 未冷却 才调 `CompressionQueryTransformer`；失败/超时回退原问题 |
 | `resolveTransformer()` | 注入优先，否则按 ChatClient 可用性惰性构建 |
 | `containsReferenceHint(message)` | 线索词表判定（`app.context.query-rewrite.reference-hints`） |
-| `ShortQueryExpander.expand(sessionType,query)` ★新增 | 短查询扩展：去空白后 < `short-query.min-chars` 才调模型补全成完整检索句；AGENT 会话跳过；超时/失败/空/等同原句一律回退（WARN 节流） |
+| `ShortQueryExpander.expand(sessionType,query)` ★新增 | 短查询扩展：去空白后 < `short-query.min-chars`（**默认 7**，2026-10-13 由 6 上调——6 字基本是名词短语，实测"信息安全要求"原样 0.4151 不过阈值、扩展后 0.4771 命中正确文档）才调模型补全成完整检索句；AGENT 会话跳过；超时/失败/空/等同原句一律回退（WARN 节流） |
 | `ShortQueryExpander.complete(prompt)` | 模型调用（包私有作测试替换点），注入 `enable_thinking=false` |
 | `ShortQueryExpander.sanitize(raw,maxChars)` | 清洗：取首行、去引号与"补全后："前缀、按上限截断 |
 
@@ -311,12 +311,13 @@
 
 | 类 | 方法 | 作用 |
 |---|---|---|
-| `KnowledgeController` | `upload` / `uploadBatch` / `listDocuments` / `deleteDocument` / `reprocess` | 端点 8~12；**Controller 层无 `@Require*`**，删除/重处理的 `@RequireAdmin` 挂在 Service（见 flow-map §22） |
+| `KnowledgeController` | `upload` / `uploadBatch` / `listDocuments` / `deleteDocument` / `reprocess` / `reindexAll` | 端点 8~12 + `/reindex-all`；**Controller 层无 `@Require*`**，删除/重处理/全库重建的 `@RequireAdmin` 挂在 Service（见 flow-map §22） |
 | `KnowledgeDocumentService` | `upload(file,userId)` | §6 校验链 → 落盘 → `status=0` 落库 → 事务后触发入库 |
 | | `uploadBatch(files,userId)` | 逐文件走同一链，部分失败语义 |
 | | `listDocuments(pageNum,pageSize,…)` | 分页 + `status`/关键字过滤，返回 VO |
 | | `deleteDocument(id)` | 清向量 → 清关键词索引 → 清父块 → 删记录 → 尽力删文件 |
 | | `reprocess(id)` | 清旧向量与索引 + 清旧父块 + 状态重置 → 重新入库 |
+| | `reindexAll()` ★新增 | 全库重建(管理员)：逐篇按 reprocess 语义重灌, 跳过 status=1, 单篇失败仅 WARN; 返回 `ReindexAllVO(已提交, 候选)`; 与 reprocess 共用 `resetForIngest`; 供切分策略/嵌入模型变更后一次性生效 | Controller `/reindex-all` |
 | | `ingestAfterCommit(docId)` + `afterCommit()` | **事务提交后**再投 `@Async`（否则异步线程读不到未提交记录） |
 | | `requireDocument(id)` | 存在性校验（1004） |
 | | `deleteVectorPoints(documentId)` | 按 `doc_id` filter 精确删点（向量库不可用→记日志继续） |

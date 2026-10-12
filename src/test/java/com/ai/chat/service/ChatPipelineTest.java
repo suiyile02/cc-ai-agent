@@ -226,7 +226,7 @@ class ChatPipelineTest {
         assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(0).type());
         assertEquals("你", events.get(0).data());
         assertEquals(ChatStreamEvent.EventType.CONTENT, events.get(1).type());
-        verify(guardHandle, Mockito.atLeastOnce()).close(); // doFinally 释放名额
+        verify(guardHandle, Mockito.timeout(2000).atLeastOnce()).close(); // doFinally 释放名额
     }
 
     /**

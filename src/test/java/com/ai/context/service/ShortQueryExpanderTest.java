@@ -67,6 +67,19 @@ class ShortQueryExpanderTest {
         assertEquals("你们产品的定价和套餐分别是什么", r.query());
     }
 
+    /**
+     * 边界口径（2026-10-13 min-chars 6→7）：6 字名词短语必须扩展。
+     * 实测"信息安全要求"(6 字)原样检索 0.4151 不过阈值被拒答, 扩展后 0.4771 命中正确文档;
+     * 而 8 字以上完整问句扩展反而略降, 故边界定在 7。
+     */
+    @Test
+    void expandsSixCharNounPhraseAtNewBoundary() {
+        ShortQueryExpander.ExpandResult r = expanding("信息安全要求的保密性、完整性和可用性分别有哪些规定？")
+                .expand(SessionType.HYBRID, "信息安全要求");
+        assertTrue(r.expanded(), "6 字短语(去空白)在 min-chars=7 下应触发扩展");
+        assertEquals("信息安全要求的保密性、完整性和可用性分别有哪些规定？", r.query());
+    }
+
     @Test
     void skipsAgentSessionsAndDisabledSwitch() {
         assertFalse(expanding("x").expand(SessionType.AGENT, "产品").expanded(),

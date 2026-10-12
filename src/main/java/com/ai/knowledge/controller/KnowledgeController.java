@@ -7,6 +7,7 @@ import com.ai.common.Result;
 import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
+import com.ai.knowledge.dto.ReindexAllVO;
 import com.ai.user.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -108,6 +109,17 @@ public class KnowledgeController {
     public Result<Void> reprocess(@PathVariable Long id) {
         documentService.reprocess(id);
         return Result.ok("文档已重新提交处理");
+    }
+
+    /**
+     * 全库重建(管理员)：逐篇按"重新处理"语义重灌全部文档, 用于切分策略/嵌入模型变更后一次性生效,
+     * 替代手工逐篇点"重新处理"。异步入库在后台进行, 响应只表示"已提交"。
+     *
+     * @return 统一响应, data 为已提交/候选文档数
+     */
+    @PostMapping("/reindex-all")
+    public Result<ReindexAllVO> reindexAll() {
+        return Result.ok("全库重建已提交", documentService.reindexAll());
     }
 
     /**

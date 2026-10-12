@@ -128,13 +128,36 @@ class MdStructureChunkerTest {
             boolean headingOnly = lines.length == 1 && lines[0].startsWith("#");
             assertTrue(!headingOnly, "父块 " + e.getKey() + " 是零正文标题块: " + lines[0]);
         }
-        // 当前口径: 无前缀引言时最浅层级即封面 # → 整篇一个父块; 封面行与各章标题、
-        // 正文都在同一父块内, 不存在零正文标题块。小体量手册(本例/演示语料)下整篇注入可行。
-        // 【遗留·roadmap 第十八批】"封面 # + ## 章"的文档达到真实体量(数万字)后应改为按次浅层
-        // (##)分章——否则单父块超预算只能走窗口降级; 届时本断言与全库向量需一并重做。
-        assertEquals(1, parents.size(), "封面 # 为最浅层级 → 整篇一个父块(章级粒度改造见 roadmap 遗留项)");
+        // 封面单标题识别(2026-10-13): "封面 # + 多个 ## 章" → 按 ## 分章, 封面行并入第一章
+        assertEquals(2, parents.size(), "封面单 # 应被识别 → 按 ## 分章, 得两个章父块");
         assertTrue(parents.get(0).toString().contains("### 1.1 工作时间"));
         assertTrue(parents.get(0).toString().contains("公司实行标准工时制"), "章标题连正文同父块");
+        assertTrue(parents.get(0).toString().contains("《员工手册》"),
+                "封面标题行并入第一章, 不得独立成零正文封面块");
+        assertTrue(parents.get(1).toString().contains("### 2.1 发薪日"), "第二章独立成父块");
+    }
+
+    /**
+     * 封面单标题识别的边界: 最浅层出现 ≥2 次(不是封面而是真正的章标题)时维持原层级,
+     * 不误判为封面。否则会把 "# 第 1 章/# 第 2 章"这种规范文档错切到 ## 层。
+     */
+    @Test
+    void multipleTopLevelHeadingsAreNotTreatedAsCover() {
+        String md = "# 第 1 章 考勤\n\n## 1.1 工作时间\n朝九晚六。\n\n# 第 2 章 薪酬\n\n## 2.1 发薪\n每月十日。";
+        List<Document> chunks = split(md);
+
+        assertEquals(2, chunks.size(), "两个 # 章标题: 按 # 分节(## 并入其中), 不得下探到 ## 层");
+    }
+
+    /** 只有一个次级标题时不触发封面下探(下探无收益, 徒增分裂)。 */
+    @Test
+    void singleSubHeadingDoesNotTriggerCoverSplit() {
+        String md = "# 文档标题\n\n## 唯一小节\n正文内容。";
+        List<Document> chunks = split(md);
+
+        assertEquals(1, chunks.size(), "仅一个 ## 时不按封面规则下探, 维持整篇单节");
+        assertTrue(chunks.get(0).getText().contains("# 文档标题"));
+        assertTrue(chunks.get(0).getText().contains("## 唯一小节"));
     }
 
     /** 无封面引言、以 # 直接开头的文档: # 成为断节层级, ## 仍并入其下。 */
