@@ -14,8 +14,8 @@ import java.util.Map;
  */
 final class DocumentMeta {
 
-    /** 关键词命中转 Document 时的 id 前缀（与向量点 id 空间隔离） */
-    private static final String KEYWORD_ID_PREFIX = "kw-";
+    /** 关键词命中合成 Document 的 id 前缀(后接索引主键 {@code docId:chunkIndex}, 供检索日志回显键位) */
+    static final String KEYWORD_ID_PREFIX = "kw-";
     /** 来源展示片段长度上限 */
     private static final int SNIPPET_MAX_CHARS = 300;
 

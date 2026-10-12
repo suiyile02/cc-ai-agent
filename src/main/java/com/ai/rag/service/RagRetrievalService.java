@@ -113,8 +113,11 @@ public class RagRetrievalService implements RagRetriever {
             return RetrievalOutcome.none();
         }
         log.info("RAG 检索关键字: [{}]", query);
+        // ★ BM25 明细刻意在融合前打: RrfFuser 两路同块时保留语义路 Document, 合并后关键词路的
+        //   索引主键(id "kw-{docId}:{chunkIndex}")即丢失——重启重建后键位与 payload chunk_index
+        //   可能不一致(注册序 vs 原始序), 只有召回现场能暴露。
         log.info("语义检索命中 {} 段(阈值过滤前): {}", recall.semantic().size(), describe(recall.semantic()));
-        log.info("BM25 检索命中 {} 段: {}", recall.keyword().size(), describe(recall.keyword()));
+        log.info("BM25 检索命中 {} 段: {}", recall.keyword().size(), describeKeyword(recall.keyword()));
         // 关键词路只在 hybrid 开启且索引非空时才有内容, 故"有关键词命中"等价于历史的两路合并条件
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
@@ -142,9 +145,38 @@ public class RagRetrievalService implements RagRetriever {
             if (text.length() > 80) {
                 text = text.substring(0, 80) + "…";
             }
-            sb.append(String.format("%n  [%s:%d cos=%s kw=%s] %s",
+            // 父块展开后 text 已换成整节, chunkIndex 仍指命中小块——同时打印 parent_ref 便于键位核对
+            Object parentRef = d.getMetadata() == null ? null : d.getMetadata().get("parent_ref");
+            sb.append(String.format("%n  [%s:%d%s cos=%s kw=%s] %s",
                     DocumentMeta.docId(d), DocumentMeta.chunkIndex(d),
+                    parentRef == null ? "" : "/" + parentRef,
                     cos == null ? "-" : String.format("%.4f", cos),
+                    kw == null ? "-" : String.format("%.4f", kw),
+                    text));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * BM25 召回专用渲染: 显示索引内部主键 {@code docId:chunkIndex}(合成 id 的 {@code kw-} 后缀,
+     * 键位漂移的现场证据)与块首文本。{@link #describe} 用于语义/重排候选(那里的 chunk_index 是向量点元数据)。
+     */
+    private static String describeKeyword(List<Document> docs) {
+        if (docs == null || docs.isEmpty()) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Document d : docs) {
+            String id = d.getId() == null ? "" : d.getId();
+            String key = id.startsWith(DocumentMeta.KEYWORD_ID_PREFIX)
+                    ? id.substring(DocumentMeta.KEYWORD_ID_PREFIX.length()) : "-";
+            String text = d.getText() == null ? "" : d.getText().replace('\n', ' ');
+            if (text.length() > 80) {
+                text = text.substring(0, 80) + "…";
+            }
+            Double kw = DocumentMeta.keywordScore(d);
+            sb.append(String.format("%n  [key=%s kw=%s] %s",
+                    key,
                     kw == null ? "-" : String.format("%.4f", kw),
                     text));
         }

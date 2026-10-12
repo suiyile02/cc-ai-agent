@@ -488,7 +488,9 @@ flowchart TD
 
 **阈值只作用于语义一路，且在重排之后收口**：`HybridRecaller.recall` 不做任何阈值过滤（原样交出候选），过滤在 `RagRetrievalService.filterByThreshold`——排在重排之后是为了让低余弦分但可能答得上问题的候选先被重排捞一次。它只裁语义路低分（读 `metadata.semantic_score`，非 `doc.getScore()`——重排后 score 已被融合/相关度分占用），BM25-only 命中无语义分故不受约束、保留。出口判定读的是未截断的 `semanticMaxScore`，与过滤时机无关。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
 
-**检索过程 INFO 日志（2026-10-12）**：`doRetrieve` 内四处 `log.info` 输出排查用的中间态——检索关键字（扩展/改写后的实际检索句）、语义路过阈值前的全部召回、BM25 路召回、重排+Top-K 后的候选；每条候选渲染 `[doc_id:chunk_index cos=余弦分 kw=BM25分] ≤80字片段`（私有 `describe()`，缺分显示 `-`）。口径与既有"分段耗时必须打 INFO 日志"约定一致，禁止删除；注意父块展开发生在这些日志之后，日志里看到的是小块原文。
+**检索过程 INFO 日志（2026-10-12）**：`doRetrieve` 内四处 `log.info` 输出排查用的中间态——检索关键字（扩展/改写后的实际检索句）、语义路过阈值前的全部召回、BM25 路召回、重排+Top-K 后的候选；每条候选渲染 `[doc_id:chunk_index cos=余弦分 kw=BM25分] ≤80字片段`（私有 `describe()`，缺分显示 `-`）。口径与既有"分段耗时必须打 INFO 日志"约定一致，禁止删除；注意父块展开发生在这些日志之后，日志里看到的是小块原文。**BM25 那一路刻意在融合前用 `describeKeyword()` 打索引主键 `key=docId:chunkIndex`**——`RrfFuser` 两路同块时保留语义路 Document，合并后关键词路的合成 id（`kw-{key}`）即丢失，只有召回现场能暴露键位问题（见下）。
+
+**BM25 重建键位（2026-10-12 修复）**：`KeywordIndex.addDocumentLocked` 的索引主键改为**优先取分块 metadata 的 `chunk_index`**（缺失回退列表下标）。旧实现用注册列表下标当序号，而启动重建(`KeywordIndexRebuilder`)按 Qdrant 滚动顺序分组——下标 ≠ 原始序号，实测漂移（key=`76:12` 装着真序号 3 的年假块），后果是 RRF 两路去重对不上同一分块、注入内容重复。回归测试 `KeywordIndexTest#registersByMetadataChunkIndexNotListPosition`（已在旧代码验证会红）。⚠ **遗留**：两路都命中的块在 `ScoreFusionReranker` 里因量纲混用（BM25 原始分 vs 余弦×0.6）反而排在单路版本之后，注入重复段落——待修，见 roadmap。
 **阈值以 0 下发向量库、召回层不过滤**（`HybridRecaller.recall` 用 `similarityThreshold(0.0)`）：一旦让向量库先过滤，低于阈值的分块永不返回，日志里只见 ≥阈值的分数，
 分布被底部截断，据此定标必然得出"阈值还能再提高"的错误结论。每轮决策把**最大相似度**写入
 `rag_decision_log.semantic_max_score`，它是 P3-6 定标与 P3-7 相关性判据的唯一未截断观察值。

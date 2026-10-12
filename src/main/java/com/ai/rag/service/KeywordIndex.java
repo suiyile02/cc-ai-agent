@@ -80,8 +80,13 @@ public class KeywordIndex {
                 index++;
                 continue;
             }
-            String key = keyOf(docId, index);
-            chunksById.put(key, new Chunk(key, docId, fileName, index, text, text.length()));
+            // ★ 键位优先取分块自带的 chunk_index(入库/重建都携带), 缺失才用列表下标——
+            //   启动重建按 Qdrant 滚动顺序分组, 列表下标 ≠ 原始序号, 曾致索引主键与向量点元数据漂移
+            //   (实测 key=76:12 装着年假块而真序号是 3): RRF 两路去重对不上同一分块、来源展示指错块。
+            //   正常入库两条路径同值, 行为不变。
+            int position = chunkIndexOf(doc, index);
+            String key = keyOf(docId, position);
+            chunksById.put(key, new Chunk(key, docId, fileName, position, text, text.length()));
             totalChunkLength += text.length();
             keysByDoc.computeIfAbsent(docId, k -> new ArrayList<>()).add(key);
             for (String term : termsOf(text)) {
@@ -90,6 +95,22 @@ public class KeywordIndex {
             }
             index++;
         }
+    }
+
+    /** 读分块 metadata 的 chunk_index(Number 或数字串), 不可得时回退列表下标 pos。 */
+    private static int chunkIndexOf(Document doc, int pos) {
+        Object v = doc.getMetadata().get("chunk_index");
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        if (v != null) {
+            try {
+                return Integer.parseInt(v.toString().trim());
+            } catch (NumberFormatException ignored) {
+                return pos;
+            }
+        }
+        return pos;
     }
 
     /**
