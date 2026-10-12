@@ -13,6 +13,7 @@ import com.ai.rag.service.KeywordIndex;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Async;
@@ -65,15 +66,17 @@ public class DocumentIngestionOrchestrator {
             markProcessing(doc);
 
             // 解析限时(A2): 恶意/超复杂文档不再无限占用入库线程
+            // 先捕获全文(供 knowledge_document.full_text 留档, 也避免对同一文件重复解析)
+            Document fullText = textExtractor.extract(doc);
             ChunkedDocument chunked = Timeouts.call(
-                    () -> chunker.chunk(textExtractor.extract(doc), doc),
+                    () -> chunker.chunk(fullText, doc),
                     appProperties.getIngestion().getParseTimeoutMs());
             // 父块聚合必须在打标之前: 后者会把内部键 _parent_seq 转成正式 parent_ref,
             // 之后聚合已读不到键(曾因此在 markdown 用例里被"节序号==块序号"掩盖)
             Map<Integer, String> parents = chunked.producesParents()
                     ? parentAggregator.aggregate(chunked)
                     : Map.of();
-            parentBlockStore.replaceParents(doc.getId(), parents); // 覆盖写; 空 Map 也清历史父块
+            parentBlockStore.replaceParents(doc.getId(), doc.getFileName(), parents); // 覆盖写; 空 Map 也清历史父块
             parentsWritten = true;
             metadataEnricher.enrich(doc, chunked.chunks());
 
@@ -85,7 +88,7 @@ public class DocumentIngestionOrchestrator {
             // 多路召回: 关键词索引(BM25)与语义向量同步注册
             keywordIndex.addDocument(doc.getId(), doc.getFileName(), chunked.chunks());
 
-            markDone(doc, chunked.chunks().size(), parents.size());
+            markDone(doc, chunked.chunks().size(), parents.size(), fullText.getText());
         } catch (Exception e) {
             // 向量化/注册失败时清理本次已写父块: 否则文档置失败(3)但父块残留 knowledge_chunk,
             // 检索 expandToParents 仍可能取到这部分内容——"失败文档却可被检索"的脏状态
@@ -109,10 +112,11 @@ public class DocumentIngestionOrchestrator {
                 .set("error_message", null));
     }
 
-    /** 置完成(状态 2)+分块数; 存量行补填判重键(P3-9, 失败仅忽略不参与判重); 打完成日志。 */
-    private void markDone(KnowledgeDocument doc, int chunkCount, int parentCount) {
+    /** 置完成(状态 2)+分块数+全文留档; 存量行补填判重键(P3-9, 失败仅忽略不参与判重); 打完成日志。 */
+    private void markDone(KnowledgeDocument doc, int chunkCount, int parentCount, String fullText) {
         doc.setStatus(2);
         doc.setChunkCount(chunkCount);
+        doc.setFullText(fullText);
         // 存量行补填判重键(P3-9): 解析阶段已读取该文件, 顺手流式计算; 唯一索引冲突
         // (同内容存量并发补填)降级为不参与判重并 WARN, 不影响入库成功状态
         if (doc.getFileHash() == null) {

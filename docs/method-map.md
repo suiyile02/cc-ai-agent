@@ -318,7 +318,7 @@
 | | `requireDocument(id)` | 存在性校验（1004） |
 | | `deleteVectorPoints(documentId)` | 按 `doc_id` filter 精确删点（向量库不可用→记日志继续） |
 | | `toVO(d)` | 实体 → VO（含 `errorMessage` 友好化） |
-| `DocumentIngestionOrchestrator`（ingestion）★解耦 | `ingestDocument(docId)` | `@Async("ingestionExecutor")` 薄编排：只做生命周期(状态 0→1→2/3) + 串阶段(TextExtractor→DocumentChunker→ParentBlockAggregator→ChunkMetadataEnricher→向量入库→注册 BM25)；解析受 parse-timeout-ms 限时，异常统一转 status=3 友好文案(`IngestionFailureMessages.of`)；**向量化/注册失败时清理本次已写父块**(`parentsWritten` 标记 + `deleteByDocId`) |
+| `DocumentIngestionOrchestrator`（ingestion）★解耦 | `ingestDocument(docId)` | `@Async("ingestionExecutor")` 薄编排：只做生命周期(状态 0→1→2/3) + 串阶段(TextExtractor→DocumentChunker→ParentBlockAggregator→ChunkMetadataEnricher→向量入库→注册 BM25)；解析受 parse-timeout-ms 限时，异常统一转 status=3 友好文案(`IngestionFailureMessages.of`)；**向量化/注册失败时清理本次已写父块**(`parentsWritten` 标记 + `deleteByDocId`)；成功时把提取清洗后全文写入 `knowledge_document.full_text` |
 | `TextExtractor`（parsing）★新增 | `extract(doc)` | Tika 读 + `DocumentTextCleaner` 清洗 + 合并为单全文 Document；清洗后空则抛"解析不出有效文本" |
 | `DocumentChunker`（chunking）★新增 | `chunk(fullText,doc)` | `MimeResolver` 探测 + `ChunkingStrategyRouter` 路由 + `strategy.split`；空则抛同类异常；返回 `ChunkedDocument`(块 + 策略父块约定) |
 | `ParentBlockAggregator`（ingestion）★新增 | `aggregate(chunked)` | 按 `_parent_seq` 分组拼接小块成父块; **必须在打标之前**(否则内部键已被转走); 无标记小块不参与聚合(合法: code-ast 独立声明), 策略声明"每块必有父块"时缺标记记 WARN → `ParentBlockStore.replaceParents` |
@@ -330,7 +330,7 @@
 | | `checkZipBomb(file)` | 流式遍历 zip 条目：解压后 ≤512MB、条目 ≤5000 |
 | | `extensionOf(name)` | 小写无点扩展名 |
 | entity/mapper/dto | `KnowledgeDocument`(表 `knowledge_document`, `status` 0/1/2/3 + `error_message` 注释)、`KnowledgeDocumentMapper`、`KnowledgeChunk`(表 `knowledge_chunk`, 父块文本)、`KnowledgeChunkMapper`、`KnowledgeUploadVO`、`KnowledgeDocumentVO`、`BatchUploadResultVO` | 数据与响应载体 |
-| `ParentBlockStore` / `ParentBlockStoreImpl` ★新增 | `replaceParents(docId,parents)` / `findParents(docId,seqs)` / `deleteByDocId(docId)` | 父块存取契约(knowledge 根包, 与 `DocumentVisibility` 同模式)与实现(knowledge_chunk 表); 覆盖写=先删后插(防空父块 Map 也清历史); 写失败仅 WARN、读失败返回空(降级不中断入库/检索) | 入库聚合 / 检索展开 / 删除重处理 |
+| `ParentBlockStore` / `ParentBlockStoreImpl` ★新增 | `replaceParents(docId,fileName,parents)` / `findParents(docId,seqs)` / `deleteByDocId(docId)` | 父块存取契约(knowledge 根包, 与 `DocumentVisibility` 同模式)与实现(knowledge_chunk 表); 覆盖写=先删后插(防空父块 Map 也清历史); 每行冗余存 `file_name`(所属文档, 查父块免 join); 写失败仅 WARN、读失败返回空(降级不中断入库/检索) | 入库聚合 / 检索展开 / 删除重处理 |
 
 ---
 

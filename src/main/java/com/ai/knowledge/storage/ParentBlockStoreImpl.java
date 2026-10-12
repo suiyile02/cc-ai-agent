@@ -31,7 +31,7 @@ public class ParentBlockStoreImpl implements ParentBlockStore {
     private final WarnThrottle degraded = WarnThrottle.of(log);
 
     @Override
-    public void replaceParents(Long docId, Map<Integer, String> parents) {
+    public void replaceParents(Long docId, String fileName, Map<Integer, String> parents) {
         if (parents == null || parents.isEmpty()) {
             deleteByDocId(docId);
             return;
@@ -42,6 +42,7 @@ public class ParentBlockStoreImpl implements ParentBlockStore {
             for (Map.Entry<Integer, String> e : parents.entrySet()) {
                 KnowledgeChunk c = new KnowledgeChunk();
                 c.setDocId(docId);
+                c.setFileName(fileName);
                 c.setParentSeq(e.getKey());
                 c.setContent(e.getValue());
                 c.setCreatedAt(now);

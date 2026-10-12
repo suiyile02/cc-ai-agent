@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS chat_memory_raw (
 CREATE TABLE IF NOT EXISTS knowledge_chunk (
     id          BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
     doc_id      BIGINT       NOT NULL COMMENT '知识库文档ID(knowledge_document.id)',
+    file_name   VARCHAR(255) NOT NULL COMMENT '所属文档文件名(冗余, 避免查父块时 join knowledge_document)',
     parent_seq  INT          NOT NULL COMMENT '文档内父块序号(从小块 parent_ref 引用)',
     content     TEXT         NOT NULL COMMENT '父块文本(结构单元: Markdown 小节/代码函数等)',
     created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

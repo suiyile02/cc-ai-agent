@@ -206,6 +206,8 @@ com.ai
   `knowledge_chunk` 表(MySQL; 不进 Qdrant——避免同一内容重复嵌入与双份存储), 小块元数据转正式
   `parent_ref` 后入向量库(内部键不泄漏)。`everyChunkHasParent()` 默认 true(缺标记=约定漂移, 入库 WARN;
   曾发生"聚合晚于 addMetadata 导致全量缺键"的顺序错误), `code-ast` 覆写为 false(独立声明无父块合法)。
+  `knowledge_chunk` 冗余存 `file_name`(所属文档, 查父块免 join); `knowledge_document` 存 `full_text`
+  (提取清洗后全文, MEDIUMTEXT, 仅新入库/重处理写入, 不进列表接口)。
   检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
   按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
   `semanticMaxScore` 与计数)仍按小块分数, 只有喂给模型的上下文换成父块全文。

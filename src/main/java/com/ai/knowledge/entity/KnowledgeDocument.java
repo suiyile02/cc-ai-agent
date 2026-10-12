@@ -59,6 +59,12 @@ public class KnowledgeDocument {
     /** 失败原因 */
     private String errorMessage;
 
+    /**
+     * 文档全部内容(提取清洗后的全文, MEDIUMTEXT)。
+     * 仅新入库/重处理时写入, 存量行为 NULL; 只存库供留档/排查, 不进列表接口。
+     */
+    private String fullText;
+
     /** 上传人 ID */
     private Long createdBy;
 

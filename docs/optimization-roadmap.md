@@ -233,6 +233,22 @@
 
 ---
 
+## 已完成记录（2026-10-12 第十七批, knowledge_document 全文留档 + knowledge_chunk 文件名冗余）
+
+- `knowledge_document` 新增 `full_text`(MEDIUMTEXT): 存提取清洗后的全文, 供留档/排查/潜在整篇检索。
+  `DocumentIngestionOrchestrator` 先捕获 `TextExtractor.extract` 返回值(避免重复解析同一文件),
+  `markDone` 时 `setFullText` 随 `updateById` 落库; 失败文档不写全文(无有效全文, 重处理自然重写)。
+- `knowledge_chunk` 新增 `file_name`(VARCHAR 255): 父块冗余存所属文档文件名, 查父块时免 join
+  `knowledge_document`。`ParentBlockStore.replaceParents` 签名扩展为 `(docId, fileName, parents)`,
+  实现里 `c.setFileName(fileName)`。
+- 不进任何接口/VO(全文仅存库, 避免大字段传输); 存量不回填(两列留空, 重处理时写入, 与 file_hash 先例一致)。
+- DDL: `create_table.sql`/`schema-mysql-extra.sql` 加列(仅新库生效) + 新建
+  `db/upgrade/2026-10-full-text-and-chunk-file-name.sql`(存量库手动 ALTER, 需执行一次)。
+  注: `knowledge_chunk.file_name` 在存量表上 `NOT NULL DEFAULT ''`(加 NOT NULL 列必须有默认值,
+  新库建表无存量则无需默认)。
+验证: ParentBlockStoreImplTest 加 fileName 断言 + DocumentIngestionOrchestratorTest 加 fullText 断言,
+全量 425 例全绿。
+
 ## 已完成记录（2026-10-12 第十六批, 重处理成功后清空 error_message——MP 空值策略 bug）
 
 生产反馈: 错误文档(400 batch)重处理成功后, 文档列表里 status=2(已完成)、chunk 也更新了,

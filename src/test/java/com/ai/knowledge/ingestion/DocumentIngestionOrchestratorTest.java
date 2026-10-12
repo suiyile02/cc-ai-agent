@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -87,9 +88,9 @@ class DocumentIngestionOrchestratorTest {
         when(documentMapper.updateById(any(KnowledgeDocument.class))).thenReturn(1);
         when(documentMapper.selectById(anyLong())).thenAnswer(inv -> null);
         doAnswer(inv -> {
-            capturedParents.put(inv.getArgument(0), inv.getArgument(1));
+            capturedParents.put(inv.getArgument(0), inv.getArgument(2));
             return null;
-        }).when(parentBlockStore).replaceParents(anyLong(), anyMap());
+        }).when(parentBlockStore).replaceParents(anyLong(), anyString(), anyMap());
         doAnswer(inv -> {
             addedChunks.add(new ArrayList<>(inv.getArgument(0)));
             return null;
@@ -156,6 +157,10 @@ class DocumentIngestionOrchestratorTest {
         assertEquals(2, d.getStatus(), "入库完成状态");
         assertEquals(3, d.getChunkCount());
         assertNull(d.getErrorMessage());
+        // ④ 全文留档: 入库成功必须把提取清洗后的全文写进 knowledge_document.full_text
+        assertNotNull(d.getFullText(), "入库成功必须留档全文");
+        assertTrue(d.getFullText().contains("# 第一章 总则") && d.getFullText().contains("适用于全体员工。"),
+                "全文必须是清洗后的完整正文: " + d.getFullText());
     }
 
     @Test

@@ -134,9 +134,9 @@ class ParentBlockStoreImplTest {
 
     @Test
     void replaceParentsReplacesInsteadOfAccumulating() {
-        store.replaceParents(1L, parents(0, "甲块 v1", 1, "乙块 v1"));
+        store.replaceParents(1L, "doc.md", parents(0, "甲块 v1", 1, "乙块 v1"));
         // 重新入库(父块集合变小): 必须删旧再插新, 不能残留旧行也不能撞唯一键
-        store.replaceParents(1L, parents(0, "甲块 v2"));
+        store.replaceParents(1L, "doc.md", parents(0, "甲块 v2"));
 
         assertEquals(1, table.size(), "旧父块必须被清掉(残留会让检索注入过期内容)");
         assertEquals(Map.of(0, "甲块 v2"), store.findParents(1L, List.of(0, 1)),
@@ -145,8 +145,8 @@ class ParentBlockStoreImplTest {
 
     @Test
     void findParentsScopesByDocAndSeq() {
-        store.replaceParents(1L, parents(0, "A0", 1, "A1", 2, "A2"));
-        store.replaceParents(2L, parents(0, "B0"));
+        store.replaceParents(1L, "doc.md", parents(0, "A0", 1, "A1", 2, "A2"));
+        store.replaceParents(2L, "doc.md", parents(0, "B0"));
 
         // 文档隔离: 不得取到 doc 2 的块; seq 过滤: 只要请求的 0 与 2, 不含 1
         assertEquals(Map.of(0, "A0", 2, "A2"), store.findParents(1L, List.of(0, 2)));
@@ -155,8 +155,8 @@ class ParentBlockStoreImplTest {
 
     @Test
     void deleteByDocIdOnlyClearsItsOwnDoc() {
-        store.replaceParents(1L, parents(0, "A0"));
-        store.replaceParents(2L, parents(0, "B0"));
+        store.replaceParents(1L, "doc.md", parents(0, "A0"));
+        store.replaceParents(2L, "doc.md", parents(0, "B0"));
 
         store.deleteByDocId(1L);
 
@@ -166,11 +166,11 @@ class ParentBlockStoreImplTest {
 
     @Test
     void emptyParentsClearsHistoricalRows() {
-        store.replaceParents(1L, parents(0, "旧父块"));
-        store.replaceParents(2L, parents(0, "别人的块"));
+        store.replaceParents(1L, "doc.md", parents(0, "旧父块"));
+        store.replaceParents(2L, "doc.md", parents(0, "别人的块"));
 
         // 入库层在策略不产父块时以此覆盖清除历史父块(如策略切换/重处理)
-        store.replaceParents(1L, Map.of());
+        store.replaceParents(1L, "doc.md", Map.of());
 
         assertEquals(Map.of(), store.findParents(1L, List.of(0)));
         assertEquals(Map.of(0, "别人的块"), store.findParents(2L, List.of(0)));
@@ -187,7 +187,7 @@ class ParentBlockStoreImplTest {
         // 父块写失败仅 WARN: 小块向量照常入库, 不得让父块存储故障把整次入库判失败
         doThrow(new RuntimeException("db down")).when(mapper).insert(any(KnowledgeChunk.class));
 
-        assertDoesNotThrow(() -> store.replaceParents(1L, parents(0, "甲块")));
+        assertDoesNotThrow(() -> store.replaceParents(1L, "doc.md", parents(0, "甲块")));
     }
 
     @Test
@@ -201,13 +201,14 @@ class ParentBlockStoreImplTest {
     }
 
     @Test
-    void writtenRowsCarryDocSeqContent() {
+    void writtenRowsCarryDocSeqContentAndFileName() {
         LocalDateTime before = LocalDateTime.now().minusSeconds(1);
-        store.replaceParents(7L, parents(3, "父块文本"));
+        store.replaceParents(7L, "doc.md", parents(3, "父块文本"));
 
         assertEquals(1, table.size());
         KnowledgeChunk row = table.get(0);
         assertEquals(7L, row.getDocId());
+        assertEquals("doc.md", row.getFileName(), "父块行必须冗余存所属文档文件名");
         assertEquals(3, row.getParentSeq());
         assertEquals("父块文本", row.getContent());
         assertTrue(row.getCreatedAt() != null && row.getCreatedAt().isAfter(before),

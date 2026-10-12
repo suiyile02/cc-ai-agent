@@ -15,10 +15,11 @@ public interface ParentBlockStore {
     /**
      * 写入一个文档的全部父块(覆盖式: 先删该文档旧父块再插)。
      *
-     * @param docId   文档 ID
-     * @param parents 父块序号 → 父块文本
+     * @param docId    文档 ID
+     * @param fileName 所属文档文件名(冗余写入父块表, 避免查父块时 join knowledge_document)
+     * @param parents  父块序号 → 父块文本
      */
-    void replaceParents(Long docId, Map<Integer, String> parents);
+    void replaceParents(Long docId, String fileName, Map<Integer, String> parents);
 
     /**
      * 批量读取父块文本(检索时按命中小块的 doc_id+parent_ref 取)。

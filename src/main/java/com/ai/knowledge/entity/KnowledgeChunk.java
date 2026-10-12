@@ -24,6 +24,9 @@ public class KnowledgeChunk {
     /** 知识库文档 ID(knowledge_document.id) */
     private Long docId;
 
+    /** 所属文档文件名(冗余, 避免查父块时 join knowledge_document) */
+    private String fileName;
+
     /** 文档内父块序号(从小块 metadata 的 parent_ref 引用) */
     private Integer parentSeq;
 
