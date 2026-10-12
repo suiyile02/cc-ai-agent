@@ -139,14 +139,16 @@
 | 类 | 方法 | 作用 | 调用方 |
 |---|---|---|---|
 | `RagRetrievalService` | `retrieveOutcome(query,topK,threshold[,tokenBudget])` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()`；**带预算重载**(默认)把 RAG 段 Token 预算下传到父块展开层 | 前置 |
-| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome`；★2026-10-12 起在召回后/重排后打四处 INFO 检索明细日志(关键字/语义召回/BM25召回/重排Top-K) | 内部 |
+| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排(**含证据分层取数**) → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome`；★2026-10-12 起在召回后/重排后打四处 INFO 检索明细日志(关键字/语义召回/BM25召回/重排Top-K) | 内部 |
 | | `describe(docs)` ★新增 | 候选渲染成单行诊断串 `[doc_id:chunk_index cos=… kw=…] ≤80字片段`(缺分显示 `-`), 仅供上述日志 | 内部 |
-| | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
+| | `mergeAndRerank(query,recall,topK,threshold)` | 融合 + 重排 + **证据分层取数**（★2026-10-13 增阈值参数）；无语义融合分支把过取收敛回 topK | 内部 |
+| | `selectByEvidenceLevel(ordered,topK,threshold)` ★新增 | P3-10 分层口径：证据(语义过阈值)整体优先、组内重排分降序；非证据候选(仅词面/未过阈值)只补位且证据存在时封顶 `NON_EVIDENCE_FILL_CAP`=2，无证据轮次照旧补满 topK（答/拒仍由 `semanticMaxScore` 判） | 内部 |
 | | `expandToParents(hits,tokenBudget)` ★新增 | 父子文档(小-大检索)预算感知分级展开：按剩余预算三级降级(整父块→命中小块附近窗口→小块原文, 窗口以 indexOf 定位+行对齐, 半径 `app.rag.parent-window-chars`=500)；按重排顺序消耗预算, 后续命中自动降级; 缺父块/读失败回退小块原文; 排序/阈值/判据仍读小块分数 | 内部 |
 | | `windowAround(parent,small,chars)` ★新增 | 父块内以命中小块原文为锚点取两侧窗口并对齐行边界 | 内部 |
 | | `retrieve(query,topK,threshold)` | 取 hits 的便捷出口 | 门面 `debugRetrieve` |
 | | `buildContext(hits,tokenBudget)` / `toSources(hits)` | 委托渲染器 / 元数据转来源 | 装配器 / 前置 |
-| `HybridRecaller` | `recall(query,topK)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、本类不做任何阈值过滤**——把候选原样交给重排, 过滤在 `RagRetrievalService.filterByThreshold`(重排之后)收口; 下发给向量库会让低于阈值的分数永不可见、分布被底部截断无法定标 | 编排 |
+| `HybridRecaller` | `recall(query,topK)` | 两路召回 + 可用性标记 + `semanticMaxScore`（返回 `Recall`）。**语义路以 0 阈值召回、本类不做任何阈值过滤**——把候选原样交给重排, 过滤在 `RagRetrievalService.filterByThreshold`(重排之后)收口; 下发给向量库会让低于阈值的分数永不可见、分布被底部截断无法定标。★2026-10-13: 语义路按 `semanticWidth(topK)` 过取（只取 topK 会让排第 6 的真答案进不了重排）, 收敛交给融合后的证据分层取数 | 编排 |
+| | `semanticWidth(topK)` ★新增 | 语义路召回宽度过取 `max(topK*3, 15)`——无额外嵌入成本（同一次查询多返回几行） | 内部 |
 | | `semanticHits(...)` / `keywordHits(...)` | 单路检索，异常只丢那一路（WARN） | 内部 |
 | `RrfFuser`（静态） | `fuse(semantic,keyword)` / `rrfScore(c)` | 按 `doc_id:chunk_index` 去重 + RRF(k=60) 名次融合 | 编排 |
 | `RetrievalCandidate`（record） | `withFused(f)` / `withKeyword(kw,rank)` / `toDocument()` | 融合期候选的不可变演进；最终挂 `score` 与 `rerank_score`，并把两路**原始分**写入 `metadata.semantic_score`/`keyword_score`（否则融合后无从判断真实相似度） | 融合/重排 |

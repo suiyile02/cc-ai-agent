@@ -246,7 +246,8 @@ com.ai
 - **error_message 清空必须显式置 NULL(2026-10-12)**: `markProcessing`/`markDone` 里 `setErrorMessage(null)` 不会落库——MyBatis-Plus `updateById` 默认忽略 null 字段(FieldStrategy.NOT_NULL), 导致"错误文档重处理成功(status=2/chunk 更新)但旧错误永久残留"(生产实测 400 错误挂在已完成文档上)。修复: 成功/处理中路径用 `documentMapper.update(null, new UpdateWrapper<>().eq("id",...).set("error_message", null))` 显式置 NULL。注意用**字符串 UpdateWrapper 而非 LambdaUpdateWrapper**——纯 Mockito 测试无 TableInfo 缓存, lambda 解析会抛异常(项目既有坑, ParentBlockStoreImpl 同款)。`DocumentIngestionOrchestratorTest#successfulIngestionExplicitlyClearsErrorMessage` 钉住(已在旧 bug 代码上验证会红)。
 - 向量点元数据需含 `doc_id`/`file_name`/`chunk_index`(删除与溯源依据)；文档删除按 doc_id 过滤检索出点 id 后精确删除，并同步移除关键词索引。
 - 检索链路: **短查询扩展**(去空白后 <`app.context.short-query.min-chars` 才触发, 补全成完整检索句)
-  -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25) -> RRF -> 重排(`score`/`api`/`llm`/`none`)
+  -> **一律检索**(RAG/HYBRID 会话, 无例外) -> 混合召回(语义+BM25; 语义过取 `max(topK*3,15)`、
+  关键词过取 `max(topK*2,10)`) -> RRF -> 重排(`score`/`api`/`llm`/`none`) -> **证据分层取数**
   -> **相似度阈值过滤** -> Top-K 注入 -> **由检索结果算出出口 `ChatOutcome`**。意图路由不再是链路入口的闸门
   (连旧"工具轮跳过检索"的成本短路也已废除), 详见 P3-7 与"已完成记录(2026-10-04)"。
 - **阈值判定刻意排在重排之后**(召回层与阈值完全无关): 先过滤会让"余弦分偏低但确实答得上"的候选
@@ -254,6 +255,14 @@ com.ai
   出口判据读的是 `semanticMaxScore`(未截断的观察值), 因此**移动过滤时机不改变出口结论**, 只改变注入内容;
   过滤器读 `DocumentMeta.semanticScore`(metadata 里的余弦原始分)而**非 `doc.getScore()`**——
   重排后 score 已被融合分/模型相关度分占用, 读错字段等于阈值失效。
+- **证据分层取数(2026-10-13, P3-10 分层口径)**: 重排之后、阈值过滤之前, 注入收敛按"语义过阈值的候选(证据)
+  整体优先 → 组内重排分降序 → 非证据候选(仅词面命中/未过阈值)补位"(`RagRetrievalService.selectByEvidenceLevel`);
+  证据存在时非证据候选**封顶 2 条**(`NON_EVIDENCE_FILL_CAP`), 无证据轮次照旧补满 topK——答/拒仍由
+  `semanticMaxScore` 判, 分层只改注入组成。动机: `score` 模式下仅词面命中取批内归一化 BM25、**榜首恒为 1.0**,
+  系统性压过语义真答案(余弦 0.43~0.81)——实测"报销上限是多少"含住宿/交通标准表的块被挤到融合第 7 名出局,
+  注入 Top-5 全被词面噪声占满("文档里有答案却答非所问"的直接来源)。与**语义路过取**
+  (`HybridRecaller.semanticWidth` = `max(topK*3,15)`——只取 topK 条时排第 6 的真答案进不了重排)配套。
+  回归测试 `RagRetrievalEvidenceLevelTest` 四条 + `HybridRecallerTest#semanticRecallOverFetchesBeforeRerank`。
 - **三种分数只有一个能判相关性**(强制口径): `SourceVO.semanticScore`=语义路**原始余弦分**(出口判据用的就是它);
   `SourceVO.keywordScore`=BM25 原始分; `SourceVO.score`=重排后的**融合分(相对名次)**。
   融合分在"仅词面命中"时取 `kw/maxKw`, **榜首恒等于 1.0**, 与相关性无关——禁止拿它判断"是否匹配"或写进定标数据。

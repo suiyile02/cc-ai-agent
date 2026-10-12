@@ -93,10 +93,12 @@ public class RagRetrievalService implements RagRetriever {
     /**
      * 检索执行体（被 {@link #retrieveOutcome} 包在限时调用内）。
      *
-     * <p>顺序是 <b>召回 → 融合 → 重排 → 阈值过滤 → 父块展开</b>：阈值刻意排在重排之后。
+     * <p>顺序是 <b>召回 → 融合 → 重排 → 证据分层取数 → 阈值过滤 → 父块展开</b>：阈值刻意排在重排之后。
      * 判"有没有依据"用的是语义路最大分({@code semanticMaxScore}, 见
      * {@link com.ai.rag.OutcomeResolver}), 它与过滤时机无关, 所以出口结论不变；变的是注入内容——
      * 重排得以看到全部候选，第 6 名那种"余弦分低但确实答得上"的段落才有机会被捞进上下文。
+     * 候选进入重排前语义路已过取({@link HybridRecaller#semanticWidth}), 出重排后由
+     * {@link #selectByEvidenceLevel} 保证注入顺序与出口判据同口径(语义过阈值者优先)。
      * 父块展开在阈值过滤后按剩余预算分级(见 {@link #expandToParents})。
      *
      * @param query       检索问题
@@ -118,10 +120,11 @@ public class RagRetrievalService implements RagRetriever {
         //   可能不一致(注册序 vs 原始序), 只有召回现场能暴露。
         log.info("语义检索命中 {} 段(阈值过滤前): {}", recall.semantic().size(), describe(recall.semantic()));
         log.info("BM25 检索命中 {} 段: {}", recall.keyword().size(), describeKeyword(recall.keyword()));
-        // 关键词路只在 hybrid 开启且索引非空时才有内容, 故"有关键词命中"等价于历史的两路合并条件
+        // 关键词路只在 hybrid 开启且索引非空时才有内容, 故"有关键词命中"等价于历史的两路合并条件;
+        // 无语义融合时把语义路过取收敛回 topK(过取只为让重排看到更多候选)
         List<Document> hits = recall.keyword().isEmpty()
-                ? recall.semantic()
-                : mergeAndRerank(query, recall, topK);
+                ? recall.semantic().stream().limit(topK).toList()
+                : mergeAndRerank(query, recall, topK, threshold);
         log.info("重排后 Top-{}: {}", Math.min(topK, hits.size()), describe(hits));
         List<Document> finalHits = expandToParents(filterByThreshold(hits, threshold), tokenBudget);
         return new RetrievalOutcome(finalHits, true,
@@ -210,19 +213,64 @@ public class RagRetrievalService implements RagRetriever {
     }
 
     /**
-     * 两路合并重排并收敛到 Top-K。
+     * 两路合并重排并按<b>证据分层</b>收敛到 Top-K。
      *
-     * @param query  检索问题（LLM 重排需要）
-     * @param recall 两路召回结果
-     * @param topK   最终条数
+     * @param query     检索问题（LLM 重排需要）
+     * @param recall    两路召回结果
+     * @param topK      最终条数
+     * @param threshold 语义相似度阈值（证据线, 分层取数使用）
      * @return 重排后的命中文档（携带 {@code rerank_score}）
      */
-    private List<Document> mergeAndRerank(String query, HybridRecaller.Recall recall, int topK) {
+    private List<Document> mergeAndRerank(String query, HybridRecaller.Recall recall, int topK,
+                                          double threshold) {
         List<RetrievalCandidate> fused = RrfFuser.fuse(recall.semantic(), recall.keyword());
-        return rerankers.current().rerank(query, fused).stream()
-                .limit(topK)
-                .map(RetrievalCandidate::toDocument)
-                .toList();
+        return selectByEvidenceLevel(rerankers.current().rerank(query, fused), topK, threshold);
+    }
+
+    /** 证据存在时, 非证据候选(仅词面命中/语义未过阈值)的补位上限。 */
+    static final int NON_EVIDENCE_FILL_CAP = 2;
+
+    /**
+     * 证据分层取数(P3-10 分层口径): 语义过阈值的候选(证据)整体优先, 组内保持重排分降序;
+     * 非证据候选只补位——证据存在时最多补 {@value #NON_EVIDENCE_FILL_CAP} 条, 无证据时照旧补满 topK。
+     *
+     * <p>为什么必须分层: {@code score} 模式下"仅词面命中"拿批内归一化 BM25(榜首恒为 1.0),
+     * 系统性压过语义真答案(余弦 0.43~0.81)——真答案被挤出注入 Top-K 正是"文档里有答案却
+     * 答非所问"的直接来源(实测"报销上限是多少": 含标准表的块融合分 0.586 排第 7, 前 5 被
+     * 词面噪声占满)。分层与出口判据({@link com.ai.rag.OutcomeResolver} 只认语义路过阈值)同口径。
+     *
+     * <p>无证据轮次(闲聊/无关)不受影响: 全部候选都是非证据, 补满 topK 的旧行为保留,
+     * 出口仍由 {@code semanticMaxScore} 判拒答——本方法只改注入组成, 不改"答/拒"判定。
+     *
+     * @param ordered   重排后的候选(已按重排分降序)
+     * @param topK      最终条数
+     * @param threshold 语义相似度阈值(证据线)
+     * @return 分层后的注入文档(长度 ≤ topK)
+     */
+    static List<Document> selectByEvidenceLevel(List<RetrievalCandidate> ordered, int topK,
+                                                double threshold) {
+        List<RetrievalCandidate> evidence = new java.util.ArrayList<>();
+        List<RetrievalCandidate> rest = new java.util.ArrayList<>();
+        for (RetrievalCandidate c : ordered) {
+            Double sem = c.sem();
+            (sem != null && sem >= threshold ? evidence : rest).add(c);
+        }
+        List<Document> out = new java.util.ArrayList<>(Math.min(topK, ordered.size()));
+        for (RetrievalCandidate c : evidence) {
+            if (out.size() >= topK) {
+                break;
+            }
+            out.add(c.toDocument());
+        }
+        // 非证据候选补位: 证据存在时封顶(防词面噪声挤占对话上下文), 无证据时补满(旧行为)
+        int fillCap = evidence.isEmpty() ? topK : Math.min(topK, out.size() + NON_EVIDENCE_FILL_CAP);
+        for (RetrievalCandidate c : rest) {
+            if (out.size() >= fillCap) {
+                break;
+            }
+            out.add(c.toDocument());
+        }
+        return out;
     }
 
     /**

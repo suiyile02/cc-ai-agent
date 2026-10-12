@@ -107,6 +107,26 @@ class HybridRecallerTest {
     }
 
     @Test
+    void semanticRecallOverFetchesBeforeRerank() {
+        VectorStore store = mock(VectorStore.class);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        HybridRecaller recaller = recaller(store, emptyKeywordIndex());
+
+        recaller.recall("年假几天", 5);
+
+        ArgumentCaptor<SearchRequest> sent = ArgumentCaptor.forClass(SearchRequest.class);
+        org.mockito.Mockito.verify(store).similaritySearch(sent.capture());
+        assertEquals(HybridRecaller.semanticWidth(5), sent.getValue().getTopK(),
+                "语义路必须过取: 只取 topK 条时排第 6 的真答案进不了重排, 融合层再准也捞不回来");
+    }
+
+    @Test
+    void semanticWidthIsAtLeastFifteenAndGrowsWithTopK() {
+        assertEquals(15, HybridRecaller.semanticWidth(5), "topK=5 时按下限 15 过取");
+        assertEquals(30, HybridRecaller.semanticWidth(10), "topK 放大时按 3 倍过取");
+    }
+
+    @Test
     void semanticFailureDegradesToEmptyWithoutFakeScore() {
         VectorStore store = mock(VectorStore.class);
         when(store.similaritySearch(any(SearchRequest.class))).thenThrow(new RuntimeException("连接被重置"));

@@ -63,7 +63,8 @@ class HybridRecaller {
 
     /**
      * 执行两路召回。是否启用关键词路由 {@code app.rag.hybrid-enabled} 决定；
-     * 关键词召回宽度取 {@code max(topK*2, 10)}，把收敛交给后续重排。
+     * 关键词召回宽度取 {@code max(topK*2, 10)}，语义召回宽度取 {@code max(topK*3, 15)}——
+     * 两路都过取，收敛交给后续融合与证据分层取数。
      *
      * <p>参数表里没有阈值: 召回阶段刻意与阈值无关(见类注释), 阈值判定在重排之后收口。
      * <b>禁用文档排除</b>(管理员开关, SSOT 在 {@code knowledge_document.enabled}): 语义路
@@ -71,7 +72,7 @@ class HybridRecaller {
      * (过取宽度天然补偿)。两路给到 RRF 的候选集均不含禁用文档。
      *
      * @param query 检索问题
-     * @param topK  最终注入条数（用于推算关键词路召回宽度）
+     * @param topK  最终注入条数（用于推算两路召回宽度）
      * @return 两路结果与可用性标记
      */
     Recall recall(String query, int topK) {
@@ -80,7 +81,7 @@ class HybridRecaller {
         boolean keywordAvailable = !keywordIndex.isEmpty();
         // 以 0 阈值召回: 低于阈值的分数也要能被观察到(定标依据), 且重排要看全量候选
         List<Document> raw = vectorStore == null
-                ? List.of() : semanticHits(vectorStore, query, topK, disabled);
+                ? List.of() : semanticHits(vectorStore, query, semanticWidth(topK), disabled);
         double semanticMaxScore = raw.stream().map(DocumentMeta::similarity)
                 .filter(java.util.Objects::nonNull)
                 .mapToDouble(Double::doubleValue).max().orElse(0.0);
@@ -95,6 +96,20 @@ class HybridRecaller {
                         .toList()
                 : List.of();
         return new Recall(raw, keyword, semanticMaxScore, vectorStore != null, keywordAvailable);
+    }
+
+    /**
+     * 语义路召回宽度(过取): {@code max(topK*3, 15)}。
+     *
+     * <p>只取 topK 条会把"名次靠后但真正答得上"的候选挡在重排之外——类注释第 2 条正是为这种
+     * 候选写的。过取无额外嵌入成本(同一次查询多返回几行), 融合后由证据分层取数收敛回 topK
+     * (见 {@code RagRetrievalService.selectByEvidenceLevel})。
+     *
+     * @param topK 最终注入条数
+     * @return 语义路召回条数
+     */
+    static int semanticWidth(int topK) {
+        return Math.max(topK * 3, 15);
     }
 
     /** 语义向量路（异常降级为空的该路结果）；阈值不在此处下发, 见 {@link #recall}。

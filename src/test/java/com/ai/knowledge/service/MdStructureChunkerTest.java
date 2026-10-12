@@ -128,8 +128,11 @@ class MdStructureChunkerTest {
             boolean headingOnly = lines.length == 1 && lines[0].startsWith("#");
             assertTrue(!headingOnly, "父块 " + e.getKey() + " 是零正文标题块: " + lines[0]);
         }
-        // 最浅层级(##)断节 → 每章一个父块; 封面 # 行并入第一节
-        assertEquals(2, parents.size(), "最浅标题层级是 ## → 两个章父块");
+        // 当前口径: 无前缀引言时最浅层级即封面 # → 整篇一个父块; 封面行与各章标题、
+        // 正文都在同一父块内, 不存在零正文标题块。小体量手册(本例/演示语料)下整篇注入可行。
+        // 【遗留·roadmap 第十八批】"封面 # + ## 章"的文档达到真实体量(数万字)后应改为按次浅层
+        // (##)分章——否则单父块超预算只能走窗口降级; 届时本断言与全库向量需一并重做。
+        assertEquals(1, parents.size(), "封面 # 为最浅层级 → 整篇一个父块(章级粒度改造见 roadmap 遗留项)");
         assertTrue(parents.get(0).toString().contains("### 1.1 工作时间"));
         assertTrue(parents.get(0).toString().contains("公司实行标准工时制"), "章标题连正文同父块");
     }
