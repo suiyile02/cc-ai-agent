@@ -139,7 +139,8 @@
 | 类 | 方法 | 作用 | 调用方 |
 |---|---|---|---|
 | `RagRetrievalService` | `retrieveOutcome(query,topK,threshold[,tokenBudget])` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()`；**带预算重载**(默认)把 RAG 段 Token 预算下传到父块展开层 | 前置 |
-| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome` | 内部 |
+| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排 → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome`；★2026-10-12 起在召回后/重排后打四处 INFO 检索明细日志(关键字/语义召回/BM25召回/重排Top-K) | 内部 |
+| | `describe(docs)` ★新增 | 候选渲染成单行诊断串 `[doc_id:chunk_index cos=… kw=…] ≤80字片段`(缺分显示 `-`), 仅供上述日志 | 内部 |
 | | `mergeAndRerank(query,recall,topK)` | 融合 + 重排 + 收敛 Top-K | 内部 |
 | | `expandToParents(hits,tokenBudget)` ★新增 | 父子文档(小-大检索)预算感知分级展开：按剩余预算三级降级(整父块→命中小块附近窗口→小块原文, 窗口以 indexOf 定位+行对齐, 半径 `app.rag.parent-window-chars`=500)；按重排顺序消耗预算, 后续命中自动降级; 缺父块/读失败回退小块原文; 排序/阈值/判据仍读小块分数 | 内部 |
 | | `windowAround(parent,small,chars)` ★新增 | 父块内以命中小块原文为锚点取两侧窗口并对齐行边界 | 内部 |

@@ -112,14 +112,43 @@ public class RagRetrievalService implements RagRetriever {
             log.warn("向量库与关键词索引均不可用(未配置 Embedding 或未入库)，RAG 降级为空上下文");
             return RetrievalOutcome.none();
         }
+        log.info("RAG 检索关键字: [{}]", query);
+        log.info("语义检索命中 {} 段(阈值过滤前): {}", recall.semantic().size(), describe(recall.semantic()));
+        log.info("BM25 检索命中 {} 段: {}", recall.keyword().size(), describe(recall.keyword()));
         // 关键词路只在 hybrid 开启且索引非空时才有内容, 故"有关键词命中"等价于历史的两路合并条件
         List<Document> hits = recall.keyword().isEmpty()
                 ? recall.semantic()
                 : mergeAndRerank(query, recall, topK);
+        log.info("重排后 Top-{}: {}", Math.min(topK, hits.size()), describe(hits));
         List<Document> finalHits = expandToParents(filterByThreshold(hits, threshold), tokenBudget);
         return new RetrievalOutcome(finalHits, true,
                 countPassed(recall.semantic(), threshold), recall.keyword().size(),
                 false, recall.semanticMaxScore());
+    }
+
+    /**
+     * 把候选渲染成单行诊断串: {@code doc_id:chunk_index(cos=余弦分, kw=BM25分) "≤80字片段"}。
+     * 纯 BM25 命中无余弦分、语义点无 BM25 分时对应项显示 {@code -}。仅用于日志输出。
+     */
+    private static String describe(List<Document> docs) {
+        if (docs == null || docs.isEmpty()) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Document d : docs) {
+            Double cos = DocumentMeta.semanticScore(d);
+            Double kw = DocumentMeta.keywordScore(d);
+            String text = d.getText() == null ? "" : d.getText().replace('\n', ' ');
+            if (text.length() > 80) {
+                text = text.substring(0, 80) + "…";
+            }
+            sb.append(String.format("%n  [%s:%d cos=%s kw=%s] %s",
+                    DocumentMeta.docId(d), DocumentMeta.chunkIndex(d),
+                    cos == null ? "-" : String.format("%.4f", cos),
+                    kw == null ? "-" : String.format("%.4f", kw),
+                    text));
+        }
+        return sb.toString();
     }
 
     /**
