@@ -54,10 +54,10 @@ spring:
       # 应用层 stream-idle-timeout-ms(20s)会先触发止损, 此值仅作二次保险(同步调用/保护被关闭时)
       timeout: 120s
       chat:
-        model: ${AI_CHAT_MODEL:qwen3.8-max}
+        model: ${AI_CHAT_MODEL:deepseek-v4-pro-0813}
         temperature: 0.3
       embedding:
-        model: ${AI_EMBEDDING_MODEL:qwen3.7-text-embedding}
+        model: ${AI_EMBEDDING_MODEL:qwen3.7-text-embedding-flash}
         dimensions: 1024    # 向量维度
     # 内置重试(对所有模型调用生效: chat/改写/摘要): 只补单次瞬态失败(429/5xx/网络抖动),
     # 与业务层超时(Timeouts)和改写熔断互补; 慢端点重试会放大延迟, 故只重试一次
@@ -94,14 +94,12 @@ spring:
 # 为配置漂移付过学费后定的硬约束, 不要为了省事把它关掉。
 app:
   rag:
-    # 【单一事实来源】Qdrant 集合名(spring.ai.vectorstore.qdrant.collection-name 引用此值),
-    # 写集合与删/重建集合永远一致; 换环境隔离库时改这里。
     collection-name: rag_knowledge_base
   storage:
     path: ./data/files                    # 上传根目录; 多实例部署必须换共享存储(见 roadmap E 系列)
   chat:
-    model-label: ${AI_CHAT_MODEL:qwen3.8-max}  # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名
-                                              # (见 ChatClientProvider.modelLabel), 对话日志与语义缓存键共用
+    model-label: ${AI_CHAT_MODEL:deepseek-v4-pro-0813}  # 兜底标签: 优先从 ChatModel 默认选项解析实际模型名
+                                                        # (见 ChatClientProvider.modelLabel), 对话日志与语义缓存键共用
     kb-only: true                          # 严格知识库模式: 只依据知识库资料/工具结果作答, 无命中按固定口径拒答
                                           # (提示词级软约束, 不保证零编造; AGENT 会话不受影响) 见 prompts/kb-only-system.st
     stream-idle-timeout-ms: 20000         # 流式静默止损: 20s 无增量即终止降级(早于 okhttp 60s read timeout)

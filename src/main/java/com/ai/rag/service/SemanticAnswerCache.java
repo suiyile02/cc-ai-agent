@@ -214,7 +214,7 @@ public class SemanticAnswerCache implements SemanticCacheAdmin {
     /**
      * 模型标识(键的一部分)：只保留 Redis 键友好字符, 其余替换为下划线, 便于运维 grep。
      *
-     * @return 模型标识, 如 {@code qwen3.8-max}
+     * @return 模型标识, 如 {@code deepseek-v4-pro-0813}
      */
     private String modelTag() {
         return chatClientProvider.modelLabel().replaceAll("[^A-Za-z0-9._-]", "_");

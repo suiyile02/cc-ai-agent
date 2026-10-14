@@ -6,8 +6,8 @@ import lombok.Data;
 @Data
 public class ChatProps {
 
-    /** chat_log.model_name 兜底标签：优先从 ChatModel 默认选项解析实际模型名(见 ChatService) */
-    private String modelLabel = "qwen3.8-max";
+    /** chat_log.model_name 兜底标签：优先从 ChatModel 默认选项解析实际模型名(见 ChatClientProvider.modelLabel) */
+    private String modelLabel = "deepseek-v4-pro-0813";
     /**
      * 主对话注入 enable_thinking=false(默认 true 关闭思维链)。
      *
