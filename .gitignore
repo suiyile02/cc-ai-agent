@@ -43,3 +43,9 @@ application-local.yaml
 ### Python 缓存(e2e 脚本会产生) ###
 __pycache__/
 *.pyc
+
+### 前端(ai-agent-web, 已通过 git subtree 并入本仓库) ###
+ai-agent-web/node_modules/
+ai-agent-web/dist/
+ai-agent-web/*.local
+ai-agent-web/.DS_Store
