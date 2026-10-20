@@ -19,6 +19,7 @@ const streamMode = ref(true)
 const generating = ref(false)
 let abortCtrl = null
 const listEl = ref(null)
+const composerInput = ref(null)
 const SUGGESTIONS = [
   '入职满两年能休几天年假？',
   '张三在哪个部门？',
@@ -136,6 +137,7 @@ async function send(text) {
     abortCtrl = null
     // 即使本轮出错或被手动停止，后端也已经写入了兜底标题，值得一刷
     if (firstTurn) refreshTitle(sid)
+    focusComposer()
   }
 }
 
@@ -157,9 +159,17 @@ function scrollBottom() {
   })
 }
 
+/** 把焦点还给输入框（发送结束/切换会话后，免去再点一下） */
+function focusComposer() {
+  composerInput.value?.focus()
+}
+
 watch(() => chat.currentSessionId, (sid) => {
   scrollBottom()
-  if (sid) loadHistory(sid)
+  if (sid) {
+    loadHistory(sid)
+    nextTick(focusComposer)
+  }
 })
 </script>
 
@@ -232,11 +242,12 @@ watch(() => chat.currentSessionId, (sid) => {
     <footer class="composer-wrap">
       <div class="composer">
         <textarea
+          ref="composerInput"
           v-model="draft"
           class="composer-input"
           rows="2"
           :placeholder="activeSession ? '给智能助手发送消息，Enter 发送，Shift+Enter 换行' : '请先点击左侧「开始新对话」'"
-          :disabled="!activeSession || generating"
+          :disabled="!activeSession"
           @keydown="onKeydown"
         />
         <div class="composer-bar">
