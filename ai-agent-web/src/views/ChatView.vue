@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { sessionApi } from '../api'
 import { streamChat } from '../utils/sse'
 import { renderMarkdown } from '../utils/markdown'
@@ -82,13 +82,25 @@ async function refreshTitle(sessionId) {
   }
 }
 
+/** 无会话时自动开一个(与左侧"新建会话"同参数), 首条消息即建即用——免去先手动点"开始新对话" */
+async function ensureSession() {
+  try {
+    // 不传 sessionType, 后端默认 HYBRID(自动兼顾知识库检索与工具调用); 标题由首轮消息自动生成
+    const body = await sessionApi.create({ title: '' })
+    chat.upsertSession(body.data)
+    chat.select(body.data.sessionId)
+    chat.ensureMessages(body.data.sessionId).loaded = true // 新会话无历史, 免拉取
+    return true
+  } catch (e) {
+    toast.error(`创建会话失败：${e.message}`)
+    return false
+  }
+}
+
 async function send(text) {
   const content = (text ?? draft.value).trim()
   if (!content || generating.value) return
-  if (!activeSession.value) {
-    toast.error('请先点击左侧「开始新对话」')
-    return
-  }
+  if (!activeSession.value && !(await ensureSession())) return
   const sid = activeSession.value.sessionId
   const firstTurn = !activeSession.value.title
   draft.value = ''
@@ -171,6 +183,9 @@ watch(() => chat.currentSessionId, (sid) => {
     nextTick(focusComposer)
   }
 })
+
+// 登录落地即可直接输入(无会话不再禁用输入框, 首条消息自动建会话)
+onMounted(focusComposer)
 </script>
 
 <template>
@@ -192,7 +207,7 @@ watch(() => chat.currentSessionId, (sid) => {
         <!-- 欢迎页 -->
         <div v-if="!messages.length && !historyLoading" class="chat-welcome">
           <h2>你好，我是智能问答助手</h2>
-          <p class="welcome-sub">知识库问题自动走 RAG 检索，员工 / 订单等业务数据由 Agent 工具查询</p>
+          <p class="welcome-sub">在下方输入问题即可开始，会话将自动创建；也可以点击下面的问题直接体验</p>
           <div class="chips">
             <button v-for="q in SUGGESTIONS" :key="q" class="chip" @click="send(q)">{{ q }}</button>
           </div>
@@ -246,8 +261,7 @@ watch(() => chat.currentSessionId, (sid) => {
           v-model="draft"
           class="composer-input"
           rows="2"
-          :placeholder="activeSession ? '给智能助手发送消息，Enter 发送，Shift+Enter 换行' : '请先点击左侧「开始新对话」'"
-          :disabled="!activeSession"
+          :placeholder="activeSession ? '给智能助手发送消息，Enter 发送，Shift+Enter 换行' : '直接输入消息即可开始新对话，Enter 发送，Shift+Enter 换行'"
           @keydown="onKeydown"
         />
         <div class="composer-bar">
@@ -258,7 +272,7 @@ watch(() => chat.currentSessionId, (sid) => {
           <button v-if="generating" class="stop-btn" title="停止生成" @click="stop">
             <Icon name="stop" :size="14" />
           </button>
-          <button v-else class="send-btn" :disabled="!draft.trim() || !activeSession" aria-label="发送" @click="send()">
+          <button v-else class="send-btn" :disabled="!draft.trim()" aria-label="发送" @click="send()">
             <Icon name="send" :size="15" />
           </button>
         </div>
@@ -335,6 +349,7 @@ watch(() => chat.currentSessionId, (sid) => {
   gap: 10px;
 }
 .chat-welcome h2 { font-size: 22px; font-weight: 600; color: var(--fg); }
+.welcome-sub { margin-top: 6px; font-size: 13px; color: var(--fg-muted); }
 .welcome-sub { color: var(--fg-muted); font-size: 13px; }
 .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 16px; }
 .chip {
