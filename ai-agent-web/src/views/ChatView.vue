@@ -192,8 +192,9 @@ onMounted(focusComposer)
   <div class="chat-main">
     <header v-if="activeSession" class="chat-head">
       <strong class="head-title">{{ activeSession.title || '未命名会话' }}</strong>
-      <span class="uid-badge mono" title="会话归属的用户 ID——应与当前登录账号一致；不一致说明登录态错位，请退出重登">uid {{ activeSession.userId }}</span>
-      <button class="sid-chip mono" title="服务端会话 ID（联调 curl 用），点击复制" @click="copySessionId">
+      <!-- 以下两处为开发联调工具(登录态核对/curl 复制), 仅管理员可见; 演示与普通用户只看标题 -->
+      <span v-if="auth.isAdmin" class="uid-badge mono" title="会话归属的用户 ID——应与当前登录账号一致；不一致说明登录态错位，请退出重登">uid {{ activeSession.userId }}</span>
+      <button v-if="auth.isAdmin" class="sid-chip mono" title="服务端会话 ID（联调 curl 用），点击复制" @click="copySessionId">
         {{ activeSession.sessionId }}
         <Icon name="copy" :size="11" />
       </button>
@@ -265,7 +266,7 @@ onMounted(focusComposer)
           @keydown="onKeydown"
         />
         <div class="composer-bar">
-          <label class="stream-switch" title="开启后逐字流式输出（SSE），关闭则同步等待完整回答">
+          <label v-if="auth.isAdmin" class="stream-switch" title="开启后逐字流式输出（SSE），关闭则同步等待完整回答（开发对照用）">
             <input v-model="streamMode" type="checkbox" />
             <span>流式输出</span>
           </label>
