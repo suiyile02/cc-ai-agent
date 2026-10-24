@@ -24,6 +24,15 @@ public class AuthProps {
      */
     private boolean blacklistFailOpen = true;
     /**
+     * 演示一键登录开关(2026-10-13): 登录页"演示账号"按钮经 {@code POST /api/auth/demo-login}
+     * 免密换取演示账号会话——账号口令既不显示在界面也不进前端代码包, 口令轮换无需重发前端。
+     * 安全边界: 免密仅限配置指定的低权演示账号(知识库只读+本人日志), 且所有会话共享同一
+     * userId 的对话频率限额(10/分+200/日), 刷会话不会放大厂商消费; 部署层再叠 Nginx IP 限流。
+     */
+    private boolean demoLoginEnabled = true;
+    /** 演示一键登录的目标账号名(需预先存在且 status=1; 由手工建号+提权 DEMO 角色) */
+    private String demoLoginUsername = "demo";
+    /**
      * 注册开关(默认开=保持历史行为)。**部署演示时必须关**({@code REGISTRATION_ENABLED=false}):
      * 注册端点公开且无节流, 开放等于任何人可自助创建账号刷对话量(每条消息 4~7 次厂商调用)。
      * 演示账号(含管理员)建好后关闭; 需要再开时临时置回 true。

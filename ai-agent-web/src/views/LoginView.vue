@@ -24,13 +24,13 @@ function switchMode(m) {
   form.password = ''
 }
 
-function afterAuth(body) {
+function afterAuth(body, greeting) {
   // 换账号登录前清空上一个用户的会话缓存，防止跨账号残留
   chat.$reset()
   auth.setAuth(body.data.token, body.data.user)
   // 每次登录都弹一次说明(管理员除外): 告知演示账号/普通账号的能力与限制
   auth.postLoginTip = !auth.isAdmin
-  toast.success(mode.value === 'login' ? '登录成功' : '注册成功')
+  toast.success(greeting || (mode.value === 'login' ? '登录成功' : '注册成功'))
   router.push(typeof route.query.redirect === 'string' ? route.query.redirect : '/chat')
 }
 
@@ -67,10 +67,19 @@ async function submit() {
   }
 }
 
-function fillAdmin() {
-  mode.value = 'login'
-  form.username = 'admin'
-  form.password = 'admin123'
+const demoLoading = ref(false)
+
+// 演示一键登录: 免密直达演示账号(后端限定), 界面与前端包不出现任何账号口令
+async function demoLogin() {
+  if (demoLoading.value) return
+  demoLoading.value = true
+  try {
+    afterAuth(await authApi.demoLogin(), '欢迎体验演示')
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    demoLoading.value = false
+  }
 }
 </script>
 
@@ -140,10 +149,13 @@ function fillAdmin() {
         </button>
       </form>
 
-      <div class="login-hint">
-        <span>首次联调可用种子账号</span>
-        <button class="link-btn mono" type="button" @click="fillAdmin">admin / admin123</button>
-        <span>（点击自动填充）</span>
+      <div class="login-hint demo-entry">
+        <button class="link-btn demo-btn" type="button" :disabled="demoLoading" @click="demoLogin">
+          <span v-if="demoLoading" class="spinner" style="width: 12px; height: 12px" />
+          <Icon v-else name="zap" :size="12" />
+          {{ demoLoading ? '正在进入演示…' : '演示账号' }}
+        </button>
+        <span class="demo-tip">点击此处查看功能演示，无需账号密码</span>
       </div>
     </div>
   </div>
@@ -242,4 +254,23 @@ function fillAdmin() {
   padding: 0;
   text-decoration: underline dotted;
 }
+
+/* 演示账号一键入口: 按钮化(不再以明文口令形式出现) */
+.demo-entry { flex-direction: column; gap: 7px; }
+.demo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 7px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  transition: all var(--speed);
+}
+.demo-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.demo-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.demo-tip { color: var(--fg-faint); }
 </style>

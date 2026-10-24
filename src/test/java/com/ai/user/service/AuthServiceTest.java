@@ -61,4 +61,50 @@ class AuthServiceTest {
         assertEquals(ErrorCode.USER_EXISTS, e.getErrorCode(), "闸门放行后到达既有重名校验");
         verify(userMapper).selectCount(any());
     }
+
+    /* ---------------- 演示一键登录(登录页"演示账号"按钮, 免密) ---------------- */
+
+    private com.ai.user.entity.SysUser demoUser(int status) {
+        com.ai.user.entity.SysUser u = new com.ai.user.entity.SysUser();
+        u.setId(86L);
+        u.setUsername("demo");
+        u.setRole("DEMO");
+        u.setStatus(status);
+        return u;
+    }
+
+    @Test
+    void demoLoginIssuesTokenForConfiguredAccount() {
+        when(userMapper.selectOne(any())).thenReturn(demoUser(1));
+
+        service.demoLogin();
+
+        verify(userMapper).selectOne(any());
+        // buildAuthVO 走真实 JwtTokenProvider(随机密钥即可签发), 到这里未抛即成功
+    }
+
+    @Test
+    void demoLoginRejectedWhenAccountMissing() {
+        when(userMapper.selectOne(any())).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class, () -> service.demoLogin());
+        assertEquals(ErrorCode.USER_NOT_FOUND, e.getErrorCode(), "演示账号未建时给可操作的指引而非裸 500");
+    }
+
+    @Test
+    void demoLoginRejectedWhenAccountDisabled() {
+        when(userMapper.selectOne(any())).thenReturn(demoUser(0));
+
+        BusinessException e = assertThrows(BusinessException.class, () -> service.demoLogin());
+        assertEquals(ErrorCode.USER_DISABLED, e.getErrorCode());
+    }
+
+    @Test
+    void demoLoginRejectedWhenSwitchedOff() {
+        props.getAuth().setDemoLoginEnabled(false);
+
+        BusinessException e = assertThrows(BusinessException.class, () -> service.demoLogin());
+        assertEquals(ErrorCode.AUTH_FAILED, e.getErrorCode());
+        verifyNoInteractions(userMapper);
+    }
 }

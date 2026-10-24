@@ -520,6 +520,11 @@ com.ai
 ### 用户与鉴权
 
 - 注册/登录: `/api/auth/register`、`/api/auth/login`，密码 PBKDF2 加盐哈希(`PasswordHasher`)。
+  **演示一键登录(2026-10-13)**: `POST /api/auth/demo-login` 免密换取演示账号会话(登录页"演示账号"按钮)——
+  账号口令既不显示在界面也不进前端代码包(替代旧"admin/admin123 明文自动填充"), 口令轮换无需重发前端。
+  配置 `app.auth.demo-login-enabled`(默认 true)/`demo-login-username`(默认 demo, 需预先建号+DEMO 角色)。
+  免密安全边界: 限定单一低权账号, 全部会话共享同一 userId 的对话频率限额(刷会话不放大厂商消费),
+  部署层叠 Nginx IP 限流。
   **注册开关(2026-10-13, 部署演示闸门)**: `app.auth.registration-enabled`(默认 true 保持历史行为;
   yaml 经 `REGISTRATION_ENABLED` 环境变量注入)——注册端点公开且无节流, **部署演示必须置 false**
   (开放=任何人自助建号刷对话量, 每条消息 4~7 次厂商调用); 关闭后友好拒绝 `REGISTRATION_DISABLED(6007)`。

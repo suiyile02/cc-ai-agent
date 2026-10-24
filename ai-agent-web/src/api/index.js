@@ -70,6 +70,8 @@ http.interceptors.response.use(
 export const authApi = {
   login: (data) => http.post('/auth/login', data),
   register: (data) => http.post('/auth/register', data),
+  /** 演示一键登录(免密, 后端限定演示账号; 界面与前端包均不含账号口令) */
+  demoLogin: () => http.post('/auth/demo-login'),
   me: () => http.get('/auth/me'),
 }
 

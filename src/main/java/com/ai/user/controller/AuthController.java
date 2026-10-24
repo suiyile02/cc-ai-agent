@@ -40,6 +40,16 @@ public class AuthController {
     }
 
     /**
+     * 演示一键登录(登录页"演示账号"按钮)：免密换取演示账号会话, 界面与前端包均不含账号口令。
+     *
+     * @return 统一响应, data 为 AuthVO(token + user)
+     */
+    @PostMapping("/demo-login")
+    public Result<AuthVO> demoLogin() {
+        return Result.ok("欢迎体验演示", authService.demoLogin());
+    }
+
+    /**
      * 用户登录。
      *
      * @param request 登录请求(用户名/密码)

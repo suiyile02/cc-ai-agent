@@ -88,6 +88,32 @@ public class AuthService {
     }
 
     /**
+     * 演示一键登录：免密换取演示账号会话(登录页"演示账号"按钮)。
+     *
+     * <p>免密的安全边界(见 {@link com.ai.config.props.AuthProps#demoLoginEnabled} 注释):
+     * 目标限定配置指定的单一低权账号, 全部会话共享该 userId 的对话频率限额——刷会话不放大厂商消费。
+     * 不走登录失败限流(无"失败"可言); 目标缺失/被禁用按登录同口径报错。
+     *
+     * @return AuthVO(token + user)
+     * @throws BusinessException 功能关闭(5002)/演示账号不存在(6001)/账号被禁用(6004)
+     */
+    @Transactional(readOnly = true)
+    public AuthVO demoLogin() {
+        if (!appProperties.getAuth().isDemoLoginEnabled()) {
+            throw new BusinessException(ErrorCode.AUTH_FAILED, "演示一键登录未开放");
+        }
+        SysUser user = findByUsername(appProperties.getAuth().getDemoLoginUsername());
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND,
+                    "演示账号未创建，请管理员先建号并提权为 DEMO 角色");
+        }
+        if (user.getStatus() == null || user.getStatus() != 1) {
+            throw new BusinessException(ErrorCode.USER_DISABLED);
+        }
+        return buildAuthVO(user);
+    }
+
+    /**
      * 退出登录：吊销当前令牌(A1 Token 吊销)。
      *
      * @param payload   令牌负载(jti/过期时间)
