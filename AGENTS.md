@@ -210,7 +210,9 @@ com.ai
   `parent_ref` 后入向量库(内部键不泄漏)。`everyChunkHasParent()` 默认 true(缺标记=约定漂移, 入库 WARN;
   曾发生"聚合晚于 addMetadata 导致全量缺键"的顺序错误), `code-ast` 覆写为 false(独立声明无父块合法)。
   `knowledge_chunk` 冗余存 `file_name`(所属文档, 查父块免 join); `knowledge_document` 存 `full_text`
-  (提取清洗后全文, MEDIUMTEXT, 仅新入库/重处理写入, 不进列表接口)。
+  (提取清洗后全文, MEDIUMTEXT, 仅新入库/重处理写入, **不进列表接口**——大字段不随分页传输;
+  查看走专属端点 `GET /api/knowledge/documents/{id}/full-text`, 仅 status=2、登录即可、直查库无缓存,
+  存量行 NULL 由 VO `available=false` 表达, 前端提示重处理生成)。
   检索时 `RagRetrievalService.expandToParents` 在**阈值过滤之后**
   按命中小块的 `doc_id+parent_ref` 批量取父块替换注入文本——召回/排序/阈值/出口判据(读未展开的
   `semanticMaxScore` 与计数)仍按小块分数, 只有喂给模型的上下文换成父块全文。

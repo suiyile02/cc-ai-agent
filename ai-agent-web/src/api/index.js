@@ -121,6 +121,8 @@ export const knowledgeApi = {
   /** 检索启用/禁用(管理员; 禁用不删向量/索引, 启用零成本恢复) */
   disableDocument: (id) => http.post(`/knowledge/documents/${id}/disable`),
   enableDocument: (id) => http.post(`/knowledge/documents/${id}/enable`),
+  /** 查看文档全文(仅已完成; 存量文档可能未生成, 看 data.available) */
+  getFullText: (id) => http.get(`/knowledge/documents/${id}/full-text`),
 }
 
 /* ================= 系统日志 ================= */

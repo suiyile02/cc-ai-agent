@@ -311,13 +311,14 @@
 
 | 类 | 方法 | 作用 |
 |---|---|---|
-| `KnowledgeController` | `upload` / `uploadBatch` / `listDocuments` / `deleteDocument` / `reprocess` / `reindexAll` | 端点 8~12 + `/reindex-all`；**Controller 层无 `@Require*`**，删除/重处理/全库重建的 `@RequireAdmin` 挂在 Service（见 flow-map §22） |
+| `KnowledgeController` | `upload` / `uploadBatch` / `listDocuments` / `deleteDocument` / `reprocess` / `reindexAll` / `fullText` | 端点 8~12 + `/reindex-all` + `GET /documents/{id}/full-text`；**Controller 层无 `@Require*`**，写操作的 `@RequireAdmin` 挂在 Service（见 flow-map §22） |
 | `KnowledgeDocumentService` | `upload(file,userId)` | §6 校验链 → 落盘 → `status=0` 落库 → 事务后触发入库 |
 | | `uploadBatch(files,userId)` | 逐文件走同一链，部分失败语义 |
 | | `listDocuments(pageNum,pageSize,…)` | 分页 + `status`/关键字过滤，返回 VO |
 | | `deleteDocument(id)` | 清向量 → 清关键词索引 → 清父块 → 删记录 → 尽力删文件 |
 | | `reprocess(id)` | 清旧向量与索引 + 清旧父块 + 状态重置 → 重新入库 |
 | | `reindexAll()` ★新增 | 全库重建(管理员)：逐篇按 reprocess 语义重灌, 跳过 status=1, 单篇失败仅 WARN; 返回 `ReindexAllVO(已提交, 候选)`; 与 reprocess 共用 `resetForIngest`; 供切分策略/嵌入模型变更后一次性生效 | Controller `/reindex-all` |
+| | `fullText(id)` ★新增 | 查看文档全文(读)：仅 status=2, 直查 `full_text` 列无缓存; 存量行 NULL → `available=false`(前端提示重处理生成); 不进列表 VO(大字段不随分页传输) | Controller `GET /documents/{id}/full-text` |
 | | `ingestAfterCommit(docId)` + `afterCommit()` | **事务提交后**再投 `@Async`（否则异步线程读不到未提交记录） |
 | | `requireDocument(id)` | 存在性校验（1004） |
 | | `deleteVectorPoints(documentId)` | 按 `doc_id` filter 精确删点（向量库不可用→记日志继续） |

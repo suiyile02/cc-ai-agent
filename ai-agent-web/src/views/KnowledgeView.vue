@@ -178,6 +178,29 @@ async function doDelete() {
 
 const hasProcessing = computed(() => list.value.some((d) => d.status === 0 || d.status === 1))
 
+/* ---------------- 查看全文(仅已完成; 每次直查库, 无缓存) ---------------- */
+const fullModal = ref(false)
+const fullLoading = ref(false)
+const fullDoc = ref(null)
+const fullData = ref(null)
+
+async function openFullText(doc) {
+  if (doc.status !== 2) return
+  fullDoc.value = doc
+  fullData.value = null
+  fullLoading.value = true
+  fullModal.value = true
+  try {
+    const body = await knowledgeApi.getFullText(doc.id)
+    fullData.value = body.data
+  } catch (e) {
+    toast.error(e.message)
+    fullModal.value = false
+  } finally {
+    fullLoading.value = false
+  }
+}
+
 onMounted(() => load())
 onUnmounted(() => clearInterval(pollTimer))
 </script>
@@ -251,7 +274,13 @@ onUnmounted(() => clearInterval(pollTimer))
               <td class="cell-strong">
                 <span style="display: inline-flex; align-items: center; gap: 7px">
                   <Icon name="file" :size="14" style="color: var(--fg-faint)" />
-                  <span class="cell-truncate" style="max-width: 240px" :title="doc.fileName">{{ doc.fileName }}</span>
+                  <span
+                    class="cell-truncate"
+                    :class="{ 'name-link': doc.status === 2 }"
+                    style="max-width: 240px"
+                    :title="doc.status === 2 ? '点击查看全文' : doc.fileName"
+                    @click="openFullText(doc)"
+                  >{{ doc.fileName }}</span>
                 </span>
               </td>
               <td class="mono">{{ doc.fileType || '-' }}</td>
@@ -336,6 +365,26 @@ onUnmounted(() => clearInterval(pollTimer))
         <button class="btn primary" @click="batchModal = false">好的</button>
       </template>
     </Modal>
+
+    <!-- 文档全文：等宽展示 + 内部滚动；存量文档无全文时给出生成指引 -->
+    <Modal v-model="fullModal" :title="fullDoc?.fileName || '文档全文'" :width="760">
+      <div v-if="fullLoading" class="full-loading"><span class="spinner" /> 正在读取全文…</div>
+      <div v-else-if="!fullData?.available" class="empty" style="padding: 26px 0">
+        <Icon name="inbox" :size="26" class="icon" />
+        <p>该文档暂无全文</p>
+        <p class="hint">2026-10-12 前入库的存量文档需「重新处理」后生成全文</p>
+      </div>
+      <template v-else>
+        <div class="full-meta">
+          <span class="mono">{{ fullData.fileType || '-' }}</span>
+          <span>共 {{ fullData.charCount.toLocaleString() }} 字</span>
+        </div>
+        <pre class="full-pre">{{ fullData.content }}</pre>
+      </template>
+      <template #footer>
+        <button class="btn" @click="fullModal = false">关闭</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -347,6 +396,48 @@ onUnmounted(() => clearInterval(pollTimer))
   font-size: 12px;
   color: var(--info);
   margin-left: auto;
+}
+
+/* 文件名 → 查看全文入口(仅已完成文档挂载该类) */
+.name-link {
+  cursor: pointer;
+  transition: color var(--speed);
+}
+.name-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* 全文弹窗 */
+.full-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 30px 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.full-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 10px;
+}
+.full-pre {
+  max-height: 62vh;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 批量上传结果弹窗 */

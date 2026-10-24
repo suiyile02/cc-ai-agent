@@ -252,6 +252,25 @@
 
 ---
 
+## 已完成记录（2026-10-13 第二十批, 知识库"查看文档全文"——变体 B 端点直查版）
+
+- 需求: 前端知识库页面可查看文档全部内容(来源 `knowledge_document.full_text`, 第十七批加的列),
+  原始诉求含"懒缓存 + 失效策略"。**定案为变体 B(不缓存)**: 当前 18 篇演示语料下直查库 ~1ms,
+  Redis 缓存(含失效挂点/降级口径/超大保护)纯属为真实体量预建——语料到真实体量、出现重复打开的
+  热点文档时再按当日方案(键 `kb:doc-full:{id}`/TTL/超大跳过/resetForIngest+delete 挂 evict)补。
+- 后端: `GET /api/knowledge/documents/{id}/full-text`(登录即可, 与列表一致)→ `KnowledgeDocumentService.fullText`
+  → `KnowledgeFullTextVO(fileName, fileType, available, charCount, content)`。
+  仅 status=2 服务(重处理窗口期防读到陈旧内容; 前端已按状态放行, 校验只兜点开瞬间的竞态);
+  存量行 full_text=NULL → `available=false`(不当错误处理, 前端提示重处理生成)。
+- 前端(ai-agent-web): 文件名变可点击入口(仅已完成行, hover 提示), 复用 `Modal` 等宽展示
+  (max-height 62vh 内部滚动, 头部显示类型/字数), 加载态与"存量文档无全文"空态;
+  `knowledgeApi.getFullText`。前端不做缓存(后端为唯一事实来源, 双层缓存=两份失效逻辑)。
+- 测试: `KnowledgeDocumentServiceTest` 三例(已完成含全文/存量 NULL→available=false/非完成拒绝 2002)。
+- 文档: AGENTS.md full_text 条目补端点口径; method-map 两行。
+- 待运行时验证: 端点需后端重启后生效(旧进程无新字节码), curl 自查命令见交付说明。
+
+验证: KnowledgeDocumentServiceTest 20 例 + LayeredArchitectureTest 12 例绿; 前端 `npm run build` 通过(1.04s)。
+
 ## 已完成记录（2026-10-13 第十九批, 评测基建 + 重排默认 api + 章级父块 + 全库重建入口）
 
 ### ① 可重复评测脚本 `docs/eval/rag_eval.py`（P3-6 定标集的固化）

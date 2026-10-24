@@ -10,6 +10,7 @@ import com.ai.common.PageResult;
 import com.ai.config.AppProperties;
 import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
+import com.ai.knowledge.dto.KnowledgeFullTextVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.dto.ReindexAllVO;
 import com.ai.knowledge.entity.KnowledgeDocument;
@@ -293,6 +294,29 @@ public class KnowledgeDocumentService {
         }
         log.info("全库重建已提交: {}/{} 篇(异步入库中, 完成看文档列表状态)", submitted, candidates);
         return new ReindexAllVO(submitted, candidates);
+    }
+
+    /**
+     * 查看文档全文（专属端点用）：读 {@code knowledge_document.full_text} 直查直返，不做缓存。
+     *
+     * <p>仅 status=2 服务——失败/处理中的文档即便残留旧全文也不展示（重处理窗口期防读到陈旧内容；
+     * 前端已按状态放行点击，此处校验只兜"点开瞬间状态变化"的竞态）。
+     * full_text 列加入（2026-10-12）前入库的存量行该列为 NULL，以 {@code available=false}
+     * 告知前端提示重新处理生成，不当错误处理。
+     *
+     * @param id 文档 ID
+     * @return 全文 VO（available=false 时 content 为 null）
+     * @throws BusinessException 文档不存在(2001)或状态非已完成(2002)
+     */
+    public KnowledgeFullTextVO fullText(Long id) {
+        KnowledgeDocument doc = requireDocument(id);
+        if (doc.getStatus() == null || doc.getStatus() != 2) {
+            throw new BusinessException(ErrorCode.DOCUMENT_PROCESSING);
+        }
+        String text = doc.getFullText();
+        boolean available = text != null && !text.isBlank();
+        return new KnowledgeFullTextVO(doc.getFileName(), doc.getFileType(),
+                available, available ? text.length() : 0, available ? text : null);
     }
 
     /**

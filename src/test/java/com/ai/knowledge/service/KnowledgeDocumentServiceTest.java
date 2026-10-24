@@ -307,4 +307,42 @@ class KnowledgeDocumentServiceTest {
         verify(ingestionService).ingestDocument(7L);
         verify(ingestionService, never()).ingestDocument(8L); // 失败篇不得触发入库
     }
+
+    /* ---------------- 查看全文(专属端点, 直查库无缓存) ---------------- */
+
+    @Test
+    void fullTextServesCompletedDocWithStoredContent() {
+        KnowledgeDocument d = completedDoc(11L);
+        d.setFullText("# 员工手册\n正文内容");
+        when(documentMapper.selectById(11L)).thenReturn(d);
+
+        var vo = service.fullText(11L);
+
+        assertTrue(vo.available());
+        assertEquals("# 员工手册\n正文内容", vo.content());
+        assertEquals("员工手册.md", vo.fileName());
+        assertEquals("# 员工手册\n正文内容".length(), vo.charCount());
+    }
+
+    @Test
+    void fullTextMarksLegacyDocWithoutStoredTextUnavailable() {
+        KnowledgeDocument d = completedDoc(12L); // fullText 保持 null(存量行, 列加入前入库)
+        when(documentMapper.selectById(12L)).thenReturn(d);
+
+        var vo = service.fullText(12L);
+
+        assertFalse(vo.available(), "存量文档无全文: available=false 让前端提示重处理生成");
+        assertNull(vo.content());
+        assertEquals(0, vo.charCount());
+    }
+
+    @Test
+    void fullTextRejectsDocsNotCompleted() {
+        KnowledgeDocument d = completedDoc(13L);
+        d.setStatus(1); // 处理中: 前端已按状态放行, 此处只兜点开瞬间的状态变化竞态
+        when(documentMapper.selectById(13L)).thenReturn(d);
+
+        BusinessException e = assertThrows(BusinessException.class, () -> service.fullText(13L));
+        assertEquals(ErrorCode.DOCUMENT_PROCESSING, e.getErrorCode());
+    }
 }

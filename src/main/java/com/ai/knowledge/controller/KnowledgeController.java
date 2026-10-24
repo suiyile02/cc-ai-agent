@@ -6,6 +6,7 @@ import com.ai.common.PageResult;
 import com.ai.common.Result;
 import com.ai.knowledge.dto.BatchUploadResultVO;
 import com.ai.knowledge.dto.KnowledgeDocumentVO;
+import com.ai.knowledge.dto.KnowledgeFullTextVO;
 import com.ai.knowledge.dto.KnowledgeUploadVO;
 import com.ai.knowledge.dto.ReindexAllVO;
 import com.ai.user.security.UserContext;
@@ -25,8 +26,8 @@ import java.util.List;
  * 知识库管理接口(需求第 2 章)：上传 / 列表 / 删除 / 重新处理 / 检索启用与禁用。
  * Controller 只做请求映射与参数绑定，业务逻辑在 {@link KnowledgeDocumentService}。
  *
- * <p>写操作（上传/批量上传/删除/重处理/禁用/启用）全部在 Service 方法上标 {@code @RequireAdmin}
- * ——知识库是全公司共享的 RAG 内容源；列表查询对所有人开放。
+ * <p>写操作（上传/批量上传/删除/重处理/禁用/启用/全库重建）全部在 Service 方法上标 {@code @RequireAdmin}
+ * ——知识库是全公司共享的 RAG 内容源；列表与全文查看等读操作对所有人开放。
  */
 @RestController
 @RequestMapping("/api/knowledge")
@@ -120,6 +121,19 @@ public class KnowledgeController {
     @PostMapping("/reindex-all")
     public Result<ReindexAllVO> reindexAll() {
         return Result.ok("全库重建已提交", documentService.reindexAll());
+    }
+
+    /**
+     * 查看文档全文：仅已完成(status=2)的文档；存量文档可能未生成全文(data.available=false,
+     * 前端提示重新处理生成)。登录即可查看(与列表一致)；直查库、无缓存(演示语料下单行读取 ~1ms,
+     * 真实体量再评估缓存)。
+     *
+     * @param id 文档 ID
+     * @return 统一响应, data 为全文 VO
+     */
+    @GetMapping("/documents/{id}/full-text")
+    public Result<KnowledgeFullTextVO> fullText(@PathVariable Long id) {
+        return Result.ok(documentService.fullText(id));
     }
 
     /**
