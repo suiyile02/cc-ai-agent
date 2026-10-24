@@ -14,10 +14,10 @@ const auth = useAuthStore()
 const chat = useChatStore()
 const toast = useToastStore()
 
-// 权限导航：普通用户仅「智能对话」，管理员可见全部
+// 权限导航：普通用户可见「智能对话/知识库(只读: 列表+查看全文)」，其余管理员专属
 const NAV = [
   { name: 'chat', label: '智能对话', icon: 'chat' },
-  { name: 'knowledge', label: '知识库', icon: 'database', adminOnly: true },
+  { name: 'knowledge', label: '知识库', icon: 'database' },
   { name: 'debug', label: '检索调试', icon: 'sliders', adminOnly: true },
   { name: 'system', label: '系统日志', icon: 'logs', adminOnly: true },
 ]

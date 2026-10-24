@@ -23,7 +23,8 @@ const routes = [
         path: 'knowledge',
         name: 'knowledge',
         component: () => import('../views/KnowledgeView.vue'),
-        meta: { title: '知识库', adminOnly: true },
+        // 所有登录用户可进(列表+查看全文); 管理操作在页面内按 isAdmin 隐藏, 后端另有 @RequireAdmin 兜底
+        meta: { title: '知识库' },
       },
       {
         path: 'debug',

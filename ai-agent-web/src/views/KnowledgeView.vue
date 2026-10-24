@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { knowledgeApi } from '../api'
 import { formatDateTime, formatFileSize } from '../utils/format'
+import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import Icon from '../components/Icon.vue'
 import StatusTag from '../components/StatusTag.vue'
@@ -9,6 +10,9 @@ import Modal from '../components/Modal.vue'
 import Pagination from '../components/Pagination.vue'
 
 const toast = useToastStore()
+// 页面对所有登录用户开放(列表+查看全文); 管理操作(上传/重处理/删除/启停)仅管理员可见,
+// 后端另有 @RequireAdmin 切面兜底——隐藏只是体验, 拦截才是边界
+const auth = useAuthStore()
 
 /* ---------------- 状态字典（与后端 KnowledgeDocument.status 对齐） ---------------- */
 const STATUS = {
@@ -210,14 +214,19 @@ onUnmounted(() => clearInterval(pollTimer))
     <header class="page-header">
       <div>
         <div class="title"><Icon name="database" :size="18" style="color: var(--accent)" /> 知识库管理</div>
-        <div class="sub">上传文本文档（PDF/DOCX/代码/CSV/JSON 等，≤50MB，归档/可执行除外），异步入库后用于 RAG 检索</div>
+        <div class="sub">
+          {{ auth.isAdmin
+            ? '上传文本文档（PDF/DOCX/代码/CSV/JSON 等，≤50MB，归档/可执行除外），异步入库后用于 RAG 检索'
+            : '知识库收录的文档（入库后用于 RAG 检索）；点击文件名可查看全文' }}
+        </div>
       </div>
-      <button class="btn primary" :disabled="uploading" @click="pickFile">
+      <button v-if="auth.isAdmin" class="btn primary" :disabled="uploading" @click="pickFile">
         <span v-if="uploading" class="spinner" />
         <Icon v-else name="upload" :size="15" />
         {{ uploading ? `上传中 ${progress}%` : '上传文档（可多选）' }}
       </button>
       <input
+        v-if="auth.isAdmin"
         ref="fileInput"
         type="file"
         :accept="acceptExts"
@@ -266,7 +275,7 @@ onUnmounted(() => clearInterval(pollTimer))
               <th>错误信息</th>
               <th>上传人 ID</th>
               <th>创建时间</th>
-              <th style="width: 150px">操作</th>
+              <th v-if="auth.isAdmin" style="width: 150px">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -296,7 +305,7 @@ onUnmounted(() => clearInterval(pollTimer))
               </td>
               <td class="mono">{{ doc.createdBy }}</td>
               <td class="mono" style="font-size: 12px">{{ formatDateTime(doc.createTime) }}</td>
-              <td>
+              <td v-if="auth.isAdmin">
                 <div style="display: flex; gap: 6px">
                   <button
                     class="toggle-btn"
@@ -322,7 +331,8 @@ onUnmounted(() => clearInterval(pollTimer))
         <div v-if="!list.length && !loading" class="empty">
           <Icon name="inbox" :size="30" class="icon" />
           <p>暂无文档</p>
-          <p class="hint">点击右上角「上传文档」添加第一个知识文件，或检查筛选条件</p>
+          <p v-if="auth.isAdmin" class="hint">点击右上角「上传文档」添加第一个知识文件，或检查筛选条件</p>
+          <p v-else class="hint">知识库暂未收录文档；如需补充资料请联系管理员上传</p>
         </div>
       </div>
 

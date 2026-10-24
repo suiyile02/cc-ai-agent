@@ -267,7 +267,11 @@
   `knowledgeApi.getFullText`。前端不做缓存(后端为唯一事实来源, 双层缓存=两份失效逻辑)。
 - 测试: `KnowledgeDocumentServiceTest` 三例(已完成含全文/存量 NULL→available=false/非完成拒绝 2002)。
 - 文档: AGENTS.md full_text 条目补端点口径; method-map 两行。
-- 待运行时验证: 端点需后端重启后生效(旧进程无新字节码), curl 自查命令见交付说明。
+- **补充(同日, 权限口径)**: 知识库页面对**所有登录用户**开放——路由去 `adminOnly`、导航放开; 页面内管理操作
+  (上传按钮/操作列/空态提示)按 `auth.isAdmin` 隐藏, 副标题按身份区分。**后端零改动**: 读端点(列表/全文)
+  本就无管理门, 写操作由 `@RequireAdmin` 切面拦截——前端隐藏只是体验, 拦截才是边界。
+  实测(运行中后端): 普通用户读列表 200 / 读全文 200(含存量无标题 txt) / reprocess 与 reindex-all 均
+  5002(HTTP 403); 管理员同路径正常过管理门。
 
 验证: KnowledgeDocumentServiceTest 20 例 + LayeredArchitectureTest 12 例绿; 前端 `npm run build` 通过(1.04s)。
 
