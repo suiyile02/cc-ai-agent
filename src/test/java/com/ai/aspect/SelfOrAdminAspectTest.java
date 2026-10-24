@@ -3,7 +3,6 @@ package com.ai.aspect;
 import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.user.security.RequireAdmin;
-import com.ai.user.security.RequireRoles;
 import com.ai.user.security.RequireSelfOrAdmin;
 import com.ai.user.security.UserContext;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -23,7 +22,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * 授权切面单元测试：{@code RequireSelfOrAdmin}(管理员放行/非管理员强制改写/fail-closed)
- * 与 {@code RequireAdmin}(仅管理员放行)。
+ * 与 {@code RequireAdmin}(仅管理员放行)。(RequireRoles 多角色用例随该注解删除而移除。)
  */
 class SelfOrAdminAspectTest {
 
@@ -130,58 +129,5 @@ class SelfOrAdminAspectTest {
         assertEquals(ErrorCode.TOKEN_INVALID, e.getErrorCode());
     }
 
-    /* ---------------- RequireRoles(角色列表放行, delete 对 ADMIN+DEMO 开放) ---------------- */
 
-    /** 供反射获取注解实例的样例方法(与 deleteDocument 同款声明) */
-    @SuppressWarnings("unused")
-    static class RolesSample {
-
-        @RequireRoles({UserContext.ROLE_ADMIN, UserContext.ROLE_DEMO})
-        public void handler(Long id) {
-        }
-    }
-
-    private RequireRoles rolesAnnotation() throws Exception {
-        Method method = RolesSample.class.getDeclaredMethod("handler", Long.class);
-        return method.getAnnotation(RequireRoles.class);
-    }
-
-    @Test
-    void adminAndDemoPassRequireRoles() throws Throwable {
-        UserContext.set(new UserContext.CurrentUser(1L, "admin", UserContext.ROLE_ADMIN));
-        when(pjp.proceed()).thenReturn("ok");
-        assertEquals("ok", aspect.enforceRoles(pjp, rolesAnnotation()));
-
-        UserContext.set(new UserContext.CurrentUser(5L, "demo", UserContext.ROLE_DEMO));
-        when(pjp.proceed()).thenReturn("ok");
-        assertEquals("ok", aspect.enforceRoles(pjp, rolesAnnotation()), "演示账号必须过 delete 的角色门");
-    }
-
-    @Test
-    void regularUserRejectedByRequireRoles() throws Throwable {
-        UserContext.set(new UserContext.CurrentUser(2L, "user", UserContext.ROLE_USER));
-
-        BusinessException e = assertThrows(BusinessException.class,
-                () -> aspect.enforceRoles(pjp, rolesAnnotation()));
-        assertEquals(ErrorCode.AUTH_FAILED, e.getErrorCode(), "普通用户不得删除文档");
-    }
-
-    @Test
-    void missingContextRejectedByRequireRoles() throws Throwable {
-        BusinessException e = assertThrows(BusinessException.class,
-                () -> aspect.enforceRoles(pjp, rolesAnnotation()));
-        assertEquals(ErrorCode.TOKEN_INVALID, e.getErrorCode());
-    }
-
-    @Test
-    void emptyRoleListFailsClosed() throws Throwable {
-        // 注解写错(@RequireRoles({}))时的安全倾向必须是全拒, 而非全放
-        UserContext.set(new UserContext.CurrentUser(1L, "admin", UserContext.ROLE_ADMIN));
-
-        RequireRoles empty = mock(RequireRoles.class);
-        when(empty.value()).thenReturn(new String[0]);
-        BusinessException e = assertThrows(BusinessException.class,
-                () -> aspect.enforceRoles(pjp, empty));
-        assertEquals(ErrorCode.AUTH_FAILED, e.getErrorCode());
-    }
 }
