@@ -32,9 +32,15 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class AuthInterceptor implements HandlerInterceptor {
 
-    /** 无需登录的公开接口 */
+    /**
+     * 无需登录的公开接口。
+     *
+     * <p>免密端点(登录/注册/演示一键登录)必须登记在这里——它们被调用时还不持有 token,
+     * 漏登记会在拦截器层被 6005/401 拒绝(2026-10-13 demo-login 上线时踩过, 回归用例
+     * {@code AuthInterceptorTest#passwordlessEndpointsMustBeWhitelistedBeforeController} 已钉住)。
+     */
     private static final Set<String> PUBLIC_PATHS = Set.of(
-            "/api/auth/register", "/api/auth/login");
+            "/api/auth/register", "/api/auth/login", "/api/auth/demo-login");
 
     private final JwtTokenProvider tokenProvider;
     private final TokenBlacklistService tokenBlacklistService;
