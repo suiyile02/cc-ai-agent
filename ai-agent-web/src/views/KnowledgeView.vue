@@ -217,7 +217,9 @@ onUnmounted(() => clearInterval(pollTimer))
         <div class="sub">
           {{ auth.isAdmin
             ? '上传文本文档（PDF/DOCX/代码/CSV/JSON 等，≤50MB，归档/可执行除外），异步入库后用于 RAG 检索'
-            : '知识库收录的文档（入库后用于 RAG 检索）；点击文件名可查看全文' }}
+            : auth.isDemo
+              ? '知识库收录的文档；点击文件名可查看全文，可删除文档'
+              : '知识库收录的文档（入库后用于 RAG 检索）；点击文件名可查看全文' }}
         </div>
       </div>
       <button v-if="auth.isAdmin" class="btn primary" :disabled="uploading" @click="pickFile">
@@ -275,7 +277,7 @@ onUnmounted(() => clearInterval(pollTimer))
               <th>错误信息</th>
               <th>上传人 ID</th>
               <th>创建时间</th>
-              <th v-if="auth.isAdmin" style="width: 150px">操作</th>
+              <th v-if="auth.isAdmin || auth.isDemo" style="width: 150px">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -305,9 +307,10 @@ onUnmounted(() => clearInterval(pollTimer))
               </td>
               <td class="mono">{{ doc.createdBy }}</td>
               <td class="mono" style="font-size: 12px">{{ formatDateTime(doc.createTime) }}</td>
-              <td v-if="auth.isAdmin">
+              <td v-if="auth.isAdmin || auth.isDemo">
                 <div style="display: flex; gap: 6px">
                   <button
+                    v-if="auth.isAdmin"
                     class="toggle-btn"
                     :class="doc.enabled === false ? 'off' : 'on'"
                     :disabled="doc.status !== 2 || togglingId === doc.id"
@@ -317,7 +320,7 @@ onUnmounted(() => clearInterval(pollTimer))
                     <span class="state-dot" />
                     {{ doc.enabled === false ? '已禁用' : '启用中' }}
                   </button>
-                  <button class="btn sm" :disabled="doc.status === 0 || doc.status === 1" title="清理旧向量后重新入库" @click="reprocess(doc)">
+                  <button v-if="auth.isAdmin" class="btn sm" :disabled="doc.status === 0 || doc.status === 1" title="清理旧向量后重新入库" @click="reprocess(doc)">
                     <Icon name="refresh" :size="12" /> 重处理
                   </button>
                   <button class="btn sm danger" @click="askDelete(doc)">

@@ -520,9 +520,17 @@ com.ai
   代价(故障期无防护)由 WARN 暴露。另: 进程内实现 `InMemoryLoginAttemptLimiter` 的过期条目由
   `recordFailure` 在条目数超过 `EVICT_THRESHOLD`(1000) 时顺带清理——**必须保留该门控**, 无阈值则每次
   失败全表扫, 撞库(大量不同用户名)时退化成 O(n²) 自伤; 阈值不放宽到"每次都扫"。
-- 角色: `sys_user.role`(ADMIN/USER, 默认 USER), 登录时写入 JWT `role` claim; `UserContext.CurrentUser.isAdmin()` 判定。
+- 角色: `sys_user.role`(ADMIN/DEMO/USER, 默认 USER), 登录时写入 JWT `role` claim; `UserContext.CurrentUser.isAdmin()/isDemo()` 判定。
+  **DEMO(演示账号, 2026-10-13)**: 介于 USER 与 ADMIN 的受限演示身份, 由注册后手工
+  `UPDATE sys_user SET role='DEMO'` 赋予(无自助入口, 防演示站批量注册提权)。权限矩阵:
+  知识库=列表+查看全文+**删除文档**(`@RequireRoles({ADMIN,DEMO})`); 系统日志=仅本人对话日志
+  (既有 `@RequireSelfOrAdmin` 自动收敛到本人, 前端只展示 用户消息/助手回复/Tokens/耗时/时间 五列);
+  上传/重处理/全库重建/启停仍管理员专属。上传入库的演示由管理员账号完成。
 - 授权: "管理员或本人"类查询用 `@RequireSelfOrAdmin(userIdParam = "...")` 注解 + `SelfOrAdminAspect` 切面统一强制改写 userId 参数, 数据隔离由 Service 层 userId 过滤完成; 越权/无角色返回 `AUTH_FAILED`(5002, HTTP 403)。
-- 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库**上传 / 批量上传 / 删除 / 重处理**(凡能改动全公司共享 RAG 内容的操作一律管理员; 任何登录用户可上传 = 能往同事的答案里塞任意材料)。新增管理类操作时同样挂载。
+- 管理动作: `@RequireAdmin` 注解 + `SelfOrAdminAspect.enforceAdmin`——仅 ADMIN 放行; 已挂知识库**上传 / 批量上传 / 重处理 / 全库重建 / 启停**(凡能改动全公司共享 RAG 内容的操作一律管理员; 任何登录用户可上传 = 能往同事的答案里塞任意材料)。新增管理类操作时同样挂载。
+- 多角色共用动作: `@RequireRoles({角色常量...})` 注解 + `SelfOrAdminAspect.enforceRoles`——角色在列表内放行,
+  未登录/不匹配/空角色数组一律拒绝(fail-closed); 目前唯一挂载点是知识库**删除文档**(ADMIN+DEMO)。
+  架构测试 `knowledgeWritesShouldRequireAdmin` 同步要求写方法标注 `@RequireAdmin` 或 `@RequireRoles`。
   ⚠ **注解标在 Service 方法上，而 Spring AOP 不拦截自调用**: `uploadBatch` 内部直调 `this.upload(...)`，
   只标 `upload` 会让批量入口成为绕过校验的后门，且越权的 5002 会被批量循环的
   `catch (BusinessException)` 降级成"每个文件失败但 HTTP 200"。因此**同一批写方法必须各自都带注解**

@@ -20,6 +20,8 @@ const TABS = [
   { key: 'rag', label: 'RAG 决策', icon: 'search' },
   { key: 'ctx', label: '上下文装配', icon: 'sliders' },
 ]
+// 演示账号只展示对话日志(其余页签为管理员排障视图); 管理员全量
+const visibleTabs = computed(() => TABS.filter((t) => auth.isAdmin || t.key === 'chat'))
 const activeTab = ref('chat')
 
 /* ---------------- 筛选（四页签共用 sessionId/userId/时间，外加各自的） ---------------- */
@@ -122,7 +124,9 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
       <div>
         <div class="title"><Icon name="logs" :size="18" style="color: var(--accent)" /> 系统日志</div>
         <div class="sub">
-          授权规则：管理员可查全量；普通用户固定只看本人数据（后端强制改写 userId）
+          {{ auth.isDemo
+            ? '演示视角：仅展示本人对话日志（用户消息 / 助手回复 / Token / 耗时 / 时间）'
+            : '授权规则：管理员可查全量；普通用户固定只看本人数据（后端强制改写 userId）' }}
         </div>
       </div>
       <button class="btn sm ghost" :disabled="loading" @click="load">
@@ -134,7 +138,7 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
       <!-- 页签 -->
       <div class="tabs" role="tablist">
         <button
-          v-for="t in TABS"
+          v-for="t in visibleTabs"
           :key="t.key"
           class="tab"
           :class="{ active: activeTab === t.key }"
@@ -149,7 +153,7 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
 
       <!-- 筛选 -->
       <div class="filter-bar">
-        <input v-model="filters.sessionId" class="input mono" placeholder="sessionId" style="width: 190px" @keyup.enter="search" />
+        <input v-if="!auth.isDemo" v-model="filters.sessionId" class="input mono" placeholder="sessionId" style="width: 190px" @keyup.enter="search" />
         <input
           v-if="auth.isAdmin"
           v-model.number="filters.userId"
@@ -191,16 +195,32 @@ const detailJson = computed(() => (detail.value ? prettyJson(JSON.stringify(deta
       <div v-else-if="activeTab === 'chat'" class="table-wrap">
         <table class="data">
           <thead>
-            <tr><th>ID</th><th>会话</th><th>用户</th><th>用户消息</th><th>助手回复</th><th>模型</th><th>Tokens</th><th>耗时</th><th>时间</th></tr>
+            <tr>
+              <th v-if="!auth.isDemo">ID</th>
+              <th v-if="!auth.isDemo">会话</th>
+              <th v-if="!auth.isDemo">用户</th>
+              <th>用户消息</th>
+              <th>助手回复</th>
+              <th v-if="!auth.isDemo">模型</th>
+              <th>Tokens</th>
+              <th>耗时</th>
+              <th>时间</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="r in list" :key="r.id" class="clickable" title="点击查看完整 JSON" @click="openDetail(r, `对话日志 #${r.id}`)">
-              <td class="mono">{{ r.id }}</td>
-              <td class="mono cell-truncate" style="max-width: 130px" :title="r.sessionId">{{ r.sessionId }}</td>
-              <td class="mono">{{ r.userId }}</td>
+            <tr
+              v-for="r in list"
+              :key="r.id"
+              :class="{ clickable: !auth.isDemo }"
+              :title="auth.isDemo ? undefined : '点击查看完整 JSON'"
+              @click="!auth.isDemo && openDetail(r, `对话日志 #${r.id}`)"
+            >
+              <td v-if="!auth.isDemo" class="mono">{{ r.id }}</td>
+              <td v-if="!auth.isDemo" class="mono cell-truncate" style="max-width: 130px" :title="r.sessionId">{{ r.sessionId }}</td>
+              <td v-if="!auth.isDemo" class="mono">{{ r.userId }}</td>
               <td class="cell-truncate" :title="r.userMessage">{{ truncate(r.userMessage, 34) }}</td>
               <td class="cell-truncate" :title="r.assistantReply">{{ truncate(r.assistantReply, 44) }}</td>
-              <td class="mono" style="font-size: 11.5px">{{ r.modelName || '-' }}</td>
+              <td v-if="!auth.isDemo" class="mono" style="font-size: 11.5px">{{ r.modelName || '-' }}</td>
               <td class="mono">{{ r.totalTokens ?? '-' }}</td>
               <td>{{ formatDuration(r.durationMs) }}</td>
               <td class="mono" style="font-size: 11.5px">{{ formatDateTime(r.createTime) }}</td>

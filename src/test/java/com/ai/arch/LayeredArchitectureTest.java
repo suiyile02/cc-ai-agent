@@ -5,9 +5,11 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 import com.ai.user.security.RequireAdmin;
+import com.ai.user.security.RequireRoles;
 import org.springframework.web.bind.annotation.RestController;
 
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
+import static com.tngtech.archunit.lang.conditions.ArchConditions.beAnnotatedWith;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
@@ -137,6 +139,8 @@ class LayeredArchitectureTest {
             methods().that().arePublic()
                     .and().areDeclaredInClassesThat().haveSimpleName("KnowledgeDocumentService")
                     .and().haveNameMatching("(upload|delete|reprocess|reindexAll|enable|disable).*")
-                    .should().beAnnotatedWith(RequireAdmin.class)
-                    .as("知识库写操作(含禁用/启用/全库重建)必须标注 @RequireAdmin");
+                    .should(beAnnotatedWith(RequireAdmin.class)
+                            .or(beAnnotatedWith(RequireRoles.class)))
+                    .as("知识库写操作(含禁用/启用/全库重建)必须标注 @RequireAdmin 或 @RequireRoles(声明允许角色)——"
+                            + "delete 走 ADMIN+DEMO, 其余纯管理员");
 }

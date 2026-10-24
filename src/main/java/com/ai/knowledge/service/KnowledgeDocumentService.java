@@ -17,6 +17,8 @@ import com.ai.knowledge.entity.KnowledgeDocument;
 import com.ai.knowledge.mapper.KnowledgeDocumentMapper;
 import com.ai.rag.service.KeywordIndex;
 import com.ai.rag.service.SemanticAnswerCache;
+import com.ai.user.security.RequireRoles;
+import com.ai.user.security.UserContext;
 import com.ai.user.security.RequireAdmin;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -220,12 +222,13 @@ public class KnowledgeDocumentService {
 
     /**
      * 删除文档：清理向量与关键词索引 → 删除记录 → 删除本地文件(向量清理失败不影响主流程)。
-     * 仅管理员可执行({@link RequireAdmin})——删除影响全公司共享的 RAG 内容。
+     * 管理员与演示账号可执行({@link RequireRoles})——删除影响全公司共享的 RAG 内容,
+     * 不放开给普通用户; 演示账号开放是部署演示需要(展示删除链路), 见 AGENTS.md 角色矩阵。
      *
      * @param id 文档 ID
-     * @throws BusinessException 文档不存在/正在处理中, 或非管理员(5002, HTTP 403)
+     * @throws BusinessException 文档不存在/正在处理中, 或角色不在允许列表(5002, HTTP 403)
      */
-    @RequireAdmin
+    @RequireRoles({UserContext.ROLE_ADMIN, UserContext.ROLE_DEMO})
     @Transactional
     public void deleteDocument(Long id) {
         KnowledgeDocument doc = requireDocument(id);

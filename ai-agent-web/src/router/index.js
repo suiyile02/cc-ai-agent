@@ -36,7 +36,8 @@ const routes = [
         path: 'system',
         name: 'system',
         component: () => import('../views/SystemView.vue'),
-        meta: { title: '系统日志', adminOnly: true },
+        // 管理员看全部日志; 演示账号只看对话日志(页面内按角色裁剪), 普通用户不可进
+        meta: { title: '系统日志', adminOrDemo: true },
       },
     ],
   },
@@ -55,6 +56,10 @@ router.beforeEach((to) => {
   }
   // 管理员专属页面：普通用户访问一律回对话页
   if (to.meta.adminOnly && !auth.isAdmin) {
+    return { name: 'chat' }
+  }
+  // 管理员或演示账号可进的页面(如系统日志)：普通用户回对话页
+  if (to.meta.adminOrDemo && !auth.isAdmin && !auth.isDemo) {
     return { name: 'chat' }
   }
   if (to.name === 'login' && auth.isLoggedIn) return { path: '/chat' }

@@ -15,6 +15,8 @@ export const useAuthStore = defineStore('auth', {
   getters: {
     isLoggedIn: (s) => !!s.token,
     isAdmin: (s) => s.user?.role === 'ADMIN',
+    // 演示账号: 知识库可查看全文+删除, 系统日志只看本人对话日志(与后端角色矩阵对齐)
+    isDemo: (s) => s.user?.role === 'DEMO',
     displayName: (s) => s.user?.nickname || s.user?.username || '未登录',
   },
   actions: {

@@ -252,6 +252,27 @@
 
 ---
 
+## 已完成记录（2026-10-13 第二十一批, DEMO 演示账号角色——部署演示的受限身份）
+
+- 需求: 服务器部署演示时, 演示账号可展示"知识库管理(仅查看全文+删除)"与"系统日志(仅对话日志,
+  只显示 用户消息/助手回复/Token/耗时/时间 五列)"; 上传入库演示由管理员账号完成。
+- 后端: `UserContext.ROLE_DEMO` + `CurrentUser.isDemo()`; 新注解 `@RequireRoles({角色...})` +
+  `SelfOrAdminAspect.enforceRoles`(角色列表放行, 未登录/不匹配/空数组 fail-closed);
+  `deleteDocument` 由 `@RequireAdmin` 改为 `@RequireRoles({ADMIN, DEMO})`。
+  **系统日志后端零改动**: 四个日志端点本就是 `@RequireSelfOrAdmin`(非管理员强制只看本人),
+  DEMO 查对话日志天然收敛到本人记录; 工具/RAG/上下文日志对 DEMO 仅是前端不展示(仍自见口径, 无越权面)。
+- 架构测试 `knowledgeWritesShouldRequireAdmin` 扩容: 写方法须标注 `@RequireAdmin` 或 `@RequireRoles`。
+- 前端: `auth.isDemo` + 路由/导航 `adminOrDemo` 旗标(系统页对 DEMO 开放, debug 仍管理员);
+  KnowledgeView 操作列对 ADMIN+DEMO 可见但启停/重处理仅 ADMIN, 删除两者皆可;
+  SystemView 演示视角只留"对话日志"页签+五列+禁行点击(详情 JSON 含会话/来源, 不给 DEMO)+隐藏 sessionId 筛选。
+- 账号赋予: 注册后手工 `UPDATE sys_user SET role='DEMO'`(无自助入口, 防演示站批量注册提权);
+  本地已建 `demo` 账号(id=86)。
+- 测试: `SelfOrAdminAspectTest` +4 例(ADMIN/DEMO 过门、USER 拒、未登录拒、空角色数组 fail-closed)。
+- 运行时验证(旧进程): demo 登录 200(JWT 带 DEMO claim)/对话日志自见口径 200; 删除过门属新字节码
+  (旧进程 5002 符合预期), 重启后复核命令: demo token `DELETE /api/knowledge/documents/99999` → 应 2001(过门后文档不存在)。
+
+验证: 全量 448 例全绿; 前端 `npm run build` 通过(1.00s)。
+
 ## 已完成记录（2026-10-13 第二十批, 知识库"查看文档全文"——变体 B 端点直查版）
 
 - 需求: 前端知识库页面可查看文档全部内容(来源 `knowledge_document.full_text`, 第十七批加的列),

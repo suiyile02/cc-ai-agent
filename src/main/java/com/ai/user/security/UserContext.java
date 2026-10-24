@@ -20,11 +20,19 @@ public final class UserContext {
     public static final String ROLE_ADMIN = "ADMIN";
 
     /**
+     * 演示账号角色标识(2026-10-13 新增)：介于 USER 与 ADMIN 之间的受限演示身份——
+     * 知识库可查看全文+删除文档({@code RequireRoles} 声明), 系统日志只看本人对话日志
+     * (既有 {@code RequireSelfOrAdmin} 自动收敛到本人); 上传/重处理/全库重建等仍管理员专属。
+     * 由注册后手工 {@code UPDATE sys_user SET role='DEMO'} 赋予(无自助入口, 防演示站被批量注册提权)。
+     */
+    public static final String ROLE_DEMO = "DEMO";
+
+    /**
      * 当前用户载体。
      *
      * @param userId   用户 ID
      * @param username 用户名(可能为空, 如 X-User-Id 开发模式)
-     * @param role     角色(ADMIN/USER)
+     * @param role     角色(ADMIN/DEMO/USER)
      */
     public record CurrentUser(Long userId, String username, String role) {
 
@@ -35,6 +43,15 @@ public final class UserContext {
          */
         public boolean isAdmin() {
             return ROLE_ADMIN.equals(role);
+        }
+
+        /**
+         * 是否演示账号。
+         *
+         * @return true=DEMO 角色
+         */
+        public boolean isDemo() {
+            return ROLE_DEMO.equals(role);
         }
     }
 

@@ -64,6 +64,7 @@
 |---|---|
 | `enforce(pjp, @RequireSelfOrAdmin)` | ADMIN 按传入 `userId` 过滤；非 ADMIN **强制改写**为该参数为当前登录用户 → 数据隔离仍由 Service 的 userId 条件完成 |
 | `enforceAdmin(pjp, @RequireAdmin)` | 非 ADMIN → `AUTH_FAILED`(5002/403) |
+| `enforceRoles(pjp, @RequireRoles)` ★新增 | 角色在声明列表内放行(如删除文档的 ADMIN+DEMO)；未登录/不匹配/**空角色数组**一律拒绝(fail-closed) |
 | 私有：解析参数名/定位 `userId` 参数 | 支撑上面两条 |
 
 ### `ToolCallLogAspect`
