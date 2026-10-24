@@ -194,7 +194,7 @@ async function doDelete() {
 
     <Modal v-model="confirmDelete" title="删除会话" :width="400">
       <p style="color: var(--fg-dim)">
-        确认删除会话 <strong class="mono">{{ pendingDelete?.sessionId }}</strong> 吗？
+        确认删除会话「<strong>{{ pendingDelete?.title || '未命名会话' }}</strong>」吗？
         删除后对话记忆同时清空，不可恢复。
       </p>
       <template #footer>
