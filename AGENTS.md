@@ -676,6 +676,9 @@ com.ai
   在 IDEA 里直接 Run 同样可用(靠 `application-local.yaml`)。`JWT_SECRET` 本地可留空(自动随机密钥)。
 - **首个管理员:** 播种默认关闭(`app.demo.seed-enabled=false`)且口令无默认值 → 用 `/api/auth/register` 注册后 `UPDATE sys_user SET role='ADMIN'`, 再重新登录(角色在 JWT claim 里)。演示业务数据走 `docs/seed/seed-mysql.sql`。
 - **测试:** `mvn test`（`AiAgentApplicationTests` 连本地 MySQL; 有 `application-local.yaml` 即可, 否则需 `DB_PASSWORD=<口令>`）
+- **单跑/复跑指定用例**("失败用例优先"规则的执行命令): `mvn test -Dtest=类名`（整类）
+  / `mvn test -Dtest=类名#方法名`（单方法）——全量跑出失败时**先单独复跑定性**(顺序污染/竞态 vs 真失败),
+  修完也是先复跑该用例、再跑全量; 多个类用逗号连接(`-Dtest=A,B`)
 - **清理:** `mvn clean`
 - **基础设施:** `docker compose up -d` (Qdrant/MySQL)。**Redis 不在 compose 内**, 需本机自行启动
   (默认 `localhost:6379`, 可用 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` 覆盖)——登录限流、会话缓存、
