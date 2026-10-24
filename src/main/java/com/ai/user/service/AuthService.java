@@ -3,6 +3,7 @@ import com.ai.user.security.JwtTokenProvider;
 import com.ai.user.security.PasswordHasher;
 
 import com.ai.common.BusinessException;
+import com.ai.config.AppProperties;
 import com.ai.common.ErrorCode;
 import com.ai.user.dto.AuthVO;
 import com.ai.user.dto.LoginRequest;
@@ -30,6 +31,7 @@ public class AuthService {
     private final JwtTokenProvider tokenProvider;
     private final LoginAttemptLimiter loginAttemptLimiter;
     private final TokenBlacklistService tokenBlacklistService;
+    private final AppProperties appProperties;
 
     /**
      * 注册新用户并返回自动登录态。
@@ -40,6 +42,10 @@ public class AuthService {
      */
     @Transactional
     public AuthVO register(RegisterRequest request) {
+        // 部署演示闸门: 注册端点公开且无节流, 演示账号建好后由配置整体关闭(6007 友好拒绝)
+        if (!appProperties.getAuth().isRegistrationEnabled()) {
+            throw new BusinessException(ErrorCode.REGISTRATION_DISABLED);
+        }
         String username = request.username().trim();
         if (existsByUsername(username)) {
             throw new BusinessException(ErrorCode.USER_EXISTS);

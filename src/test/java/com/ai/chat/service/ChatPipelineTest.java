@@ -83,8 +83,8 @@ class ChatPipelineTest {
 
         appProperties = new AppProperties();
         service = new ChatService(sessionService, preparation, completion, concurrencyGuard,
-                chatClientProvider, mock(com.ai.rag.RagRetriever.class), mock(BusinessTools.class),
-                appProperties);
+                mock(com.ai.chat.service.ChatRateLimiter.class), chatClientProvider,
+                mock(com.ai.rag.RagRetriever.class), mock(BusinessTools.class), appProperties);
     }
 
     private AssembledPrompt assembled;

@@ -1,6 +1,7 @@
 package com.ai.chat.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /**
  * RAG 检索调试请求(返回命中的知识块与对话出口预测, 便于观察阈值/TopK/短查询扩展的效果)。
@@ -15,7 +16,8 @@ import jakarta.validation.constraints.NotBlank;
  * @param expandShortQuery    是否允许短查询扩展(null=true, 与对话一致)
  */
 public record RagDebugRequest(
-        @NotBlank(message = "question 不能为空") String question,
+        @NotBlank(message = "question 不能为空")
+        @Size(max = 200, message = "查询问题过长（最多 200 字）") String question,
         Integer topK,
         Double similarityThreshold,
         Boolean expandShortQuery) {

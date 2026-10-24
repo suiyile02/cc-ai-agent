@@ -60,4 +60,24 @@ public class ChatProps {
      * 需要"保证零编造"时应在检索零命中处直接返回固定文案(硬闸门), 而非依赖本开关。
      */
     private boolean kbOnly = true;
+    /**
+     * 每用户对话频率限制(部署演示防刷量, 2026-10-13): Redis 固定窗口计数, 超限 6011/429。
+     * 一条消息 = 查询改写+扩展+嵌入+重排api+补全等 4~7 次厂商调用, 无频率限制时脚本可串行刷量;
+     * 并发限制(max-concurrent-per-user)只挡"同时", 不挡"高频串行"。Redis 异常时放行(WARN 节流,
+     * 与登录限流同哲学: 旁路保护不放大成对话不可用)。
+     */
+    private RateLimit rateLimit = new RateLimit();
+
+    /**
+     * 频率限制参数({@code app.chat.rate-limit.*})。
+     */
+    @lombok.Data
+    public static class RateLimit {
+        /** 总开关(false=不限制, 本地开发可关) */
+        private boolean enabled = true;
+        /** 每分钟最多消息条数 */
+        private int perMinute = 10;
+        /** 每日(首个请求起 24h 滚动)最多消息条数 */
+        private int perDay = 200;
+    }
 }

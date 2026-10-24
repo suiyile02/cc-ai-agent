@@ -104,6 +104,10 @@ app:
                                           # (提示词级软约束, 不保证零编造; AGENT 会话不受影响) 见 prompts/kb-only-system.st
     stream-idle-timeout-ms: 20000         # 流式静默止损: 20s 无增量即终止降级(早于 okhttp 60s read timeout)
     max-tool-calls-per-turn: 8            # 单轮工具调用上限(B2): 超限抛 6009 回传模型收尾, 防无限连环调工具烧 Token
+    rate-limit:                           # 每用户对话频率限制(2026-10-13): 一条消息=4~7 次厂商调用, 防高频串行刷量
+      enabled: true                       # false=不限制(本地开发可关); 超限 6011/HTTP 429; Redis 故障放行(WARN 节流)
+      per-minute: 10                      # 每分钟最多消息条数
+      per-day: 200                        # 每日(自首条起 24h 滚动)最多消息条数
   auth:
     # JWT 密钥: 仓库内不放任何默认值。留空时——非生产由 JwtTokenProvider 生成一次性随机密钥
     # (每次重启后旧 token 失效, 便于本地开发); 生产(profile=prod)留空直接拒绝启动。
@@ -113,6 +117,9 @@ app:
     dev-user-header-enabled: false
     # 登录失败限流存储后端: redis=多实例统一计数(默认, Redis 不可用时按未锁定放行) | memory=单实例进程内计数
     rate-limit-backend: redis
+    # 注册开关(部署演示必须置 false: 注册端点公开且无节流, 开放=任何人可自助建号刷对话量;
+    # 演示账号建好后关闭, 需要时临时再开)。本地开发保持 true。
+    registration-enabled: ${REGISTRATION_ENABLED:true}
     # 令牌黑名单在 Redis 异常时的口径: true=放行(保可用) | false=拒绝(保安全, 生产必须 false,
     # 由 SecurityConfigValidator 在 prod 启动期强制)
     blacklist-fail-open: true

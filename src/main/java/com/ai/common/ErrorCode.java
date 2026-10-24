@@ -42,8 +42,10 @@ public enum ErrorCode {
     USER_DISABLED(6004, "账号已被禁用", HttpStatus.FORBIDDEN),
     TOKEN_INVALID(6005, "未登录或凭证已失效", HttpStatus.UNAUTHORIZED),
     LOGIN_LOCKED(6006, "登录失败次数过多，已临时锁定", HttpStatus.TOO_MANY_REQUESTS),
+    REGISTRATION_DISABLED(6007, "该站点未开放注册，如需账号请联系管理员", HttpStatus.FORBIDDEN),
     TOOL_CALL_LIMIT(6009, "单轮工具调用次数已达上限", HttpStatus.TOO_MANY_REQUESTS),
-    CONCURRENT_LIMIT(6010, "当前有对话进行中，请稍后再试", HttpStatus.TOO_MANY_REQUESTS);
+    CONCURRENT_LIMIT(6010, "当前有对话进行中，请稍后再试", HttpStatus.TOO_MANY_REQUESTS),
+    CHAT_RATE_LIMITED(6011, "对话过于频繁，请稍后再试", HttpStatus.TOO_MANY_REQUESTS);
 
     private final int code;
     private final String message;

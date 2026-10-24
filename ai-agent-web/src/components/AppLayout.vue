@@ -1,11 +1,12 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { sessionApi } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { useToastStore } from '../stores/toast'
 import Icon from './Icon.vue'
+import Modal from './Modal.vue'
 import SessionList from './SessionList.vue'
 
 const route = useRoute()
@@ -25,6 +26,18 @@ const NAV = [
 const navItems = computed(() =>
   NAV.filter((n) => (!n.adminOnly || auth.isAdmin) && (!n.adminOrDemo || auth.isAdmin || auth.isDemo))
 )
+
+/* ---------------- 登录后说明弹窗(每次登录弹一次, 管理员不弹) ---------------- */
+const loginTip = ref(false)
+
+onMounted(() => {
+  if (auth.postLoginTip) loginTip.value = true
+})
+
+function closeLoginTip() {
+  loginTip.value = false
+  auth.postLoginTip = false // 关闭后不再弹; 旗标不持久化, 刷新不弹, 下次登录才会再置
+}
 
 /* ---------------- 新建会话 ---------------- */
 const creating = ref(false)
@@ -144,9 +157,54 @@ const avatarChar = computed(() => auth.displayName.slice(0, 1).toUpperCase())
     <main class="content">
       <router-view />
     </main>
-  </div>
+  
+    <!-- 登录后说明: 演示账号/普通账号的能力与限制(每次登录弹一次) -->
+    <Modal v-model="loginTip" title="欢迎使用 · 账号说明" :width="460">
+      <div class="login-tip">
+        <template v-if="auth.isDemo">
+          <p class="tip-hello">你好，{{ auth.displayName }}！当前为<b>演示账号</b>。</p>
+          <p class="tip-sec">你可以：</p>
+          <ul>
+            <li>进行智能对话（基于知识库检索问答）</li>
+            <li>浏览知识库文档，点击文件名查看全文</li>
+            <li>在「系统日志」查看本人的对话记录</li>
+          </ul>
+          <p class="tip-sec">暂不支持：</p>
+          <ul>
+            <li>上传 / 删除 / 重处理文档等管理操作（如需调整演示内容请联系管理员）</li>
+          </ul>
+        </template>
+        <template v-else>
+          <p class="tip-hello">你好，{{ auth.displayName }}！当前为<b>普通账号</b>。</p>
+          <p class="tip-sec">你可以：</p>
+          <ul>
+            <li>进行智能对话（基于知识库检索问答）</li>
+            <li>浏览知识库文档，点击文件名查看全文</li>
+          </ul>
+          <p class="tip-sec">暂不支持：</p>
+          <ul>
+            <li>文档上传 / 删除等管理操作与系统日志查看</li>
+          </ul>
+        </template>
+        <p class="tip-note">小提示：为保障演示稳定，对话设有频率限制，触发限制时请稍作休息再试。</p>
+      </div>
+      <template #footer>
+        <button class="btn primary" @click="closeLoginTip">我知道了</button>
+      </template>
+    </Modal>
+</div>
 </template>
 
+.login-tip { font-size: 13px; color: var(--fg-dim); line-height: 1.75; }
+.login-tip .tip-hello { color: var(--fg); font-size: 14px; margin-bottom: 8px; }
+.login-tip .tip-sec { font-weight: 600; color: var(--fg); margin: 10px 0 4px; }
+.login-tip ul { margin: 0; padding-left: 18px; }
+.login-tip li { margin: 2px 0; }
+.login-tip .tip-note {
+  margin-top: 12px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-deep); border: 1px solid var(--border);
+  font-size: 12px; color: var(--fg-muted);
+}
 <style scoped>
 .shell {
   display: flex;

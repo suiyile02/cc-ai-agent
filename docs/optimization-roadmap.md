@@ -252,6 +252,30 @@
 
 ---
 
+## 已完成记录（2026-10-13 第二十二批, 部署演示四道闸门 + 登录后说明弹窗）
+
+部署演示防刷量评估(本文件外讨论)定位的四个缺口全部落地, 顺序与评估一致:
+
+- **① 注册开关**: `app.auth.registration-enabled`(默认 true, yaml 经 `REGISTRATION_ENABLED` 注入)——
+  `AuthService.register` 入口闸门, 关闭后友好拒绝 `REGISTRATION_DISABLED(6007)`。部署时演示账号
+  建好后置 false(注册无节流, 开放=自助建号刷量)。测试: `AuthServiceTest` 两例(关=6007 不触库/开=过闸门)。
+- **② 对话频率限制**: 新增 `ChatRateLimiter`(Redis 固定窗口 `chat:rate:min:*`/`chat:rate:day:*`,
+  默认每分钟 10 条/每 24h 200 条, `app.chat.rate-limit.*`)——一条消息=4~7 次厂商调用, 并发限制只挡
+  "同时"不挡高频串行。挂 `ChatService.chat/chatStream` 最前, 超限 `CHAT_RATE_LIMITED(6011)`/429;
+  Redis 故障放行(WARN 节流, 与登录限流同哲学); null userId 跳过。Redis 使用点 4→5。
+  测试: `ChatRateLimiterTest` 七例(两档限额/开关/空 userId/fail-open/首条设过期)。
+- **③ 检索调试端点管理门**: `ChatService.debugRetrieve` 补 `@RequireAdmin`——每次调用消耗嵌入+重排
+  API 费用且无业务必要性; 前端调试页本就 adminOnly, 此前是"前端隐藏、后端裸奔"。
+- **④ 消息长度上限**: `ChatRequest.message` `@Size(max=2000)`、`RagDebugRequest.question` `@Size(max=200)`
+  ——超长输入直接放大每轮 token 成本并经历史窗口滚动放大。
+- **⑤ 登录后说明弹窗(前端)**: `auth.postLoginTip` 旗标(不持久化) + LoginView 成功后置位 + AppLayout
+  挂载时弹出——演示账号/普通账号分别列"可以/暂不支持", 含频率限制提示; 管理员不弹。
+- **README §6 服务器演示部署**: Nginx(HTTPS/IP 限流/2MB 体限/SSE 透传)样例、防火墙端口清单、
+  厂商分池小额度 Key 建议、应用闸门配置表、演示账号准备命令。
+
+验证: 全量 453 例全绿(新增 9 例); 前端 `npm run build` 通过。
+⚠ 新字节码需重启后端生效; 运行中实例重启前仍是"注册开放+无频率限制"的旧口径。
+
 ## 已完成记录（2026-10-13 第二十一批, DEMO 演示账号角色——部署演示的受限身份）
 
 - 需求: 服务器部署演示时, 演示账号可展示"知识库管理(仅查看全文+删除)"与"系统日志(仅对话日志,

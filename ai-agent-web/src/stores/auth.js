@@ -11,6 +11,8 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem(TOKEN_KEY) || '',
     user: JSON.parse(localStorage.getItem(USER_KEY) || 'null'),
+    // 登录后提示旗标(不持久化): LoginView 成功后置 true, AppLayout 挂载时弹一次说明性弹窗
+    postLoginTip: false,
   }),
   getters: {
     isLoggedIn: (s) => !!s.token,

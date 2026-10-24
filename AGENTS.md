@@ -161,7 +161,12 @@ com.ai
     - **跨模块契约:** 被其它业务包消费的 Service 必须抽出接口、调用方依赖接口而非实现
       (现有契约: `RagRetriever`←实现 `RagRetrievalService`、`IntentRouter`←实现 `KeywordIntentRouter`、
       `ConversationMemory`←实现 `ConversationMemoryService`、`SemanticCacheAdmin`←实现 `SemanticAnswerCache`)；仅模块内部使用的服务可直接用实现类，不做多余抽象。
-    - **对话管线分工:** `chat/service/ChatService` 只做门面(会话校验/并发名额/请求链构建/同步与 SSE 输出编排)；
+    - **对话频率限制(2026-10-13, 部署演示防刷量)**: `ChatRateLimiter`(Redis 固定窗口,
+  `app.chat.rate-limit.*` 默认 每分钟 10 条/每 24h 200 条, 超限 `CHAT_RATE_LIMITED(6011)`/HTTP 429)——
+  一条消息 = 改写+扩展+嵌入+重排api+补全等 4~7 次厂商调用, 并发限制只挡"同时"不挡高频串行。
+  在 `ChatService.chat/chatStream` 最前调用; Redis 故障放行(WARN 节流, 与登录限流同哲学);
+  null userId(开发模拟头)跳过。**单条消息 ≤2000 字**(`ChatRequest.@Size`, 调试查询 ≤200 字)防超长输入放大成本。
+- **对话管线分工:** `chat/service/ChatService` 只做门面(会话校验/并发名额/请求链构建/同步与 SSE 输出编排)；
       前置阶段(标题→改写→短查询扩展→检索→出口判定→缓存查询→审计→装配)统一在 `ChatPreparationService`，收尾阶段(记忆→摘要→审计→
       缓存写入→来源落库)统一在 `ChatCompletionService`，来源文档名提取与"未找到"判定在 `ChatSourceDisplay`。
       **同步与流式必须共用同一份前置/收尾实现, 禁止在任一条管线里复制业务步骤。**
@@ -299,6 +304,7 @@ com.ai
   (正确 chunk 可能只有 0.5~0.6), 阈值 0.6 会误杀正确答案(案例: "加班调休"0.565 被过滤导致答非所问)。
   调整前必须用 `/api/ai/rag/search` 观察真实分数分布——该接口现在**走与对话同一条链路**
   (短查询扩展 → 检索 → 出口判定), 参数留空即跟随对话配置, 响应直接给出"这轮交给对话会判哪个出口"
+  (**仅管理员**, 2026-10-13 补门: 每次调用消耗嵌入+重排 API 费用, 登录用户可调=免费刷量弹药);
   (`RagDebugVO.answerOutcome`), 不再出现"调试页查得到、对话判无据"的口径分叉。
   实测短查询的量级差异很大: 裸词"产品"余弦 0.4097(不过阈值), 补全成"产品的定价和套餐有哪些？"得 0.7014。
   **但该值至今没有分布依据(只是踩了一例反例后定的), 且现有实测语料仅 16 点/约 5KB 不可外推**——
@@ -375,11 +381,12 @@ com.ai
 
 ### Redis 使用与降级约定(强制)
 
-- **现有 4 个使用点**(全部经 `StringRedisTemplate` 直连, 项目**不用** Spring Cache 抽象/spring-session):
+- **现有 5 个使用点**(全部经 `StringRedisTemplate` 直连, 项目**不用** Spring Cache 抽象/spring-session):
   `RedisLoginAttemptLimiter`(`login:fail:*`/`login:lock:*`) · `SessionCacheService`(`session:meta:*`/`session:absent:*`)
   · `SemanticAnswerCache`(`rag:answer:*`/`rag:miss:*`/`rag:kb:version`)
-  · `TokenBlacklistService`(`jwt:black:*`)。键前缀必须沿用, 便于运维 grep 与按前缀清理。
-  (第 5 项 `CachingIntentRouter`/`rag:intent:*` 已随 P3-7 B 批删除, 见上一节。)
+  · `TokenBlacklistService`(`jwt:black:*`) · `ChatRateLimiter`(`chat:rate:min:*`/`chat:rate:day:*`,
+  2026-10-13 防刷量闸门)。键前缀必须沿用, 便于运维 grep 与按前缀清理。
+  (曾有的第 5 项 `CachingIntentRouter`/`rag:intent:*` 已随 P3-7 B 批删除, 见上一节。)
 - **读写两侧都必须自行 catch 并降级, 绝不允许 Redis 故障冒成业务 500**(`RedisConnectionFailureException`
   是 `DataAccessException`, 一旦漏出就被 `GlobalExceptionHandler` 兜底成 5001/HTTP 500——登录限流读侧
   曾犯此错, 有真实探针证据)。新增 Redis 使用点时必须同时覆盖读路径与写路径。
@@ -513,6 +520,9 @@ com.ai
 ### 用户与鉴权
 
 - 注册/登录: `/api/auth/register`、`/api/auth/login`，密码 PBKDF2 加盐哈希(`PasswordHasher`)。
+  **注册开关(2026-10-13, 部署演示闸门)**: `app.auth.registration-enabled`(默认 true 保持历史行为;
+  yaml 经 `REGISTRATION_ENABLED` 环境变量注入)——注册端点公开且无节流, **部署演示必须置 false**
+  (开放=任何人自助建号刷对话量, 每条消息 4~7 次厂商调用); 关闭后友好拒绝 `REGISTRATION_DISABLED(6007)`。
 - **登录限流的降级口径(读写一致, 强制)**: `RedisLoginAttemptLimiter` 读写两侧都必须自行捕获 Redis 异常——
   读侧 `isLocked`/`remainingLockMs` 异常时按"未锁定/0"放行并打 WARN, 写侧 `fail`/`del` 同样吞异常。
   **禁止**让 `RedisConnectionFailureException` 冒到 `GlobalExceptionHandler`(否则"限流存储故障"变成"登录接口

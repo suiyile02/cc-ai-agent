@@ -23,6 +23,12 @@ public class AuthProps {
      * 令牌黑名单降级策略: true=Redis 异常时放行(保可用), false=拒绝(保安全, 生产建议)。
      */
     private boolean blacklistFailOpen = true;
+    /**
+     * 注册开关(默认开=保持历史行为)。**部署演示时必须关**({@code REGISTRATION_ENABLED=false}):
+     * 注册端点公开且无节流, 开放等于任何人可自助创建账号刷对话量(每条消息 4~7 次厂商调用)。
+     * 演示账号(含管理员)建好后关闭; 需要再开时临时置回 true。
+     */
+    private boolean registrationEnabled = true;
 
     /**
      * 【无字段——刻意留空】{@code app.auth.rate-limit-backend}(redis|memory)不绑定到本类:

@@ -28,6 +28,8 @@ function afterAuth(body) {
   // 换账号登录前清空上一个用户的会话缓存，防止跨账号残留
   chat.$reset()
   auth.setAuth(body.data.token, body.data.user)
+  // 每次登录都弹一次说明(管理员除外): 告知演示账号/普通账号的能力与限制
+  auth.postLoginTip = !auth.isAdmin
   toast.success(mode.value === 'login' ? '登录成功' : '注册成功')
   router.push(typeof route.query.redirect === 'string' ? route.query.redirect : '/chat')
 }

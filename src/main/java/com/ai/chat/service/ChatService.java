@@ -11,6 +11,7 @@ import com.ai.common.BusinessException;
 import com.ai.common.ErrorCode;
 import com.ai.config.AppProperties;
 import com.ai.config.ChatClientProvider;
+import com.ai.user.security.RequireAdmin;
 import com.ai.context.AssembledPrompt;
 import com.ai.observability.ChatMetrics;
 import com.ai.session.entity.ChatSession;
@@ -52,6 +53,7 @@ public class ChatService {
     private final ChatPreparationService preparation;
     private final ChatCompletionService completion;
     private final ChatConcurrencyGuard concurrencyGuard;
+    private final ChatRateLimiter rateLimiter;
     private final ChatClientProvider chatClientProvider;
     private final RagRetriever ragRetriever;
     private final BusinessTools businessTools;
@@ -67,6 +69,7 @@ public class ChatService {
      * @throws BusinessException 会话不存在(3001)/无权操作他人会话(5002)/并发超限(6010)或模型失败
      */
     public ChatResponse chat(String sessionId, String userMessage, Long userId) {
+        rateLimiter.check(userId); // 频率闸门先于一切(会话校验/并发/编排)
         ChatSession session = sessionService.requireActive(sessionId, userId);
         var guardHandle = concurrencyGuard.acquire(userId);
         try {
@@ -106,6 +109,7 @@ public class ChatService {
      * @return 事件流(由 Controller 包装为 ServerSentEvent)
      */
     public Flux<ChatStreamEvent> chatStream(String sessionId, String userMessage, Long userId) {
+        rateLimiter.check(userId); // 频率闸门先于一切(同步 throw 会在订阅前抛出, 客户端收到 429 JSON)
         ChatSession session = sessionService.requireActive(sessionId, userId);
         var guardHandle = concurrencyGuard.acquire(userId);
         long start = System.currentTimeMillis();
@@ -238,6 +242,8 @@ public class ChatService {
     /**
      * RAG 检索调试：走对话同一条链路(短查询扩展 → 混合检索 → 出口判定)并回显结果，
      * 附带"这轮交给对话会判哪个出口"——调试页与对话不再有两套口径。
+     * <b>仅管理员</b>(2026-10-13 补门): 每次调用消耗嵌入+重排 API 费用且无业务必要性,
+     * 登录用户可调等于免费刷量弹药(前端调试页本就 adminOnly, 此处补齐后端边界)。
      *
      * @param question           查询问题
      * @param topK               Top-K(空则用配置默认)
@@ -245,6 +251,7 @@ public class ChatService {
      * @param expandShort        是否允许短查询扩展
      * @return 命中来源 + 各路计数 + 出口预测
      */
+    @RequireAdmin
     public RagDebugVO debugRetrieve(String question, Integer topK, Double similarityThreshold,
             boolean expandShort) {
         ChatPreparationService.DebugSearch debug =

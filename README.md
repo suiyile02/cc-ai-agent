@@ -251,3 +251,58 @@ docker-compose.yml          Qdrant+MySQL
 > 全量流程与逐方法说明（Markdown/Mermaid，可随代码一起 review）见 [docs/flow-map.md](docs/flow-map.md)（20 张图：全景、启动装配、鉴权横切、认证用例、知识库上传与状态机、对话前置/同步/流式、混合检索、上下文装配、缓存写入闸门、工具与切面、审计落库、会话与记忆、前端映射、降级总表、存储键空间、线程模型、e2e 对照、偏差清单）与 [docs/method-map.md](docs/method-map.md)（133 个类逐方法作用与调用方）。
 
 > 对话管线：`ChatService` 只做门面（会话校验/并发名额/请求链构建/同步与 SSE 输出编排）；前置（标题→改写→短查询扩展→检索→出口判定→语义缓存查询→决策审计→装配）与收尾（记忆写回→摘要→完成审计→缓存写入→来源落库）各一份实现，由同步与流式共用，避免两条管线逻辑漂移。
+
+## 6. 服务器演示部署（防刷量与防宕机清单）
+
+演示站暴露公网时的四道闸门（按重要性排序），前两道是"损失天花板"，后两道是"减速带"：
+
+### 6.1 部署环境（不改代码）
+
+```bash
+# ① 厂商侧兜底（最硬的保险）：给演示单独开一个小额度 DashScope Key（余额分池），
+#    控制台设余额告警——就算全部防线被穿，损失封顶在池内额度。
+# ② 防火墙/安全组只开 80/443；MySQL 3306、Redis 6379、Qdrant 6333、后端 9090 只绑内网。
+# ③ Nginx 反代：HTTPS + 全局 IP 限流 + 请求体上限
+```
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name demo.example.com;
+    ssl_certificate     /etc/nginx/certs/demo.pem;
+    ssl_certificate_key /etc/nginx/certs/demo.key;
+
+    client_max_body_size 2m;            # 聊天/检索请求远用不到 2MB；上传走的是管理员专属端点
+
+    # 全局 IP 限流（正常演示远用不到 30 req/s）
+    limit_req_zone $binary_remote_addr zone=demo:10m rate=30r/s;
+
+    location / {
+        limit_req zone=demo burst=60 nodelay;
+        proxy_pass http://127.0.0.1:9090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # SSE 流式对话需要（禁用缓冲 + 拉长读超时）
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+### 6.2 应用闸门（本仓库已内置，部署时按下表设置）
+
+| 闸门 | 配置 | 说明 |
+|---|---|---|
+| 注册开关 | `REGISTRATION_ENABLED=false` | 注册端点公开且无节流，演示账号建好后**必须关**；需要时临时再开 |
+| 对话频率限制 | `app.chat.rate-limit.*`（默认启用） | 每用户每分钟 10 条 / 每 24h 200 条，超限 429；Redis 故障自动放行 |
+| 检索调试端点 | 无需配置 | `/api/ai/rag/search` 已管理员专属（每次调用消耗嵌入+重排费用） |
+| 消息长度 | 无需配置 | 单条消息 ≤2000 字、调试查询 ≤200 字（超出 400 参数错误） |
+
+### 6.3 演示账号准备（一次性）
+
+```bash
+# 注册后提权演示角色（与 ADMIN/USER 并列；知识库=列表+全文，系统日志=仅本人对话日志）
+mysql ... -e "UPDATE sys_user SET role='DEMO' WHERE username='demo';"
+```
+
+每次登录后，前端会自动弹窗说明当前账号（演示/普通）能做什么、不能做什么，无需口头解释。
