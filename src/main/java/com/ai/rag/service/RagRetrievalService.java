@@ -13,6 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -108,6 +110,7 @@ public class RagRetrievalService implements RagRetriever {
      * @return 检索结果
      */
     private RetrievalOutcome doRetrieve(String query, int topK, double threshold, int tokenBudget) {
+        query = expandSynonyms(query);
         // 两路召回
         HybridRecaller.Recall recall = recaller.recall(query, topK);
         if (recall.nothingUsable()) {
@@ -130,6 +133,32 @@ public class RagRetrievalService implements RagRetriever {
         return new RetrievalOutcome(finalHits, true,
                 countPassed(recall.semantic(), threshold), recall.keyword().size(),
                 false, recall.semanticMaxScore());
+    }
+
+    /** 同义词扩展：命中配置组内任一变体时把其余变体追加到检索句(词面失配补偿, 只影响检索不改原话)。 */
+    private String expandSynonyms(String query) {
+        String expanded = expandSynonyms(query, appProperties.getRag().getSynonymGroups());
+        if (!expanded.equals(query)) {
+            log.info("检索同义词扩展: [{}] => [{}]", query, expanded);
+        }
+        return expanded;
+    }
+
+    /** 同义词扩展纯函数(静态便于单测)：组内变体用'|'分隔; 无命中或已含全部变体的组不追加。 */
+    static String expandSynonyms(String query, List<String> groups) {
+        if (query == null || query.isBlank() || groups == null || groups.isEmpty()) {
+            return query;
+        }
+        List<String> missing = new ArrayList<>();
+        for (String group : groups) {
+            List<String> variants = Arrays.stream(group.split("\\|"))
+                    .map(String::trim).filter(v -> !v.isEmpty()).toList();
+            if (variants.isEmpty() || variants.stream().noneMatch(query::contains)) {
+                continue;
+            }
+            variants.stream().filter(v -> !query.contains(v)).forEach(missing::add);
+        }
+        return missing.isEmpty() ? query : query + " " + String.join(" ", missing);
     }
 
     /**

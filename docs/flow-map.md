@@ -449,7 +449,8 @@ SSE 契约：只有 `event: content` 与结尾 `data:[DONE]`。阶段提示、�
 ```mermaid
 flowchart TD
     R0["RagRetrievalService.retrieveOutcome(query, topK, threshold)"] --> R3["Timeouts.call(doRetrieve, app.rag.retrieve-timeout-ms=10s)"]
-    R3 --> R1{"向量库 / 关键词索引 至少一路可用?"}
+    R3 --> R0B["doRetrieve 第一步: expandSynonyms 同义词扩展<br/>命中 app.rag.synonym-groups 组内任一变体 → 其余变体追加到检索句末尾(默认 手续|流程)<br/>确定性规则: 只影响检索不改用户原话, 不影响语义缓存键"]
+    R0B --> R1{"向量库 / 关键词索引 至少一路可用?"}
     R1 -->|否| R2["none()：本轮未执行检索"]
     R1 -->|是| R4["HybridRecaller.semanticHits<br/>VectorStore.similaritySearch（嵌入 + Qdrant, **以 0 阈值召回**）<br/>→ recall() 不做任何阈值过滤, 原样交候选; 记录最大分 semanticMaxScore"]
     R1 -->|是| R5["HybridRecaller.keywordHits（仅 hybrid-enabled 且索引非空）<br/>KeywordIndex.search BM25；宽度 max(topK*2,10)"]
@@ -491,6 +492,8 @@ flowchart TD
 **阈值只作用于语义一路，且在重排之后收口**：`HybridRecaller.recall` 不做任何阈值过滤（原样交出候选），过滤在 `RagRetrievalService.filterByThreshold`——排在重排之后是为了让低余弦分但可能答得上问题的候选先被重排捞一次。它只裁语义路低分（读 `metadata.semantic_score`，非 `doc.getScore()`——重排后 score 已被融合/相关度分占用），BM25-only 命中无语义分故不受约束、保留。出口判定读的是未截断的 `semanticMaxScore`，与过滤时机无关。响应三列分数中只有 `semanticScore` 是余弦相似度；`score` 是融合相对名次（仅词面命中的榜首恒为 1.0，不代表相关）。
 
 **证据分层取数（2026-10-13, P3-10 分层口径）**：重排之后、阈值过滤之前，注入收敛按"语义过阈值的候选(证据)整体优先 → 组内重排分降序 → 非证据候选(仅词面命中/未过阈值)补位"（`RagRetrievalService.selectByEvidenceLevel`）；**证据存在时非证据候选封顶 2 条**，无证据轮次照旧补满 topK（答/拒仍由 `semanticMaxScore` 判，闲聊轮次行为不变）。动机：`score` 模式下仅词面命中取批内归一化 BM25、**榜首恒为 1.0**，系统性压过语义真答案（余弦 0.43~0.81）——实测"报销上限是多少"含住宿/交通标准表的块（余弦 0.586）被挤到融合第 7 名、注入 Top-5 全是词面噪声；离线全管线对比修复后该块恢复注入且真答案整体前移（旧 ✗ → 新 ✓）。配套前提是**语义路过取**：`HybridRecaller.semanticWidth` = `max(topK*3, 15)`——只取 topK 条时"排第 6 的真答案"根本进不了重排（与类注释声明的改良矛盾），过取无额外嵌入成本。回归：`RagRetrievalEvidenceLevelTest` 四条 + `HybridRecallerTest#semanticRecallOverFetchesBeforeRerank`。
+
+**检索同义词扩展（2026-11-01）**：`doRetrieve` 第一步按 `app.rag.synonym-groups`（每条 `|` 分隔一组等义词）做确定性扩展——检索句命中组内任一变体时把其余变体追加到句末（默认 `手续|流程`；动机：实测问"员工离职需要办理哪些手续？"时，含"离职流程"的分块语义/BM25 双双失配，语义分不过阈值被判无据）。三点边界：① 只改检索句，不改用户原话（对话/审计/决策表仍记原文）；② 无模型调用、结果恒定，语义缓存键不含扩展结果也无需含——缓存正确性不受影响（区别于 LLM 短查询扩展必须排除缓存）；③ `rag-debug` 走同一入口，调试页与对话口径一致。扩展发生时打 INFO `检索同义词扩展: [原句] => [扩展句]`，"RAG 检索关键字"日志显示的是扩展后的句子。回归：`RagRetrievalSynonymExpandTest`（含 doRetrieve 接线验证）。
 
 **检索过程 INFO 日志（2026-10-12）**：`doRetrieve` 内四处 `log.info` 输出排查用的中间态——检索关键字（扩展/改写后的实际检索句）、语义路过阈值前的全部召回、BM25 路召回、重排+Top-K 后的候选；每条候选渲染 `[doc_id:chunk_index cos=余弦分 kw=BM25分] ≤80字片段`（私有 `describe()`，缺分显示 `-`）。口径与既有"分段耗时必须打 INFO 日志"约定一致，禁止删除；注意父块展开发生在这些日志之后，日志里看到的是小块原文。**BM25 那一路刻意在融合前用 `describeKeyword()` 打索引主键 `key=docId:chunkIndex`**——`RrfFuser` 两路同块时保留语义路 Document，合并后关键词路的合成 id（`kw-{key}`）即丢失，只有召回现场能暴露键位问题（见下）。
 

@@ -235,6 +235,28 @@ class PromptServiceTest {
         assertTrue(system.contains(OPEN_CHAT_MARKER), "宽松模式下工具轮行为与本批改造前一致");
     }
 
+    /* ---------------- 结尾建议口径 ---------------- */
+
+    /**
+     * 回归(2026-11-01): 回答结尾的建议不再引导用户「联系管理员」——管理员不一定是业务事项的
+     * 对口人, 且该建议对所有登录用户展示; 改为「换个更具体的问题 / 联系相关负责人了解更多」。
+     * 第 2 条的固定拒答句(负缓存/前端逐字识别)不受本条影响, 措辞未动。
+     */
+    @Test
+    void followUpSuggestionsDoNotDirectUsersToAdmin() {
+        givenKbOnly(true);
+
+        String strict = service.template("prompts/kb-only-system.st");
+        assertFalse(strict.contains("联系管理员"), "严格模板不得再建议联系管理员");
+        assertTrue(strict.contains("联系相关负责人"), "严格模板应建议联系相关负责人了解更多");
+
+        String base = service.template("prompts/base-system.st");
+        assertFalse(base.contains("联系管理员"), "宽松模板不得建议联系管理员");
+
+        String ragContext = service.template("prompts/rag-context.st");
+        assertFalse(ragContext.contains("联系管理员"), "资料块模板不得建议联系管理员");
+    }
+
     /* ---------------- 默认值与模板加载 ---------------- */
 
     @Test

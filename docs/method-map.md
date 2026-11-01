@@ -140,7 +140,8 @@
 | 类 | 方法 | 作用 | 调用方 |
 |---|---|---|---|
 | `RagRetrievalService` | `retrieveOutcome(query,topK,threshold[,tokenBudget])` | 主入口：`Timeouts.call(doRetrieve, retrieve-timeout-ms=10s)`，超时/异常→`executedEmpty()`；**带预算重载**(默认)把 RAG 段 Token 预算下传到父块展开层 | 前置 |
-| | `doRetrieve(...)` | 编排：召回 → 判空 → 合并重排(**含证据分层取数**) → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome`；★2026-10-12 起在召回后/重排后打四处 INFO 检索明细日志(关键字/语义召回/BM25召回/重排Top-K) | 内部 |
+| | `doRetrieve(...)` | 编排：**同义词扩展** → 召回 → 判空 → 合并重排(**含证据分层取数**) → 阈值过滤 → **父块预算感知展开** → 组装 `RetrievalOutcome`；★2026-10-12 起在召回后/重排后打四处 INFO 检索明细日志(关键字/语义召回/BM25召回/重排Top-K) | 内部 |
+| | `expandSynonyms(query[,groups])` ★新增 | 检索同义词扩展：命中 `app.rag.synonym-groups` 组内任一变体时把其余变体追加到检索句末尾(确定性规则, 只影响检索不改用户原话; 实例方法带扩展日志, 静态纯函数便于单测) | 内部 |
 | | `describe(docs)` ★新增 | 候选渲染成单行诊断串 `[doc_id:chunk_index cos=… kw=…] ≤80字片段`(缺分显示 `-`), 仅供上述日志 | 内部 |
 | | `mergeAndRerank(query,recall,topK,threshold)` | 融合 + 重排 + **证据分层取数**（★2026-10-13 增阈值参数）；无语义融合分支把过取收敛回 topK | 内部 |
 | | `selectByEvidenceLevel(ordered,topK,threshold)` ★新增 | P3-10 分层口径：证据(语义过阈值)整体优先、组内重排分降序；非证据候选(仅词面/未过阈值)只补位且证据存在时封顶 `NON_EVIDENCE_FILL_CAP`=2，无证据轮次照旧补满 topK（答/拒仍由 `semanticMaxScore` 判） | 内部 |
