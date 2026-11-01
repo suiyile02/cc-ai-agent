@@ -3,6 +3,8 @@
  * 后端 POST /api/ai/chat/stream 返回 SSE（EventSource 只支持 GET，
  * 所以这里用 fetch + ReadableStream 手工解析 `data:` 帧，末帧为 `data:[DONE]`）。
  */
+import { kickToLogin } from '../api'
+import { MSG_NET_UNREACHABLE, MSG_AUTH_EXPIRED, MSG_REQUEST_FAILED } from './error-msg'
 
 /**
  * 发起流式问答。
@@ -13,7 +15,7 @@
  * @param {(chunk: string) => void} opts.onChunk 每收到一段增量文本
  * @param {() => void} [opts.onDone]  流正常结束
  * @param {AbortSignal} [opts.signal] 中断用（停止生成按钮）
- * @returns {Promise<void>} 异常时 reject（含非 200 响应体里的 message）
+ * @returns {Promise<void>} 异常时 reject（401/凭证失效已统一踢回登录页）
  */
 export async function streamChat({ sessionId, message, token, onChunk, onDone, signal }) {
   let res
@@ -29,17 +31,20 @@ export async function streamChat({ sessionId, message, token, onChunk, onDone, s
     })
   } catch (e) {
     if (e.name === 'AbortError') throw e
-    const err = new Error('无法连接服务器，请确认后端（9090 端口）已启动')
+    const err = new Error(MSG_NET_UNREACHABLE)
     err.offline = true
     throw err
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      // 凭证失效与 REST 路径同策略：踢回登录，文案不含任何后端细节
+      kickToLogin()
+      throw new Error(MSG_AUTH_EXPIRED)
+    }
     // 代理/网关返回的 5xx 视为后端不可达；后端自身的错误响应带 message
     const offline = res.status >= 500
-    let msg = offline
-      ? '无法连接服务器，请确认后端（9090 端口）已启动'
-      : `流式请求失败（HTTP ${res.status}）`
+    let msg = offline ? MSG_NET_UNREACHABLE : MSG_REQUEST_FAILED
     if (!offline) {
       try {
         const body = await res.json()

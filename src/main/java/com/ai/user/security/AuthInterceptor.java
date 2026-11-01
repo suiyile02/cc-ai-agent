@@ -129,6 +129,6 @@ public class AuthInterceptor implements HandlerInterceptor {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.getWriter().write(objectMapper.writeValueAsString(
-                Result.fail(ErrorCode.TOKEN_INVALID, "未登录或凭证已失效，请先 /api/auth/login")));
+                Result.fail(ErrorCode.TOKEN_INVALID, "未登录或凭证已失效，请先登录")));
     }
 }

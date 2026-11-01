@@ -3,11 +3,13 @@ import router from '../router'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { forceOfflineLogout } from '../utils/auth-guard'
+import { MSG_NET_UNREACHABLE, MSG_AUTH_EXPIRED, MSG_REQUEST_FAILED } from '../utils/error-msg'
 
 /**
  * 统一 HTTP 客户端。
  * 后端所有接口返回 {code, message, data, timestamp}（code=200 成功），
  * 401/6005 表示未登录或凭证失效，统一踢回登录页。
+ * 用户可见文案一律友好化，禁止透传含后端地址/端口/路径的原始消息。
  */
 const http = axios.create({
   baseURL: '/api',
@@ -20,7 +22,8 @@ http.interceptors.request.use((config) => {
   return config
 })
 
-function kickToLogin() {
+/** 凭证失效统一出口：清登录态并踢回登录页（REST 与 SSE 共用） */
+export function kickToLogin() {
   const auth = useAuthStore()
   // 彻底清除本地登录态与聊天缓存，避免换账号后残留上一个用户的会话
   auth.logout()
@@ -35,8 +38,10 @@ http.interceptors.response.use(
     const body = res.data
     if (body && typeof body === 'object' && 'code' in body) {
       if (body.code === 200) return body
-      if (body.code === 6005 || res.status === 401) kickToLogin()
-      const err = new Error(body.message || `请求失败（code=${body.code}）`)
+      const authExpired = body.code === 6005 || res.status === 401
+      if (authExpired) kickToLogin()
+      // 凭证失效用固定友好文案，不透传后端原始消息（可能含接口路径）
+      const err = new Error(authExpired ? MSG_AUTH_EXPIRED : body.message || MSG_REQUEST_FAILED)
       err.code = body.code
       throw err
     }
@@ -45,7 +50,8 @@ http.interceptors.response.use(
   (err) => {
     const status = err.response?.status
     const body = err.response?.data
-    if (status === 401) { kickToLogin() }
+    const authExpired = status === 401 || body?.code === 6005
+    if (authExpired) kickToLogin()
 
     // 后端不可达判定：网络层错误，或 HTTP 5xx 且响应体不是后端统一格式
     // （后端自身的错误一定带 {code,message}；代理连不上后端时返回的 5xx 没有该字段）
@@ -55,9 +61,10 @@ http.interceptors.response.use(
     if (unreachable) forceOfflineLogout()
 
     let msg
-    if (unreachable) msg = '无法连接服务器，请确认后端（9090 端口）已启动'
+    if (authExpired) msg = MSG_AUTH_EXPIRED
+    else if (unreachable) msg = MSG_NET_UNREACHABLE
     else if (err.code === 'ECONNABORTED') msg = '请求超时，请稍后重试'
-    else msg = body?.message || err.message || '网络异常'
+    else msg = body?.message || err.message || MSG_REQUEST_FAILED
     const e = new Error(msg)
     e.code = body?.code
     e.httpStatus = status

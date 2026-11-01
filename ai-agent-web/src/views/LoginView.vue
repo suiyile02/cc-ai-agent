@@ -5,6 +5,7 @@ import { authApi } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { useToastStore } from '../stores/toast'
+import { MSG_NET_UNREACHABLE } from '../utils/error-msg'
 import Icon from '../components/Icon.vue'
 
 const route = useRoute()
@@ -98,7 +99,7 @@ async function demoLogin() {
       </div>
       <div v-if="showOffline" class="expired-tip">
         <Icon name="alert" :size="14" />
-        无法连接服务器，请确认后端（9090 端口）已启动
+        {{ MSG_NET_UNREACHABLE }}
       </div>
 
       <div class="mode-tabs" role="tablist">
